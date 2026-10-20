@@ -12,19 +12,60 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 
 ## 1. 归属表
 
-| 表 | 内容 | 现状 |
-|---|---|---|
-| `market.ohlcv` / `market.bars` | 行情主表（日线 / 分钟） | 现住 core 的 `quant` schema，X1d 迁入 |
-| `market.symbols` | 标的与内外部代码映射 | 同上 |
-| `market.adjust_factors` | 复权因子 | 同上 |
-| `market.corporate_actions` | 分红 / 送股 / 配股 | 同上（BE-11 待深查） |
-| `market.fundamentals` | 财报字段（带 `visible_at`） | 同上 |
-| `market.macro` | 宏观序列 | 同上 |
-| `market.sector` / `market.supply_chain` | 行业与产业链映射 | 同上 |
-| `market.factor_definitions` / `market.factor_values` | 因子定义与因子值 | 同上 |
-| `ingest.data_sync_state` | 同步水位 / 幂等坐标 | 同上 |
+> **表名来自实测**：对 core 的内联 DDL（`pkg/storage/*.go` 的 `CREATE TABLE IF NOT EXISTS`）与 `migrations/` / `docs/migrations/` 做了全量 `grep`（2026-10-20）。左列是**今天的真实名字**，右列是迁移后的归属。
+> **不按类型名臆造表名**：本文档早期版本写过 `market.ohlcv` / `market.symbols` / `ingest.data_sync_state` 这类"听起来对"的名字，实际一个都不存在，已全部换成真名。
 
-> 表名以 core 现有定义为准，X1d 迁移时逐表核对，**不在本文预造表名**。
+### 1.1 行情与参考数据（目标：`market`）
+
+| 真实表 | 内容 |
+|---|---|
+| `global_ohlcv` | 日线行情主表（含复权口径） |
+| `ohlcv_minute` | 分钟线 |
+| `ohlcv_daily_qfq` | 前复权日线（派生表） |
+| `market.index_daily` | 指数日线（**已是 `market.` 前缀**） |
+| `dividends` / `splits` | 分红 / 拆股（公司行为） |
+| `backtest_adjustment_anchors` | 回测复权锚点 |
+| `trading_calendar` | 交易日历 |
+| `stocks` | 标的（内外部代码映射） |
+| `index_constituents` | 指数成分 |
+
+### 1.2 基本面
+
+| 真实表 | 内容 |
+|---|---|
+| `stock_fundamentals` | 基本面**宽表**（PE/PB/PS/ROE…），带 `available_date` |
+| `fundamentals_detail` | 基本面**逐字段行存 + PIT**（契约 C1，与宽表并存不复用） |
+
+### 1.3 因子
+
+| 真实表 | 内容 |
+|---|---|
+| `factor_definitions` | 因子定义（库中公式 + `version_hash`） |
+| `factor_cache` | 因子值结果（按 symbol/date 缓存） |
+| `factor_registrations` / `factor_registration_audit` | 因子注册与审计 |
+
+### 1.4 专题数据
+
+| 真实表 | 内容 |
+|---|---|
+| `sectors` / `stock_sector_map` | 行业与成分映射 |
+| `limit_up_pool` / `top_list` / `capital_flow` / `hot_search` / `realtime_quote` | 涨停池 / 龙虎榜 / 资金流 / 热搜 / 实时快照 |
+| `news` / `announcements` | 新闻 / 公告 |
+| `market_activity` | 市场活跃度 |
+| `quant.sw_industry_tree` / `quant.industry_vitality` | 申万行业树 / 行业活力（**已在 `quant` 前缀下**） |
+| `quant.supply_chain_edge` / `quant.etf_constituent` / `quant.macro_series` | 产业链边 / ETF 成分 / 宏观序列 |
+
+### 1.5 原始与同步
+
+| 真实表 | 内容 | 今天在哪 |
+|---|---|---|
+| `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | 无前缀（`public` 默认）→ 目标 `ingest` |
+| `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest` |
+
+**红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
+
+> **迁移不是改名**：X1d 的头号目标是"单一写者"，不是"统一前缀"。今天多数表无前缀（落默认 schema），搬进 `market` 要动所有读方 —— 分批进行，每批都要过对拍。
 
 ## 2. 只读输入（不属于本仓，禁止写入）
 
@@ -45,14 +86,21 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 4. **不许逐 bar / 逐笔远程**：延迟预算不允许；高频路径在 core 进程内。
 5. 归一化在 connector 侧完成，**不许把原始字段泄漏进协议**。
 
-## 4. 迁移策略
+## 4. 建表与迁移
 
-- 迁移脚本落在 `migrations/`，命名 `<序号>_<动作>.sql`（全仓一个递增序列，不复用号）。
+**现状（必须先知道）**：core 今天**没有迁移执行器**——建表靠 `pkg/storage/*.go` 里的内联 `CREATE TABLE IF NOT EXISTS`，另有 `migrations/`（14 个）与 `docs/migrations/`（25 个）两处**手工执行**的 SQL。这是拆分服务时必须先收口的债，不要在本文假设某个执行器已经存在。
+
+**本仓约定**（从建仓第一天执行）：
+
+- 只用 `migrations/` 一处，命名 `<序号>_<动作>.sql`，**本仓内**递增（不与别的仓共享序列，也不复用号）。
 - **只前滚**：已合并的迁移文件不改；修错靠新增一条。
-- 每条迁移必须可重入（`IF NOT EXISTS` / `IF EXISTS`），且能在空库上一次跑完。
+- 每条必须可重入（`IF NOT EXISTS` / `IF EXISTS`），且能在空库上一次跑完。
 - 跨 schema 取数只走**只读视图或 API**；出现 `join` 别人的表就是边界腐化的第一信号。
-- 表结构变更的同步义务：本文件 + `docs/ARCHITECTURE.md` 的「数据归属」节必须同一次提交里更新。
+- 迁移执行器与 applied 版本表随**第一个真正需要建表的单**一起落地；落地前本仓不产生"半迁移"。
+- 结构变更的同步义务：本文件 + `docs/ARCHITECTURE.md` 的「数据归属」节必须同一次提交里更新。
 
 ## 5. 待定
 
-- `market.factor_values` 与 core 现有因子表的分工（谁迁、迁哪些列）待 X1d 定稿。
+- `factor_cache`（因子值结果）与 `factor_definitions`（定义）的**读方收敛**：今天 core 内部有直读，X1d 后必须只剩 API。
+- `global_ohlcv` / `ohlcv_minute` 的**分区与索引**是否随迁移重做（现为内联 DDL 建表，迁移后要有可重入脚本）。
+- `data_source_registry` 归 `market` 还是 `ingest`：取决于"配置算不算数据"，X1d 定。

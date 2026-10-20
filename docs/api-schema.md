@@ -6,6 +6,9 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 
 # API Schema — tellurion-data
 
+> **实现状态（2026-10-20）**：本仓目前**只有占位 `doc.go`，没有任何 handler**——下列端点**全部未实现**。
+> 本文件是**目标契约**，不是现状说明书；开工顺序见 `docs/TASKS.md` 的「施工序」。
+
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一入口**，connector 与存储不直接对外。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
@@ -33,7 +36,7 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 
 - `dataset_hash` 是内容寻址：票池 + 窗口 + 频率 + 数据版本任一变化 → 新 hash。
 - 同一 hash 的读请求可任意重试（无副作用）。
-- 写入幂等靠 `ingest.data_sync_state` 的同步水位 + 数据点主键。
+- 写入幂等靠 `sync_jobs` / `sync_schedules` 的任务状态 + 数据点主键（目标迁 `ingest`，见 `db-schema.md` §1.5）。
 
 ## 4. 版本与兼容
 

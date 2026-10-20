@@ -36,7 +36,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 1. connector 拉原始数据 → 声明 `TimeSemantics` / `FrequencySpec`
 2. Normalizer 映射成 `UnifiedDataPoint`，填 `visible_at`
 3. `ValidatePoints` 拒收缺失/异常；`Deduplicate` 按幂等坐标去重
-4. 写 `market/*`，更新 `ingest.data_sync_state` 水位
+4. 写 `market` 域各表（真名见 `db-schema.md` §1），更新 `sync_jobs` / `sync_schedules` 水位
 
 ## 3. 失败模式（每一处 fail-closed 都要能指名）
 
