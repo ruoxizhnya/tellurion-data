@@ -8,6 +8,8 @@
 
 **状态**：预留（S0 占位，触发式启动）——尚未启动，无实现
 
+**今天的实现**：`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）。本仓是把这三块搬成服务。
+
 ## 2. 构建 / 测试（必须单仓可跑）
 
 ```bash
@@ -26,7 +28,7 @@ go test ./...
 
 - 统一数据协议与 connector / aggregator
 - `dataset_snapshot_hash` 的计算与登记
-- 数据质量与缺口报告
+- 同步任务与调度、数据质量与缺口报告（同步表的真名见 `docs/db-schema.md` §1.5）
 
 **禁止**
 
