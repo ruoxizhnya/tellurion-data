@@ -30,6 +30,19 @@ verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
 
 ---
 
+## 施工序（候选单，开工前必须展开成六字段）
+
+> 这张表是**施工顺序**，不是任务台账：每条在执行前要展开成六字段单（目标/上下文/要求/约束/验收/边界），并写明冻结契约的路径与节号。
+> 顺序有依赖，**不要跳级**：跳序的代价是返工（例：X1a 的协议没冻结就写 aggregator，等于把协议写死在一个服务里）。
+
+| 阶段 | 内容 | 上游单号 | 前置 |
+|---|---|---|---|
+| X1a | 协议冻结进 contracts（`UnifiedDataPoint` / `TimeSemantics` / 四类错误码） | `QT-40` | 本仓立项 |
+| X1b | aggregator：PIT 过滤 + 频率聚合 + 票池解析 + `dataset_snapshot_hash` | `QT-40` | X1a |
+| X1c | 12 个 connector 收口到 `ConnectorDeclaration`，漏声明即拒收 | `QT-40` | X1b |
+| X1d | `market` / `ingest` schema 归属迁移，消灭第二写者 | `QT-40` | X1c |
+| X0 | `dataset_snapshot_hash` 记入回测结果 | `QT-03` | X1b |
+
 ## 二、跨仓指针（不在本仓，勿双写）
 
 | 单号 | 主题 | 在哪 |
