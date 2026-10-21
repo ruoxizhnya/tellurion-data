@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-20
-verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
+last-verified: 2026-10-21
+verified-by: 任务台账批量重分布（X 线单展开：QT-40 迁入）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -15,17 +15,18 @@ verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
 
 ## 一、本仓任务
 
-> 当前无本仓任务。**占位仓**：实现落地前不写业务代码。
->
-> 第一张单长什么样（照此写，别自造格式）：
->
-> ### XX-01 · <一句话目标> [P?] ⬜
-> - **① 目标**：…
-> - **② 上下文**：本仓路径/行号 + 冻结契约的路径与节号
-> - **③ 要求**：①②③（可执行、可核对）
-> - **④ 约束与非目标**：明确不做什么
-> - **⑤ 验收**：可复现的命令 + 期望输出；至少一条"破坏验证"（改坏它应当红）
-> - **⑥ 边界**：只做什么；相邻的什么归别的单
+> **约定变更（2026-10-21）**：原「占位仓不写正式六字段任务单」作废——X 线任务单已展开为本仓正式任务（见下）。M5/M8 开工前置不变；实现仍未开工，开工前仍须过前置两条。
+
+### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ⬜
+
+> **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
+
+- **① 目标**：数据协议冻结进 contracts；aggregator 能给出可复现的 `dataset_snapshot_hash`；connector 全部走声明式契约。
+- **② 上下文**：`data-service-contract-and-ownership.md`（D19）X1a~X1d；现状已实现约 80%（12 connector + `ConnectorDeclaration` + `ETLPipeline`/`Normalizer`/`ValidatePoints`/`Deduplicate`；PG 已有 ingest/market/quant/research）。
+- **③ 要求**：① 协议类型（`UnifiedDataPoint`/`OHLCV`/`FrequencySpec`/`TimeSemantics`）进 QT-05 的 contracts；② `ErrVisibleAtMissing` 等错误码；③ aggregator 面（PIT 过滤 + 频率聚合 + 票池解析 + 快照 hash + 缓存）；④ `dataset_snapshot_hash` 按 QT-03 的唯一定义实现（含 `calendar_hash`/`adjustment_basis`）；⑤ 12 connector 全走 Declaration + 共享 Normalizer。
+- **④ 约束与非目标**：不重写现有 connector；不在内核内保留第二写者；不做跨库拆分。
+- **⑤ 验收**：同一 hash 两次拉取返回一致；漏声明 `visible_at` 的源被拒收；改日历/复权口径 → hash 变。
+- **⑥ 边界**：只做数据面；策略/风控/分析各自的 schema 见后续单。
 
 
 ---
@@ -36,6 +37,7 @@ verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
 
 > 这张表是**施工顺序**，不是任务台账：每条在执行前要展开成六字段单（目标/上下文/要求/约束/验收/边界），并写明冻结契约的路径与节号。
 > 顺序有依赖，**不要跳级**：跳序的代价是返工（例：X1a 的协议没冻结就写 aggregator，等于把协议写死在一个服务里）。
+> 2026-10-21：候选单已展开为「一、本仓任务」的正式六字段条目（表中「上游单号」指向的 QT 单正文现在就在本仓）。
 
 | 阶段 | 内容 | 上游单号 | 前置 |
 |---|---|---|---|
@@ -49,7 +51,7 @@ verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
 
 | 单号 | 主题 | 在哪 |
 |---|---|---|
-| QT-40 | X1 数据服务：统一协议 + aggregator + `dataset_snapshot_hash` | `tellurion:docs/TASKS.md` |
+| QT-40 | X1 数据服务：统一协议 + aggregator + `dataset_snapshot_hash` | 已迁入本仓「一、本仓任务」（2026-10-21；core `tellurion:docs/TASKS.md` 留同号指针） |
 | QT-08 | 本仓 CI / AGENTS / 台账由该单一并补齐 | `tellurion:docs/TASKS.md` |
 | SPEC-R-02 | 五张无主表 owner 认领——`factor_hypothesis` / `factor_returns` / `ic_analysis` 归本仓因子域（已补 `docs/db-schema.md` §1.3） | `tellurion:docs/TASKS.md` §九 |
 
