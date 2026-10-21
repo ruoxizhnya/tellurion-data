@@ -46,8 +46,10 @@ core / analytics / strategy / agent
 ```
 contracts（协议类型） + kit（logging/http/db）
         ↑
-  tellurion-data  ──(HTTP)──►  core / analytics / strategy / agent
+  tellurion-data  ◄──(HTTP)──  core / analytics / strategy / agent
 ```
+
+> **箭头图例**（与 `tellurion-docs:docs/REPO-MAP.md` 同向）：`A ──► B` = A 调用 B，箭头指向**被调方**。四方经 HTTP 调用本仓「对外面」（run 前取数 / 异步），本仓只供数、不反向调用（2026-10-21 审查 M24 订正：原图箭头反向，读作「data 调四方」）。
 
 ## 6. 关键决策
 
