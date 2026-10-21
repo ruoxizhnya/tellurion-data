@@ -24,10 +24,11 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 | `ohlcv_daily_qfq` | 前复权日线（派生表） |
 | `market.index_daily` | 指数日线（**已是 `market.` 前缀**） |
 | `dividends` / `splits` | 分红 / 拆股（公司行为） |
-| `backtest_adjustment_anchors` | 回测复权锚点 |
 | `trading_calendar` | 交易日历 |
 | `stocks` | 标的（内外部代码映射） |
 | `index_constituents` | 指数成分 |
+
+> **摘除认领**：`backtest_adjustment_anchors`（回测复权锚点）**已划归 core 回测域（2026-10-21 裁决）；本仓不认领** —— 写者是 `tellurion:pkg/backtest/adjustment_snapshot.go`（起跑冻结/回填锚点），不是本仓行情同步，不随 `market` 迁移（详见 `tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` 归属表）。
 
 ### 1.2 基本面
 
@@ -42,7 +43,7 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 |---|---|
 | `factor_definitions` | 因子定义（库中公式 + `version_hash`） |
 | `factor_cache` | 因子值结果（按 symbol/date 缓存） |
-| `factor_registrations` / `factor_registration_audit` | 因子注册与审计 |
+| `factor_registrations` / `factor_registration_audit` / `factor_mining_records` | 因子注册与审计 / 挖掘留痕（D8，同族治理账本：登记记「谁把哪一版接进来」，挖掘留痕记「这一版凭什么进库」；写者同为数据服务挖掘入口） |
 
 ### 1.4 专题数据
 
@@ -71,7 +72,7 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 
 | 数据 | 真实 owner |
 |---|---|
-| 回测结果（`BacktestResult` / 指标） | core（今天）/ `tellurion-orchestration`（X5 后） |
+| 回测结果（`BacktestResult` / 指标） | core（2026-10-21 裁决：单一写者；orchestration 只经 API 读） |
 | 风控规则与快照 | `tellurion-risk` |
 | 策略定义与 artifact | `tellurion-strategy` |
 | 实验与研究数据 | `tellurion-agent`（`ai.*`） |
