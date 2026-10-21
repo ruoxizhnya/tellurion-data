@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-20
-verified-by: 功能边界固化（三份契约：db / api / dataflow）
+last-verified: 2026-10-21
+verified-by: M8 接口对表落定后的哨兵名订正（`ErrNoTimeSemantics` → `ErrDeclarationMissing`）
 ---
 
 # Dataflow — tellurion-data
@@ -52,7 +52,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 
 | 失败点 | 症状 | 兜底 |
 |---|---|---|
-| connector 漏声明时间语义 | 数据可能前视 | `ErrNoTimeSemantics` 拒收（已有测试） |
+| connector 漏声明时间语义 | 数据可能前视 | `ErrDeclarationMissing` 在**注册期**拒收（`Registry.Register`，已有测试；旧名 `ErrNoTimeSemantics` 作废） |
 | `visible_at` 用错锚点 | 回测虚高、实盘崩 | 归一化层强制：锚点=**披露日（ann_date）**，不是报告期截止日（`tellurion:docs/SPEC.md` 时间语义）+ 用例钉住财报场景 |
 | 上游改了历史数据 | 同参回测结果漂移 | `dataset_hash` 变化 → 结果可追溯到"哪版数据" |
 | 缓存串号 | 返回别人的数据 | `ErrSnapshotMismatch` + 500 |
