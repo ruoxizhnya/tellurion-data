@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-21
-verified-by: M5 对账结案（`tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2）+ M8 接口对表落定（同设计集 §4.1）+ QT-40 前提实测订正
+last-verified: 2026-10-22
+verified-by: M5 对账结案 + M8 接口对表落定后的自审订正（引用锚点逐条回核；CT-02 现状按 2026-10-22 工作区实测改写）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -42,7 +42,7 @@ verified-by: M5 对账结案（`tellurion:docs/design/qt-decoupling/repo-invento
 |---|---|---|
 | `QT-05`（S1 契约层落码：`pkg/domain`（含 `domain/market`）+ `pkg/backtest/contracts` 进 contracts） | ⬜ 未启动（`tellurion-contracts:docs/TASKS.md` QT-05；contracts 仓今天只有 `doc.go` + `tools/check_api_surface`，core `go.mod` 对 contracts 零 `require`） | **X1b 全部**。本仓 module path 是单段短名（`tellurion-data`），按编译器规则无法 `require` core，又禁止 `replace ../` —— 协议类型拿不到，aggregator 就无法落地。跳序的代价工单施工序已点过一次：「X1a 的协议没冻结就写 aggregator，等于把协议写死在一个服务里」 |
 | `QT-02` / `QT-04` / `QT-63`（W0 收尾） | 🔶 在落（main 上已有 `f615e8e` + `9ffff72` 两笔 fill_timing 提交，台账仍标 ⬜）/ ⬜ / ⬜ | QT-05 排在「W0 全绿之后」（core 执行顺序总览 S1 行），因此间接卡住本仓 |
-| `CT-02`（contracts 版本规则表 + 兼容矩阵 + CHANGELOG） | ⬜ | X1a 落第一个符号那天起就没有版本纪律可依（`tellurion-contracts:docs/TASKS.md` CT-02） |
+| `CT-02` / `QT-19`（contracts 版本规则表 + 兼容矩阵 + CHANGELOG） | ⬜（2026-10-22 实测：contracts 工作区已有 README 版本表 / 兼容矩阵 / `CHANGELOG.md` 与 `check_release_matrix` 的 AGENTS 条目，**未提交**，台账仍 ⬜；core 总览把 QT-19 排在 QT-07 之后，**不阻塞 X1a**） | 不卡施工，卡**口径**：版本规则只认 contracts README 那张表 + `tellurion:docs/TASKS.md` QT-19 ③ 那五条（0.x 期允许 breaking，但要 bump MINOR + 写 CHANGELOG），**本仓不许自造版本口径** |
 
 **对 QT-40 正文前提的实测订正（不改写六字段正文，按台账惯例在此登记）**：
 
