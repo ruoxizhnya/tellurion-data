@@ -51,6 +51,7 @@ verified-by: 首次建立本仓台账（QT-08 十二仓自治三件套）
 |---|---|---|
 | QT-40 | X1 数据服务：统一协议 + aggregator + `dataset_snapshot_hash` | `tellurion:docs/TASKS.md` |
 | QT-08 | 本仓 CI / AGENTS / 台账由该单一并补齐 | `tellurion:docs/TASKS.md` |
+| SPEC-R-02 | 五张无主表 owner 认领——`factor_hypothesis` / `factor_returns` / `ic_analysis` 归本仓因子域（已补 `docs/db-schema.md` §1.3） | `tellurion:docs/TASKS.md` §九 |
 
 ---
 

@@ -43,7 +43,12 @@ verified-by: 功能边界固化（三份契约：db / api / dataflow）
 |---|---|
 | `factor_definitions` | 因子定义（库中公式 + `version_hash`） |
 | `factor_cache` | 因子值结果（按 symbol/date 缓存） |
+| `factor_returns` | 因子分组收益（`factor_name` × `trade_date` × `quintile`，写者 `tellurion:pkg/storage/cache.go`） |
+| `ic_analysis` | 因子 IC 分析结果（`factor_name` × `trade_date`，写者 `tellurion:pkg/storage/cache.go`） |
+| `factor_hypothesis` | 因子假设登记与内置种子（写者 `tellurion:pkg/storage/factor_hypothesis.go`） |
 | `factor_registrations` / `factor_registration_audit` / `factor_mining_records` | 因子注册与审计 / 挖掘留痕（D8，同族治理账本：登记记「谁把哪一版接进来」，挖掘留痕记「这一版凭什么进库」；写者同为数据服务挖掘入口） |
+
+> **SPEC-R-02 认领**：`factor_returns` / `ic_analysis` / `factor_hypothesis` 属本仓**因子域**（与 `factor_cache` / `factor_definitions` 同域），唯一 owner = `tellurion-data`。当前 DDL 文本实体在 `tellurion:pkg/storage/postgres.go`（core 内联 DDL 为唯一真相），X1d 按 schema 迁移时随因子域一并搬走；在此之前 core 的写入属过渡期实现，不回写归属。
 
 ### 1.4 专题数据
 
