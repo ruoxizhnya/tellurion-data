@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-21
-verified-by: M8 接口对表落定（`tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §4.1）；错误码名与 hash 分量按实测订正
+last-verified: 2026-10-22
+verified-by: M8 接口对表落定（`tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §4.1）；错误码名与 hash 分量按实测订正；§4 的 contracts ADR 条款号引用按 T2 核对订正（③→①）
 ---
 
 # API Schema — tellurion-data
@@ -51,7 +51,7 @@ verified-by: M8 接口对表落定（`tellurion:docs/design/qt-decoupling/data-s
 
 ## 4. 版本与兼容
 
-- 协议类型（`UnifiedDataPoint` 等）住在 contracts，版本随契约走。**包名与迁入时机**见对表 A 组注 ①/②：定名 `contracts/dataprotocol`，那一笔挂在 X1b 第一 commit——今天这些符号只有 core 一个使用方，按 contracts ADR-0001 ③「只有单个仓使用的类型属泄漏」不许提前迁；本仓一 import，两个使用方才凑齐。
+- 协议类型（`UnifiedDataPoint` 等）住在 contracts，版本随契约走。**包名与迁入时机**见对表 A 组注 ①/②：定名 `contracts/dataprotocol`，那一笔挂在 X1b 第一 commit。判据的**条款号是订正过的**（2026-10-22，QT-40 对表 T2 核对上游时逮到）：不许提前迁的那条是 contracts `docs/adr/0001` **①**「本仓只放被 ≥2 个仓使用的类型」（`tellurion-contracts:AGENTS.md` §3 写作「只有单个仓使用的类型属泄漏」），**不是 ③**——③ 管的是 `Config`/`Options`/`Impl` 命名。⚠️ 同一份 ADR 的「代价」节又接受 S1 整包迁时带进 core-only 类型、事后按清单回收，于是「新建包要不要走同一条容忍」成一个真岔路：**两个选项都自洽，登记在 `tellurion-contracts:docs/API.md` §8 待裁 #4，X1a 前挑定并写回本节**，不要 core / data 两侧各按一条施工。
 - 端点只增不删；废弃走 `deprecated` 头 + 一个 MINOR 周期。
 - 字段语义变更（尤其 `visible_at`）算 breaking，必须走 ADR。
 

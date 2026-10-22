@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-20
-verified-by: 功能边界固化（三份契约：db / api / dataflow）
+last-verified: 2026-10-22
+verified-by: QT-40 对表 T4 收尾 —— 新增 §2.1（ADR-027 §2.6.2 的六个限界上下文包级隔离 + 门禁断言 + 两条实测口子）
 ---
 
 # 架构 — tellurion-data
@@ -23,6 +23,37 @@ aggregator  PIT 过滤 · 频率聚合 · 票池解析 · 快照 hash · 缓存
       ↓  对外唯一面
 core / analytics / strategy / agent
 ```
+
+### 2.1 六个限界上下文的包级隔离（对表 T4，2026-10-22 立）
+
+> **这是目标分层，不是现状**——本仓今天只有占位 `doc.go`，一个包都还没有。
+> 义务来源是 `tellurion-docs:docs/adr/adr-027-modular-decomposition-to-independent-services.md` §2.6.2（data-service 的 **7 个**限界上下文里，只有 Reduction 物理独立，**其余 6 个在本仓内按包强制隔离** = 编译期边界 + 该 ADR §6 门禁断言），
+> 由 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2 的 data 行点名：「`tellurion-data:docs/ARCHITECTURE.md` 今天没有这段分层（实测 grep `限界上下文` 零命中）」——本节就是补上它。
+> ADR-027 §7 同时禁止把这 7 个上下文都拆成服务（单人自托管，拆 7 个服务是运维灾难；DDD 的价值在**语言边界**，不在进程数）。所以本表的产物是**包**，不是仓。
+> **「目标包」一列是本节给的建议名**——ADR-027 只定「按包强制隔离」这条义务，一个包名都没定。X1b 建仓时要改名就改本表（连同下面断言 1 的方向图），**别造第二套名字**：断言是按目录名写的，两套名字等于没有边界。
+
+| 限界上下文 | 领域语言（该上下文自己的词，不许借别的上下文的词） | 变化原因 | 目标包 | 今天的代码在哪（core） |
+|---|---|---|---|---|
+| 采集 Ingestion | `DataSource` / `Quota` / `RawPayload` / `content_hash` | 外部 API 变（tushare 改字段、东财反爬） | `internal/ingest` | `pkg/data/source`（`adapter.go` 的 9 方法 port、`registry.go`、`declarations.go`）+ `pkg/data/tushare*.go` 的取数腿 + `pkg/data/tushare_raw.go` → `pkg/storage/ingest_raw.go` 的原始归档 |
+| 规范化 Normalization | `TradingCalendar` / `CorporateAction` / `PITAlignment` / `Board` | 数据口径变 | `internal/normalize` | `pkg/data/source/etl.go`（`Normalizer` `:161`、`ValidatePoints` `:168`）+ `unified.go`（`Deduplicate` `:79`）+ 各源 `*_normalizer.go` |
+| 供给 Serving | `Provider` / `OHLCV` / `Quote` / **`SeriesSpec`** | 消费者需求变 | `internal/serving` | `pkg/marketdata`（`Provider` 多实现 + Redis 缓存装饰器 + `aggregate.go` + `board.go`）+ `cmd/data` 的读 handlers |
+| 派生 Derived | `Factor` / `ICEntry` / `ZScore` | 因子定义变 | `internal/derived` | `pkg/data/factor*.go` + `pkg/storage/cache.go`（`factor_cache` / `factor_returns` / `ic_analysis` 的写）+ `pkg/mining` |
+| 证据 Evidence | `Citation` / `Provenance` | 可追溯性要求变 | `internal/evidence` | ⚠️ **不在数据服务的搬迁清单上**：今天住在 core 的 HTTP 层（`cmd/analysis/handlers_evidence.go`，`GET /api/evidence/:content_hash`）。见下面「两条没闭合的口子」② |
+| 同步编排 Sync | `SyncJob` / `Schedule` / `WorkerPool` / `Backpressure` | 调度策略变 | `internal/sync` | `pkg/sync`（`queue.go` / `worker.go`）+ `cmd/data/main.go` 的作业注册 + `sync_jobs` / `sync_schedules` 表 |
+| 文本降维 Reduction | `NewsItem` / `Hotness` / `DecayHalfLife` / `WeightSeries` | NLP 模型 / 规则变 | **不给包**（下表说明） | 无实现 |
+
+**Reduction 这一行故意留空**。ADR-027 §2.6.2 判它是**第七个上下文且唯一物理独立**（第五个服务），但 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1 的十二仓表里没有它的仓位——该篇 §1.2 R1 把这条列为**待裁 U6**，倾向「先作 `tellurion-data` 内的独立包，做文本降维时再升格」，代价是「§2.6.2 的『资源特征不同 / 失败可隔离』两条拿不到，且 ADR-027 的五服务拓扑在文档上缺一角」。**在本表里替 U6 预先分配一个包**（如 `internal/reduction`）等于用一份服务仓文档裁决另一个仓的拓扑，所以这里只登记义务：真要做文本降维时，它要么进本仓一个**与上面六个平级、且不被 `serving` 直接调用**的包（失败隔离靠调用方向保证），要么立第 13 仓并同步改 §0/§1 的「12 仓」口径。
+
+**门禁断言**（ADR-027 §6 那三类在本仓的可执行版本；判据现在就能写，**代码落地属 X1b/X1d 交付物**）
+
+1. **包方向**：`ingest → normalize → serving` 单向；`derived` 不得 import `serving`（派生值是被供给的资产，不是供给的一部分）；`evidence` 只依赖 contracts。断言形态照 core `cmd/analysis/deps_test.go` 的 `mustNotHave`（AST / import 扫描，命中即红）。
+2. **数据归属**：`market` / `ingest` 的建表与写 SQL **在且只在**本仓（ADR-027 §6 第 2 条要求从「表在 DDL 里」升级到「在且只在 owner 的 DDL 里」）。X1d 之前的现状是 core 内联 DDL 承载，所以这条在迁移完成前**只能是告警级**，登记见 `db-schema.md` §1 的 SPEC-R-02 认领行。
+3. **可达性**：`cmd/*/` 下的 `New*Handler` / `register*Routes` 必须有调用点（§6 第 3 条）。对本仓它防的是反方向的漂移——`api-schema.md` §1 那三条 `/datasets/*` 今天是**目标契约**，别让它先在文档里"存在"、再被当成已实现的读面。
+
+**两条没闭合的口子（本次对表实测，不在本节里假装解决）**
+
+- ① `core:pkg/data/source` 一个包同时装着**采集与规范化**两个上下文（`adapter.go`/`registry.go`/`declarations.go` 是采集契约，`etl.go`/`unified.go` 是规范化）。整包平移过来的结果是"目录看起来分好了、边界一个没立"——X1b 建包时**必须把这两块拆开**，断言 1 才有东西可断。同类混装还在 `core:pkg/data` 顶层（`factor*.go` 派生 与 `tushare*.go` 采集同目录）。
+- ② §2.6.2 给规范化的领域语言点名列了 `Board`，但 `Board` 的代码今天物理在**供给**包（`pkg/marketdata/board.go`）；`PITAlignment` 今天**没有独立承载物**——可见性全靠列 + 读路径比较（`pkg/storage/fundamentals.go:121` 的 `available_date <= $2`），它的形状要等 `db-schema.md` §6 那条加列之后才存在。建仓时逐个定"跟语言走还是跟调用方走"，**别只搬有现成归属的那几个**。证据上下文（表中第 5 行）的处境同一条：它的**读面**今天物理在 `cmd/analysis`，而 ADR-027 §2.6 的构件图把「evidence API」算在 data-service 里——要么随 X1 把这条读面连同 `ingest.raw` 的 owner 一起搬进本仓，要么在本表把它标成「不属本仓」并回改 ADR-027 的构件图。**别留一张看起来已有归属、实际代码在别的进程里的表**。
 
 ## 3. 组件职责
 
