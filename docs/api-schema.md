@@ -1,13 +1,15 @@
 ---
 status: active
-last-verified: 2026-10-22
-verified-by: M8 接口对表落定（`tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §4.1）；错误码名与 hash 分量按实测订正；§4 的 contracts ADR 条款号引用按 T2 核对订正（③→①）
+last-verified: 2026-10-23
+verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是否已存在」两处现状订正（端点契约本身未改）
 ---
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-20）**：本仓目前**只有占位 `doc.go`，没有任何 handler**——下列端点**全部未实现**。
-> 本文件是**目标契约**，不是现状说明书；开工顺序见 `docs/TASKS.md` 的「施工序」。
+> **实现状态（2026-10-23）**：下表三个端点**仍无 HTTP handler**（本仓没有 `cmd/`），端点契约不变。
+> 但 aggregator 的 **port 面**已落地：`internal/serving` 的 `Aggregator.Resolve` / `Snapshot`
+> 覆盖 resolve 与 `{hash}` 的全部语义（参数校验 / 六分量 hash / 强幂等缓存），
+> `internal/normalize` 提供 PIT 闸门与频率聚合。本条只描述**代码位置**，不改契约。
 
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一入口**，connector 与存储不直接对外。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
@@ -39,12 +41,13 @@ verified-by: M8 接口对表落定（`tellurion:docs/design/qt-decoupling/data-s
 | `ErrDeclarationMissing` | ✅（`tellurion:pkg/data/source/contract.go:66`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
 | `ErrDeclarationInvalid` / `ErrDeclarationMismatch` | ✅（`:67` / `:68`） | 声明非法（枚举 / 缺 `VisibleExpr` / 重复）／声明与数据形态矛盾 | 注册期拒收 |
 | `ErrUnsupported` | ✅（`tellurion:pkg/data/source/adapter.go:73`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
-| `ErrVisibleAtMissing` | ❌ **待新建**（X1b） | 数据点缺 `visible_at` | 拒收该批次；**不许用 mtime 兜底**。⚠️ 代价：历史行无该列、不可回填 ⇒ 与 X1d 加列同批设计（对表 T5） |
-| `ErrSnapshotMismatch` | ❌ **待新建**（X1b） | hash 与返回内容不一致 | 500 + 告警（数据已被篡改或缓存串了）；与「没这个 hash」（404）**必须是两个码** |
+| `ErrVisibleAtMissing` | ✅（`tellurion-data:internal/normalize/pit.go`） | 数据点缺 `visible_at` | 拒收该批次；**不许用 mtime 兜底**。⚠️ 代价：历史行无该列、不可回填 ⇒ 与 X1d 加列同批设计（对表 T5） |
+| `ErrSnapshotMismatch` | ✅（`tellurion-data:internal/serving/errors.go`） | hash 与返回内容不一致 | 500 + 告警（数据已被篡改或缓存串了）；与「没这个 hash」（404）**必须是两个码** |
+| `ErrMissingParameter` / `ErrInvalidParameter` / `ErrUniverseAmbiguous` / `ErrEmptyUniverse` / `ErrEmptyCalendar` / `ErrEmptyDataVersion` / `ErrUnexpectedSymbol` / `ErrSnapshotNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | resolve 参数缺失 / 非法 / 票池二义 / 票池为空 / 日历为空 / 数据版本为空 / 越界 symbol；按 hash 取不到 | 400 / 409 / 404 的分诊口径见该文件头注释；哨兵只增不删 |
 
 ## 3. 幂等性与重试
 
-- `dataset_hash` 是内容寻址。**唯一定义 = `tellurion:pkg/backtest/contracts/provenance.go` 的 `DatasetSnapshotInput`（六分量：`universe_hash` / `window` / `frequency` / `data_version` / `calendar_hash` / `adjustment_basis`）**，本文件不重述分量（QT-03 于 2026-10-21 冻结；旧四项写法缺 `calendar_hash` 与 `adjustment_basis`，会导致「供应商补一个节假日 → 同 hash 不同结果」，已订正为引用）。
+- `dataset_hash` 是内容寻址。**唯一定义 = `tellurion-contracts:engine/provenance.go` 的 `DatasetSnapshotInput`（六分量：`universe_hash` / `window` / `frequency` / `data_version` / `calendar_hash` / `adjustment_basis`）**，本文件不重述分量（QT-03 于 2026-10-21 冻结；旧四项写法缺 `calendar_hash` 与 `adjustment_basis`，会导致「供应商补一个节假日 → 同 hash 不同结果」，已订正为引用。core 的 `pkg/backtest/contracts` 已迁入 contracts 仓，旧路径作废）。
 - 本仓**不许自行实现 hash**：调 `contracts` 的 `DatasetSnapshotInput{...}.Hash()`。
 - 同一 hash 的读请求可任意重试（无副作用）；返回内容重算 hash 不符 ⇒ `ErrSnapshotMismatch`。
 - 写入幂等靠 `sync_jobs` / `sync_schedules` 的任务状态 + 数据点主键（目标迁 `ingest`，见 `db-schema.md` §1.5）。

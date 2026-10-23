@@ -1,6 +1,6 @@
 # tellurion-data
 
-> module: `tellurion-data` ｜ 状态：**预留（S0 占位，触发式启动）——尚未启动，无实现**
+> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地（注册门 + 频率聚合/PIT + aggregator/缓存），HTTP 面与取数存储 port 未接线（见 `docs/TASKS.md` QT-40）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
@@ -10,7 +10,10 @@
 |---|---|
 | `docs/` | 本仓文档：台账 / 边界 / 决策 / 归档 —— 从这里进：`docs/README.md` |
 | `AGENTS.md` | 本仓入口（构建、边界、禁止、依赖版本） |
-| `doc.go` | 占位包（无实现） |
+| `internal/ingest` | connector 注册门 + 12 connector 声明清单（catalog） |
+| `internal/normalize` | 频率聚合（1m → 15m/1d）+ PIT 闸门 |
+| `internal/serving` | aggregator（票池解析 · 取数 · 聚合 · PIT · hash · 缓存） |
+| `doc.go` | 根包文档占位（无实现） |
 
 ## 快速开始
 

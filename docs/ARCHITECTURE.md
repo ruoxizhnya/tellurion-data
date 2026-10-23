@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-22
-verified-by: QT-40 对表 T4 收尾 —— 新增 §2.1（ADR-027 §2.6.2 的六个限界上下文包级隔离 + 门禁断言 + 两条实测口子）
+last-verified: 2026-10-23
+verified-by: QT-40 X1b/X1c 核心落地后的现状订正 —— §2.1 首句（不再是「一个包都没有」）、门禁断言 3、§8 施工状态
 ---
 
 # 架构 — tellurion-data
@@ -26,7 +26,7 @@ core / analytics / strategy / agent
 
 ### 2.1 六个限界上下文的包级隔离（对表 T4，2026-10-22 立）
 
-> **这是目标分层，不是现状**——本仓今天只有占位 `doc.go`，一个包都还没有。
+> **这是目标分层，不是现状**——2026-10-23 实测：已按本表建起 3 个包（`internal/ingest` / `internal/normalize` / `internal/serving`，内容见 §8 的 X1b/X1c 状态）；`internal/derived` / `internal/evidence` / `internal/sync` 仍是目标，代码在 core。
 > 义务来源是 `tellurion-docs:docs/adr/adr-027-modular-decomposition-to-independent-services.md` §2.6.2（data-service 的 **7 个**限界上下文里，只有 Reduction 物理独立，**其余 6 个在本仓内按包强制隔离** = 编译期边界 + 该 ADR §6 门禁断言），
 > 由 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2 的 data 行点名：「`tellurion-data:docs/ARCHITECTURE.md` 今天没有这段分层（实测 grep `限界上下文` 零命中）」——本节就是补上它。
 > ADR-027 §7 同时禁止把这 7 个上下文都拆成服务（单人自托管，拆 7 个服务是运维灾难；DDD 的价值在**语言边界**，不在进程数）。所以本表的产物是**包**，不是仓。
@@ -44,11 +44,11 @@ core / analytics / strategy / agent
 
 **Reduction 这一行故意留空**。ADR-027 §2.6.2 判它是**第七个上下文且唯一物理独立**（第五个服务），但 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1 的十二仓表里没有它的仓位——该篇 §1.2 R1 把这条列为**待裁 U6**，倾向「先作 `tellurion-data` 内的独立包，做文本降维时再升格」，代价是「§2.6.2 的『资源特征不同 / 失败可隔离』两条拿不到，且 ADR-027 的五服务拓扑在文档上缺一角」。**在本表里替 U6 预先分配一个包**（如 `internal/reduction`）等于用一份服务仓文档裁决另一个仓的拓扑，所以这里只登记义务：真要做文本降维时，它要么进本仓一个**与上面六个平级、且不被 `serving` 直接调用**的包（失败隔离靠调用方向保证），要么立第 13 仓并同步改 §0/§1 的「12 仓」口径。
 
-**门禁断言**（ADR-027 §6 那三类在本仓的可执行版本；判据现在就能写，**代码落地属 X1b/X1d 交付物**）
+**门禁断言**（ADR-027 §6 那三类在本仓的可执行版本；判据现在就能写，**AST 断言本体属 X1b 剩余交付物**——包已建起，守卫测试尚未落）
 
 1. **包方向**：`ingest → normalize → serving` 单向；`derived` 不得 import `serving`（派生值是被供给的资产，不是供给的一部分）；`evidence` 只依赖 contracts。断言形态照 core `cmd/analysis/deps_test.go` 的 `mustNotHave`（AST / import 扫描，命中即红）。
 2. **数据归属**：`market` / `ingest` 的建表与写 SQL **在且只在**本仓（ADR-027 §6 第 2 条要求从「表在 DDL 里」升级到「在且只在 owner 的 DDL 里」）。X1d 之前的现状是 core 内联 DDL 承载，所以这条在迁移完成前**只能是告警级**，登记见 `db-schema.md` §1 的 SPEC-R-02 认领行。
-3. **可达性**：`cmd/*/` 下的 `New*Handler` / `register*Routes` 必须有调用点（§6 第 3 条）。对本仓它防的是反方向的漂移——`api-schema.md` §1 那三条 `/datasets/*` 今天是**目标契约**，别让它先在文档里"存在"、再被当成已实现的读面。
+3. **可达性**：`cmd/*/` 下的 `New*Handler` / `register*Routes` 必须有调用点（§6 第 3 条）。对本仓它防的是反方向的漂移——`api-schema.md` §1 那三条 `/datasets/*` 今天是**目标契约**，别让它先在文档里"存在"、再被当成已实现的读面。（2026-10-23：aggregator 的 **port 面**已落，HTTP 面仍是 **0 个 handler**，本仓也还没有 `cmd/`。）
 
 **两条没闭合的口子（本次对表实测，不在本节里假装解决）**
 
@@ -102,3 +102,10 @@ contracts（协议类型） + kit（logging/http/db）
 | X1c | connector 契约收口 | 漏声明被拒收 |
 | X1d | schema 归属迁移 | 无第二写者 |
 | X0 | `dataset_snapshot_hash` 记入结果 | 与 `strategy_ref` 同款留痕 |
+
+**施工状态（2026-10-23 实测，`go build/vet/test ./...` 全绿）**
+
+- **X1a 🟡 部分**：contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput`（六分量 hash 唯一定义）；`UnifiedDataPoint` 仍未进 contracts。
+- **X1b 🔶 核心已落，HTTP 未接**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）与 `internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）。**未落**：四个取数 port 的真实实现（`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver` 今天只有接口）与 HTTP handler。
+- **X1c 🔶 注册门已落，connector 未搬**：`internal/ingest` 的 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 12 connector 的声明清单 `Catalog()`；取数传输仍在 core `pkg/data/source`。
+- **X1d ⬜**；**X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。

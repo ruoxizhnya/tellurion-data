@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-22
-verified-by: QT-40 对表 T2~T5 收尾（四条待办的落点与裁出项逐个登记；CT-02 状态按 contracts `191ba0b` 实测改 ✅）
+last-verified: 2026-10-23
+verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施工进度与未落项」块，QT-05 前置按 contracts v0.1.0 实测改「部分落地」
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -15,9 +15,9 @@ verified-by: QT-40 对表 T2~T5 收尾（四条待办的落点与裁出项逐个
 
 ## 一、本仓任务
 
-> **约定变更（2026-10-21）**：原「占位仓不写正式六字段任务单」作废——X 线任务单已展开为本仓正式任务（见下）。M5/M8 开工前置不变；实现仍未开工，开工前仍须过前置两条。
+> **约定变更（2026-10-21）**：原「占位仓不写正式六字段任务单」作废——X 线任务单已展开为本仓正式任务（见下）。M5/M8 开工前置不变；实现仍未开工，开工前仍须过前置两条。（2026-10-23：实现已开工，见本单下的进度块。）
 
-### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ⬜
+### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶
 
 > **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
 
@@ -27,6 +27,22 @@ verified-by: QT-40 对表 T2~T5 收尾（四条待办的落点与裁出项逐个
 - **④ 约束与非目标**：不重写现有 connector；不在内核内保留第二写者；不做跨库拆分。
 - **⑤ 验收**：同一 hash 两次拉取返回一致；漏声明 `visible_at` 的源被拒收；改日历/复权口径 → hash 变。
 - **⑥ 边界**：只做数据面；策略/风控/分析各自的 schema 见后续单。
+
+**施工进度与未落项（2026-10-23，`go build/vet/test ./...` 全绿）**
+
+| 序列 | 状态 | 已落 | 未落（不假装完成） |
+|---|---|---|---|
+| X1a 协议冻结 | 🟡 部分 | contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` 仍未进 contracts（X1c 协议冻结仍挂 QT-05 剩余半边） |
+| X1b aggregator | 🔶 核心已落 | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收） | 四个 port 的真实实现（`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver` 今天只有接口，无 PG 实现）与 HTTP handler |
+| X1c connector 声明 | 🔶 注册门已落 | `internal/ingest`：`Registry`（漏声明 / 非法枚举 / 缺 `VisibleExpr` / 锚点与 wire schema 矛盾 ⇒ fail-closed 拒收）+ 12 connector 的 18 条声明清单 `Catalog()`（与 core `pkg/data/source/declarations.go` 逐条对齐） | 12 个 connector 的取数与归一化实现搬入（传输仍在 core，随 X1c 迁；届时 `Catalog()` 由其 `Declarations()` 取代） |
+| X1d schema 归属 | ⬜ | —— | 全部 |
+
+**已登记的取舍与风险（必须随 X1b 一起读）**
+
+- **`as_of` 不在冻结六分量里**：同六分量、不同 `as_of` 会撞同一 hash。处置 = 缓存对同 hash 不同 metadata / 内容报 `ErrSnapshotMismatch`（fail-closed，绝不静默返回别人的数据集），并有测试钉住。是否把 `as_of` 升为第七分量属 QT-03 后继裁决。
+- **聚合先于 PIT 过滤**：bucket 内任一条 1m bar 的可见时刻都不晚于 bucket 结束；若先过滤再聚合会造出「看起来完整、实际缺尾」的半桶。
+- **15m 不物化、1d 直读日线表**：`sourceFrequency` 是唯一映射；1d 不从分钟合成（避免日线口径随分钟完整度漂移）。
+- **catalog 是过渡期双真相**：本仓自持一份 12 connector 声明清单，是因为本仓 CI 明令不得 checkout 其他仓（`tellurion-data:.github/workflows/ci.yml` 头注释）；X1c 搬 connector 时必须删除本表，改用 connector 自己的 `Declarations()`。
 
 
 ---
@@ -55,12 +71,14 @@ verified-by: QT-40 对表 T2~T5 收尾（四条待办的落点与裁出项逐个
 | `QT-04` / `QT-63`（W0 剩下的两条） | ⬜ / ⬜（core 台账 2026-10-22 实测：`QT-04` 行仍 ⬜、`QT-63` 行仍 ⬜；同表 `QT-02` 已 **✅（2026-10-21）**，main 上五笔 fill_timing 提交 `f615e8e`→`9ffff72`→`676eab1`→`ee93174`→`271273a` 逐个 `git log -1` 核过） | QT-05 排在「W0 全绿之后」（core 执行顺序总览 S1 行），因此**间接**卡住本仓——它卡的是 QT-05，不是本仓的代码 |
 | `CT-02` / `QT-19`（contracts 版本规则表 + 兼容矩阵 + CHANGELOG） | ✅ **已落**（2026-10-22，contracts `191ba0b`：README 的版本规则表 + 兼容矩阵 + `CHANGELOG.md` + `check_release_matrix` 进 CI；`QT-19` 那条**排在 `QT-07`（S2 打 tag）之后**，所以矩阵今天只有 `main`（未发版）一行是**预期**，不是缺项） | 不卡施工，卡**口径**：版本规则只认 contracts README 那张表 + `tellurion:docs/TASKS.md` QT-19 ③ 那五条（0.x 期允许 breaking，但要 bump MINOR + 写 CHANGELOG），**本仓不许自造版本口径**。对表 F 组与 §2.1 的引用已对上 |
 
+> **2026-10-23 实测更新（不改写上表原文）**：`QT-05` 已**部分落地**——contracts 仓 `v0.1.0` 已发（S2 打 tag 完成），`domain/market` 与 `engine` 的六分量 hash 可直接消费，本仓 `require v0.1.0` 后离线 `build/vet/test` 全绿。仍缺 `UnifiedDataPoint` 进 contracts ⇒ **X1c 的协议冻结半边**继续挂此条；**X1b 的取数 / hash 面已不再被它卡住**（用的正是已冻结的 `market` 类型）。
+
 **对 QT-40 正文前提的实测订正（不改写六字段正文，按台账惯例在此登记）**：
 
-- **②「现状已实现约 80%」只对 connector 层成立**。aggregator 半边今天是空的：`DatasetSnapshotInput`（`tellurion:pkg/backtest/contracts/provenance.go:97-123`）**零生产者**——全仓 grep 无任何构造点，只有定义与向量测试。X1b 交付的是**第一个生产者**，不是搬迁。
+- **②「现状已实现约 80%」只对 connector 层成立**。aggregator 半边今天是空的：`DatasetSnapshotInput`（`tellurion:pkg/backtest/contracts/provenance.go:97-123`，该文件已于 S1 迁入 `tellurion-contracts:engine/provenance.go`）**零生产者**——全仓 grep 无任何构造点，只有定义与向量测试。X1b 交付的是**第一个生产者**，不是搬迁。
 - **③-② 的四个错误码在代码里一个都不存在**（`ErrNoTimeSemantics` / `ErrUnknownDataType` / `ErrVisibleAtMissing` / `ErrSnapshotMismatch` 全仓 grep = 0 命中）。真实在执法的是 `tellurion:pkg/data/source` 的三个注册期哨兵 `ErrDeclarationMissing` / `ErrDeclarationInvalid` / `ErrDeclarationMismatch`（`contract.go:66-68`）。**`ErrNoTimeSemantics` 是 `ErrDeclarationMissing` 的旧名，作废**（见对表 G 组 T1）。
 - **③-② 的 `ErrVisibleAtMissing` 有一条工单没写的代价**：现有已落库数据**没有承载 `visible_at` 的列**，这道门一上线历史行不可回填 ⇒ 必须与 X1d 的 schema 迁移同批设计（加列 + 按 `TimeSemantics` 规则重算，重算不了的处理要成文）。登记为对表 T5 —— **方案已于 2026-10-22 成文** = `docs/db-schema.md` §6（含一条工单没预见的覆盖面限制：`market_activity` / `quant.macro_series` 两个已声明语义的源**不走 BulkInsert**，门挂在 `ValidatePoints` 上拦不到它们）。
-- **⑤ 三条验收的覆盖面要按对表收窄一条**：「改日历/复权口径 → hash 变」这条**已由 QT-03 的向量测试钉住**（`provenance_vector_test.go:194-228`，`DatasetSnapshotHash_UniqueDefinition` 逐分量 mutate），本仓 X1b 新增的判据是**生产者侧**的——即「resolve 传进来的 `as_of` / `adjustment` 参数确实进了那六分量」，否则 hash 函数再对，喂进去的是常量也照样同 hash 不同结果。
+- **⑤ 三条验收的覆盖面要按对表收窄一条**：「改日历/复权口径 → hash 变」这条**已由 QT-03 的向量测试钉住**（`provenance_vector_test.go:194-228`，`DatasetSnapshotHash_UniqueDefinition` 逐分量 mutate），本仓 X1b 新增的判据是**生产者侧**的——六个入参（`universe` / `window` / `frequency` / `data_version` / `calendar` / `adjustment`）逐个 mutate 必须变 hash，测试已落。⚠️ **`as_of` 不在冻结六分量里**（2026-10-23 实现时确认，不是笔误），处置见本单「已登记的取舍与风险」第一条：缓存对同 hash 不同 `as_of` fail-closed。
 
 ## 施工序（候选单，开工前必须展开成六字段）
 

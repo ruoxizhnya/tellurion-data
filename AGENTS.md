@@ -6,7 +6,7 @@
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
-**状态**：预留（S0 占位，触发式启动）——尚未启动，无实现
+**状态**：X1 施工中（2026-10-23）——`internal/ingest`（注册门 + 12 connector 声明清单）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）已落地；HTTP 面、取数存储 port 与 12 connector 传输仍在 core。
 
 **今天的实现**：`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）。本仓是把这三块搬成服务。
 
@@ -46,8 +46,9 @@ go test ./...
 
 | 依赖 | 版本 | 说明 |
 |---|---|---|
-| `github.com/ruoxizhnya/tellurion-contracts` | 待定（S2 后 `v0.1.0`） | 数据协议 / DTO 只认契约 |
+| `github.com/ruoxizhnya/tellurion-contracts` | `v0.1.0`（2026-10-23 已切 tag） | 数据协议 / DTO 只认契约 |
 | `github.com/ruoxizhnya/tellurion-kit` | 待定（S2 后 `v0.1.0`） | 日志 / HTTP / DB 连接 |
+| `github.com/stretchr/testify` | `v1.11.1` | 仅测试用（断言）；与 contracts 仓同版本 |
 
 > 跨仓依赖**只认版本号**（伪版本或 tag），不认源码路径。契约变更走 `tellurion-contracts` 的发布，不走"顺手改一下"。
 

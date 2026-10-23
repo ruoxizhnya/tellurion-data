@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-21
-verified-by: M8 接口对表落定后的哨兵名订正（`ErrNoTimeSemantics` → `ErrDeclarationMissing`）
+last-verified: 2026-10-23
+verified-by: QT-40 X1b/X1c 核心落地 —— 补「代码落点」一条（链路本身未改）
 ---
 
 # Dataflow — tellurion-data
@@ -27,6 +27,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 ```
 
 > **频率分表与聚合口径**（`tellurion:docs/SPEC.md` 频率词表）：`1m` = `ohlcv_minute` 原样；`1d` = `ohlcv_daily_qfq`（唯一进回测的口径）；`15m` **由 1m 聚合产出、不物化**，每次取数实时聚合。图中与 §2 的「频率聚合」只指这一种。
+> **代码落点（2026-10-23）**：图中「归一化」的**聚合与 PIT 两段**在 `tellurion-data:internal/normalize`，「aggregator」在 `tellurion-data:internal/serving`；connector 取数腿与存储写路径仍在 core（X1c/X1d）。
 > **因子边**：因子**值**走对外面 `GET /factors/{name}@{hash}`（见 `api-schema.md` §1）；因子**定义**（`factor_definitions`）无对外面，今天 core 直读 `factor_definitions` / `factor_cache` —— **过渡第二路径**（如实登记上图），X1d 后收敛为只经 API（见 `db-schema.md` §5）。
 
 ## 2. 关键时序
