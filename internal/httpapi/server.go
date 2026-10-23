@@ -41,6 +41,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /datasets/resolve", s.handleResolve)
 	mux.HandleFunc("GET /datasets/{hash}", s.handleSnapshot)
+	// `{name}@{hash}` 不是一个合法路径段模式（Go 1.22 wildcard 必须占满整段），
+	// 因此用单段 `{factor}` 接住，再在 handler 里切 `@`。
+	mux.HandleFunc("GET /factors/{factor}", s.handleFactor)
 	return mux
 }
 
@@ -114,6 +117,23 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// handleFactor 是 `/factors/{name}@{hash}` 的只读端点。
+//
+// 状态（2026-10-24）：**未实现**。`factor_cache` 没有 dataset hash 列，
+// 无法按 (name, hash) 定位内容，也就无法让响应「可复算内容指纹」。
+// 按 `docs/api-schema.md` §1 的约定，未实现前恒 404 + factor_not_found，
+// 绝不返回空数组 / 样例值一类伪数据；参数形状仍然校验，让调用方区分
+// 「请求写错」与「还没实现」。
+func (s *Server) handleFactor(w http.ResponseWriter, r *http.Request) {
+	name, hash, ok := strings.Cut(r.PathValue("factor"), "@")
+	name, hash = strings.TrimSpace(name), strings.TrimSpace(hash)
+	if !ok || name == "" || hash == "" {
+		writeError(w, fmt.Errorf("%w: factor must be {name}@{hash}", serving.ErrInvalidParameter))
+		return
+	}
+	writeError(w, fmt.Errorf("%w: %s@%s", serving.ErrFactorNotFound, name, hash))
+}
+
 // sentinelCodes 是哨兵 → HTTP 状态码与错误码的映射表（唯一真相 =
 // `internal/serving/errors.go` 头注释的分诊口径）。errors.Is 分诊，
 // 未登记的错误一律 500，绝不把未知失败伪装成 4xx。
@@ -130,6 +150,7 @@ var sentinelCodes = []struct {
 	{serving.ErrEmptyCalendar, http.StatusConflict, "empty_calendar"},
 	{serving.ErrEmptyDataVersion, http.StatusConflict, "empty_data_version"},
 	{serving.ErrSnapshotNotFound, http.StatusNotFound, "snapshot_not_found"},
+	{serving.ErrFactorNotFound, http.StatusNotFound, "factor_not_found"},
 	{serving.ErrSnapshotMismatch, http.StatusInternalServerError, "snapshot_mismatch"},
 }
 

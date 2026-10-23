@@ -178,6 +178,32 @@ func TestErrorMapping(t *testing.T) {
 	assert.Equal(t, "empty_universe", body.Error.Code)
 }
 
+// 因子端点：形状合法但内容未实现 ⇒ 恒 404 factor_not_found，绝不返回伪数据。
+// 即使 aggregator 未接线也一样 404（不能把「没实现」伪装成依赖不可用）。
+func TestFactorEndpointIsAlways404AndNeverFake(t *testing.T) {
+	for _, agg := range []*serving.Aggregator{nil, newTestAggregator(t, []string{"600519.SH"})} {
+		r := New(agg).Routes()
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/factors/momentum@deadbeef", nil))
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		var body errorBody
+		require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
+		assert.Equal(t, "factor_not_found", body.Error.Code)
+		assert.NotContains(t, rec.Body.String(), "\"data\"", "404 响应不得携带任何数据字段")
+	}
+
+	// 形状非法（缺 @ / 缺 name / 缺 hash）⇒ 400，与「没这个因子」分开。
+	r := New(nil).Routes()
+	for _, path := range []string{"/factors/momentum", "/factors/@deadbeef", "/factors/momentum@"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+		var body errorBody
+		require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
+		assert.Equal(t, "invalid_parameter", body.Error.Code, path)
+	}
+}
+
 // 端口未接线：/health 常绿，数据端点 fail-closed 503 dependency_unavailable。
 func TestUnwiredAggregatorFailsClosed(t *testing.T) {
 	srv := New(nil)
