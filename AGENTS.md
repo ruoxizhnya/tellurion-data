@@ -47,7 +47,7 @@ go test ./...
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | `github.com/ruoxizhnya/tellurion-contracts` | `v0.1.0`（2026-10-23 已切 tag） | 数据协议 / DTO 只认契约 |
-| `github.com/ruoxizhnya/tellurion-kit` | 待定（S2 后 `v0.1.0`） | 日志 / HTTP / DB 连接 |
+| `github.com/ruoxizhnya/tellurion-kit` | `v0.1.0` 已发版（2026-10-23）；本仓**尚未 require** | 日志 / HTTP / DB 连接；引入前先登记 |
 | `github.com/stretchr/testify` | `v1.11.1` | 仅测试用（断言）；与 contracts 仓同版本 |
 | `github.com/jackc/pgx/v5` | `v5.7.3` | PG 驱动/连接池（X1d 的四个 port 实现）。与 core 同版本，避免第二个大版本 |
 

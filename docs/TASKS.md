@@ -34,7 +34,7 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施�
 |---|---|---|---|
 | X1a 协议冻结 | 🟡 部分 | contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` **仍未进 contracts**：G1 第二批发版（QT-05 剩余半边）尚未发生——2026-10-24 实测 upstream 最新 tag 是 `v0.3.0`，包清单里**没有** `dataprotocol` / `UnifiedDataPoint`（解压 zip 逐文件核对）。⇒ 本仓的 wire 本地镜像 `internal/ingest/point.go` **继续保留**，不提前删；G1 发版后随包迁走、调用点改前缀 |
 | X1b aggregator | 🔶 取数面已接线（2026-10-24） | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收）；`internal/httpapi`（resolve/snapshot/health，哨兵→状态码映射）+ `cmd/dataservice`；**四个 port 已有 PG 实现** `internal/store`（`DATABASE_URL` 有值即装配；空则 503） | `/factors/{name}@{hash}` 仍无实现；**写面（BulkInsert / ETL 落库）未接线**；`visible_at` 只从列取、未回填的行会被 PIT 整批拒收（D2 未执行前的预期行为） |
-| X1c connector 声明 | 🔶 connector 已搬（2026-10-24） | **12 个 connector 的取数/归一化已搬入** `internal/ingest`（`declarations_*.go` 各自持声明；运行时 9 方法面在 `adapter.go`）；**过渡期 `Catalog()` 双真相已删除**，装配改 `Connectors(Transports)`；`TushareTransport` / `MootdxTransport` 窄接口把传输留在 core（本仓不 import 实现包）。测试跑在真实 connector 上（18 条声明 / 15 个 data_type；SupportedTypes ↔ Declarations 一一对应） | **传输实现仍在 core**（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端与 raw 归档），本仓只按 `Transports` 注入；core 侧 `pkg/data/source` 的旧实现未删（跨仓切换不在本仓权限内）。`etl.go` 的 `BulkInsert` 写面随 X1d 归位，尚未接线 |
+| X1c connector 声明 | 🔶 connector 已搬（2026-10-24） | **12 个 connector 的取数/归一化已搬入** `internal/ingest`（`declarations_*.go` 各自持声明；运行时 9 方法面在 `adapter.go`）；**过渡期 `Catalog()` 双真相已删除**，装配改 `Connectors(Transports)`；`TushareTransport` / `MootdxTransport` 窄接口把传输留在 core（本仓不 import 实现包）。测试跑在真实 connector 上（18 条声明 / 15 个 data_type；SupportedTypes ↔ Declarations 一一对应） | **传输实现仍在 core**（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端与 raw 归档），本仓只按 `Transports` 注入；core 侧 `pkg/data/source` 的旧实现未删（跨仓切换不在本仓权限内）。`core:pkg/data/source/etl.go` 的 `BulkInsert` 写面随 X1d 归位（本仓无 `etl.go`），尚未接线 |
 | X1d schema 归属 | 🔶 DDL 归属已落（2026-10-24） | `internal/schema`：`market` / `ingest` 建表（19 张，`TableNames()` 可对账）、`visible_at` 三集合（A 集 12 张 × 目标/今天两侧、B 集承认 `as_of`、C 集逐条豁免）、哨兵防重放的回填腿（`BackfillStatements()`，与建表分开返回）；DDL 在 `DATABASE_URL` 有值时由 `cmd/dataservice` 启动执行 | **物理搬迁**（`SET SCHEMA` 到 `market` / `ingest`）未做——core 内联 DDL 仍是运行期事实；**回填未实际执行**（须在启动开关或 tagged 套件里跑）；**第二写者未真正消灭**：core 侧同步腿仍在写 `market` / `ingest`，本仓只能先把 owner 与写闸门立起来 |
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
@@ -63,7 +63,7 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施�
 - **第二写者未消灭**：core 侧同步腿仍在写 `market` / `ingest`；本仓只能先立 owner（DDL）与写闸门。物理 `SET SCHEMA` 搬迁（D4）未做。
 - **`visible_at` 未回填**：`BackfillStatements()` 只交付语句与守卫，未在任何环境执行（须启动开关或 tagged 套件）。
 - **传输未搬**：Tushare / 东财 / Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档仍在 core；本仓按 `Transports` 注入。
-- **写面未接线**：`ETLPipeline` / `BulkInsert` 落库路径不在本仓（X1d 的下一刀）。
+- **写面未接线**：`ETLPipeline` / `BulkInsert` 落库路径不在本仓，真身在 `core:pkg/data/source/etl.go`（X1d 的下一刀）。
 
 **已登记的取舍与风险（必须随 X1b 一起读）**
 
@@ -89,17 +89,17 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施�
 > | T4 | 本仓 `docs/ARCHITECTURE.md` **§2.1** | 六上下文逐个给目标包 + 今天代码位置；Reduction **故意不分配包**（那是 core `repo-inventory.md` 待裁 U6，服务仓文档无权替另一个仓的拓扑裁决）；两条口子如实登记：`pkg/data/source` 一包装了采集+规范化两个上下文（整包平移 ≠ 边界成立），`Board` 物理在供给侧、`PITAlignment` 今天无承载物 |
 > | T5 | 本仓 `docs/db-schema.md` **§6** | 门钉到 `ValidatePoints`（加判据 = 从「计数丢弃」变「整批拒收」，是行为变更）；范围裁成**三个集合**：A 加列 12 张 / B 承认现成 `as_of` 2 张（`market_activity`、`quant.macro_series` —— 它们**不走 BulkInsert，门拦不到**）/ C 明确门外（含实测漏项 `market.index_daily`）；不可回填三档 + 明禁「`SET visible_at = trade_date` 一把梭」；`stock_fundamentals.available_date` 是 `COALESCE(ann_date, trade_date)` 生成列 ⇒ 拿它当判据是**假护栏**，判据必须写 `ann_date IS NOT NULL` |
 >
-> 收尾后本单的**直接**硬前置只剩 `QT-05` 一条（下表第一行）；W0 那两条是**间接**（卡的是 QT-05），`CT-02` 已落、不再挂账。③-① 的「`TimeSemantics` 进 contracts」也要按 T2 的口径读：它随 `domain/market` 整包迁，**不在 `dataprotocol` 里重复定义**。
+> 收尾后本单的**直接**硬前置只剩 `QT-05` 一条（下表第一行）——**2026-10-24 已实测解除**；W0 那两条是**间接**（卡的是 QT-05），`CT-02` 已落、不再挂账。③-① 的「`TimeSemantics` 进 contracts」也要按 T2 的口径读：它随 `domain/market` 整包迁，**不在 `dataprotocol` 里重复定义**。
 
-**仍未解除的硬前置（决定 QT-40 什么时候真能动代码）**：
+**硬前置对账（2026-10-24：原列三条均已解除，保留历史口径）**：
 
 | 前置 | 状态 | 卡住的是 |
 |---|---|---|
-| `QT-05`（S1 契约层落码：`pkg/domain`（含 `domain/market`）+ `pkg/backtest/contracts` 进 contracts） | ⬜ 未启动（`tellurion-contracts:docs/TASKS.md` QT-05；contracts 仓今天只有 `doc.go` + 两个自查工具 `tools/check_api_surface` / `tools/check_release_matrix`，**零导出符号**，core `go.mod` 对 contracts 零 `require`） | **X1b 全部**。本仓 module path 是单段短名（`tellurion-data`），按编译器规则无法 `require` core，又禁止 `replace ../` —— 协议类型拿不到，aggregator 就无法落地。跳序的代价工单施工序已点过一次：「X1a 的协议没冻结就写 aggregator，等于把协议写死在一个服务里」 |
-| `QT-04` / `QT-63`（W0 剩下的两条） | ⬜ / ⬜（core 台账 2026-10-22 实测：`QT-04` 行仍 ⬜、`QT-63` 行仍 ⬜；同表 `QT-02` 已 **✅（2026-10-21）**，main 上五笔 fill_timing 提交 `f615e8e`→`9ffff72`→`676eab1`→`ee93174`→`271273a` 逐个 `git log -1` 核过） | QT-05 排在「W0 全绿之后」（core 执行顺序总览 S1 行），因此**间接**卡住本仓——它卡的是 QT-05，不是本仓的代码 |
-| `CT-02` / `QT-19`（contracts 版本规则表 + 兼容矩阵 + CHANGELOG） | ✅ **已落**（2026-10-22，contracts `191ba0b`：README 的版本规则表 + 兼容矩阵 + `CHANGELOG.md` + `check_release_matrix` 进 CI；`QT-19` 那条**排在 `QT-07`（S2 打 tag）之后**，所以矩阵今天只有 `main`（未发版）一行是**预期**，不是缺项） | 不卡施工，卡**口径**：版本规则只认 contracts README 那张表 + `tellurion:docs/TASKS.md` QT-19 ③ 那五条（0.x 期允许 breaking，但要 bump MINOR + 写 CHANGELOG），**本仓不许自造版本口径**。对表 F 组与 §2.1 的引用已对上 |
+| `QT-05`（S1 契约层落码：`pkg/domain`（含 `domain/market`）+ `pkg/backtest/contracts` 进 contracts） | ✅ **已完成**（2026-10-24 实测：contracts 四包 429→439 导出面、已发版至 `v0.3.0`；本仓 `go.mod` `require v0.1.0`） | 不再卡本仓；原「X1b 全部」前提作废（见本节 2026-10-23 实测更新注） |
+| `QT-04` / `QT-63`（W0 剩下的两条） | ✅ / ✅（2026-10-24 实测 core 台账：`QT-04` 标题行 `✅（2026-10-22）`、`QT-63` 标题行 `✅（2026-10-22）`；原 ⬜ 是过期快照） | 不再卡 QT-05（QT-05 本身已完成，见上一行） |
+| `CT-02` / `QT-19`（contracts 版本规则表 + 兼容矩阵 + CHANGELOG） | ✅ **已落**（2026-10-22，contracts `191ba0b`：README 的版本规则表 + 兼容矩阵 + `CHANGELOG.md` + `check_release_matrix` 进 CI；`QT-19` 那条**排在 `QT-07`（S2 打 tag）之后**；2026-10-23 起矩阵已有 `v0.1` / `v0.2` / `v0.3` 三行，不再是缺项） | 不卡施工，卡**口径**：版本规则只认 contracts README 那张表 + `tellurion:docs/TASKS.md` QT-19 ③ 那五条（0.x 期允许 breaking，但要 bump MINOR + 写 CHANGELOG），**本仓不许自造版本口径**。对表 F 组与 §2.1 的引用已对上 |
 
-> **2026-10-23 实测更新（不改写上表原文）**：`QT-05` 已**部分落地**——contracts 仓 `v0.1.0` 已发（S2 打 tag 完成），`domain/market` 与 `engine` 的六分量 hash 可直接消费，本仓 `require v0.1.0` 后离线 `build/vet/test` 全绿。仍缺 `UnifiedDataPoint` 进 contracts ⇒ **X1c 的协议冻结半边**继续挂此条；**X1b 的取数 / hash 面已不再被它卡住**（用的正是已冻结的 `market` 类型）。
+> **2026-10-23 实测更新（2026-10-24 已按实测把上表状态校正为 ✅）**：`QT-05` 已**部分落地**——contracts 仓 `v0.1.0` 已发（S2 打 tag 完成），`domain/market` 与 `engine` 的六分量 hash 可直接消费，本仓 `require v0.1.0` 后离线 `build/vet/test` 全绿。仍缺 `UnifiedDataPoint` 进 contracts ⇒ **X1c 的协议冻结半边**继续挂此条；**X1b 的取数 / hash 面已不再被它卡住**（用的正是已冻结的 `market` 类型）。
 
 **对 QT-40 正文前提的实测订正（不改写六字段正文，按台账惯例在此登记）**：
 
