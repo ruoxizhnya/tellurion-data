@@ -86,6 +86,7 @@ contracts（协议类型） + kit（logging/http/db）
 
 - [`adr/0001-统一协议与-visible-at-第二道防线.md`](adr/0001-统一协议与-visible-at-第二道防线.md)
 - [`adr/0002-market-ingest-ddl归属与-visible-at-三集合.md`](adr/0002-market-ingest-ddl归属与-visible-at-三集合.md)
+- [`adr/0003-connector搬入本仓传输以窄-port-留在-core.md`](adr/0003-connector搬入本仓传输以窄-port-留在-core.md)
 
 ## 7. 非目标（明确不做）
 
