@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-23
-verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是否已存在」两处现状订正（端点契约本身未改）
+last-verified: 2026-10-24
+verified-by: QT-40 G4 —— `/factors/{name}@{hash}` 路由上线（未实现前恒 404）与 `ErrFactorNotFound` 入错误表；内部链路补 visible_at 整批门
 ---
 
 # API Schema — tellurion-data
@@ -22,7 +22,11 @@ verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是�
 | GET | `/datasets/{hash}` | 按 hash 取数据（同一 hash 两次结果必须**字节一致**） |
 | GET | `/factors/{name}@{hash}` | 按数据集 hash 取**已落库的因子值**（不是求值服务，见 §5） |
 
-内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → `Deduplicate` → 存储。
+内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。
+
+> **实现状态（2026-10-24，G4 落账）**：
+> - `/datasets/resolve`、`/datasets/{hash}`：已实现（`internal/httpapi` + `internal/serving`）。
+> - `/factors/{name}@{hash}`：**路由已上线，但恒 404 `factor_not_found`**。`factor_cache` 没有 dataset hash 列，按 `(name, hash)` 定位并复算内容指纹的条件不存在；在表结构变更前**不返回任何伪数据**（空数组 / 样例值都不行）。参数形状非法（缺 `@` / 缺 name / 缺 hash）⇒ 400 `invalid_parameter`，与「没这个因子」分开。
 
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
@@ -40,6 +44,7 @@ verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是�
 | `ErrUnsupported` | ✅（`tellurion:pkg/data/source/adapter.go:73`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
 | `ErrVisibleAtMissing` | ✅（`tellurion-data:internal/normalize/pit.go`） | 数据点缺 `visible_at` | 拒收该批次；**不许用 mtime 兜底**。⚠️ 代价：历史行无该列、不可回填 ⇒ 与 X1d 加列同批设计（对表 T5） |
 | `ErrSnapshotMismatch` | ✅（`tellurion-data:internal/serving/errors.go`） | hash 与返回内容不一致 | 500 + 告警（数据已被篡改或缓存串了）；与「没这个 hash」（404）**必须是两个码** |
+| `ErrFactorNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | `/factors/{name}@{hash}` 尚无按 `(name, hash)` 定位并复算内容指纹的依据（`factor_cache` 无 dataset hash 列），或该 `(name, hash)` 不存在 | 404 `factor_not_found`；**不许返回空数组 / 样例值**（伪数据）。参数形状非法（缺 `@` / 缺 name / 缺 hash）走 `ErrInvalidParameter` ⇒ 400，与「没这个因子」分开 |
 | `ErrMissingParameter` / `ErrInvalidParameter` / `ErrUniverseAmbiguous` / `ErrEmptyUniverse` / `ErrEmptyCalendar` / `ErrEmptyDataVersion` / `ErrUnexpectedSymbol` / `ErrSnapshotNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | resolve 参数缺失 / 非法 / 票池二义 / 票池为空 / 日历为空 / 数据版本为空 / 越界 symbol；按 hash 取不到 | 400 / 409 / 404 的分诊口径见该文件头注释；哨兵只增不删 |
 
 ## 3. 幂等性与重试

@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-23
-verified-by: QT-40 X1b/X1c 核心落地 —— 补「代码落点」一条（链路本身未改）
+last-verified: 2026-10-24
+verified-by: QT-40 G4 —— 写面（`Registry.Fetch` / `ETLPipeline` / `GatePoints` / `Deduplicate` / `store.BulkInsert`）落到本仓，链路、失败模式与不变量同步
 ---
 
 # Dataflow — tellurion-data
@@ -14,10 +14,10 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 补「代码落点」一条（链
 [Tushare] [东财] [雪球/Yahoo] [巨潮/HKEX] …        ← connector（12 个，可增）
         │ 字段映射 + 声明 TimeSemantics / FrequencySpec
         ↓
-[归一化]  Normalizer（共享函数） + ValidatePoints + Deduplicate
+[归一化]  Normalizer（共享函数） + ValidatePoints + GatePoints + Deduplicate
         │ 统一成 UnifiedDataPoint（含 visible_at、幂等坐标）
         ↓
-[存储]  market / ingest（目标态；今天多数表落 public，X1d 分批迁，现状见 db-schema.md §1）  ← 内容真相源，DDL 唯一 owner = 本仓
+[存储]  market / ingest（目标态；今天多数表落 public，X1d 分批迁，现状见 db-schema.md §1）  ← 内容真相源，DDL 唯一 owner = 本仓；写面 = `BulkInsert`
         ↓
 [aggregator]  PIT 过滤 · 频率聚合 · 票池解析 · 快照 hash · 缓存 · 因子值   ← 对外唯一面
         ↓  /datasets/resolve · /datasets/{hash} · /factors/{name}@{hash}
@@ -27,7 +27,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 ```
 
 > **频率分表与聚合口径**（`tellurion:docs/SPEC.md` 频率词表）：`1m` = `ohlcv_minute` 原样；`1d` = `ohlcv_daily_qfq`（唯一进回测的口径）；`15m` **由 1m 聚合产出、不物化**，每次取数实时聚合。图中与 §2 的「频率聚合」只指这一种。
-> **代码落点（2026-10-24）**：图中「归一化」的**聚合与 PIT 两段**在 `tellurion-data:internal/normalize`，「aggregator」在 `tellurion-data:internal/serving`；四个取数 port 的 PG 实现在 `tellurion-data:internal/store`（只读 `market`，`visible_at` 只从列里取、缺列交 PIT 整批拒收）；connector 取数腿与存储写路径仍在 core（X1c/X1d 搬迁中）。
+> **代码落点（2026-10-24，G4）**：图中「归一化」的聚合与 PIT 两段在 `tellurion-data:internal/normalize`，**ETL 编排（`Registry.Fetch` / `ETLPipeline` / `ValidatePoints` / `GatePoints` / `Deduplicate`）在 `tellurion-data:internal/ingest`**；「aggregator」在 `tellurion-data:internal/serving`；存储的**读面（四个取数 port）与写面（`BulkInsert`）都在** `tellurion-data:internal/store`（`visible_at` 只从列里取、缺列交 PIT 整批拒收；写面只落 A 集表）。**仍在 core**：connector 的传输实现（Tushare/东财/Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档，经 `ingest.Transports` 注入）与同步作业的装配（`sync_jobs` → worker → `ETLPipeline`）；core 侧 `pkg/data/source` 的旧写路径尚未删。
 > **因子边**：因子**值**走对外面 `GET /factors/{name}@{hash}`（见 `api-schema.md` §1）；因子**定义**（`factor_definitions`）无对外面，今天 core 直读 `factor_definitions` / `factor_cache` —— **过渡第二路径**（如实登记上图），X1d 后收敛为只经 API（见 `db-schema.md` §5）。
 
 ## 2. 关键时序
@@ -41,11 +41,12 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 > **红线**：热读路径**仅供 run 前一次快照预加载**（回测启动前取完全区间进引擎快照），**禁止在回测循环内调用**——策略运行时不得直查数据面（`tellurion:docs/SPEC.md`「快照预加载，不许运行时查询」）。
 
 ### 入库（写路径，冷）
-1. 触发：`POST /api/sync/jobs`（或调度器按 `sync_schedules` 投递）→ `sync_jobs` → worker 领取 → executor → ETL（下面 2–5 步）
-2. connector 拉原始数据 → 声明 `TimeSemantics` / `FrequencySpec`
-3. Normalizer 映射成 `UnifiedDataPoint`，填 `visible_at`
-4. `ValidatePoints` 拒收缺失/异常；`Deduplicate` 按幂等坐标去重
-5. 写 `market` 域各表（真名见 `db-schema.md` §1），更新 `sync_jobs` / `sync_schedules` 水位
+1. 触发：`POST /api/sync/jobs`（或调度器按 `sync_schedules` 投递）→ `sync_jobs` → worker 领取 → executor → ETL（下面 2–6 步）
+2. connector 取数（`ingest.Registry.Fetch`：按 data_type 的链依次尝试，可重试错误换源、不可重试立即返回、disabled 跳过）→ 声明 `TimeSemantics` / `FrequencySpec`
+3. `Normalizer` 映射成 `UnifiedDataPoint`（`ingest_time` 由 pipeline 时钟统一填；载荷为 nil 的点只计入 `skipped`）
+4. `ValidatePoints` 拒收形态不合法（缺 symbol / trade_time / data）
+5. **`GatePoints`**（`internal/ingest`）按该 data_type 的**声明锚点**逐点校验：任一点缺锚点 ⇒ `ErrVisibleAtMissing`、坏值 ⇒ `ErrAnchorInvalid`，**整批拒收且不触达 store**
+6. `Deduplicate` 按幂等坐标（symbol + data_type + trade_time）去重 → `store.BulkInsert` 写 A 集表：`ON CONFLICT DO NOTHING` + 内容比对（排除易变列 `ingest_time`）；同内容 no-op、同主键异内容 `ErrContentConflict` 整批回滚；B/C 集 data_type 拒写（`ErrWriteTableNotInASet` / `ErrUnmappedDataType`）。`persisted` 口径 = **请求点已就位**（新插入 + 同内容 no-op），不是新增行数
 
 > **红线**：同步 HTTP 端点**不得承载无界批量**——无界批量一律走作业层（`POST /api/sync/jobs` → `sync_jobs` → worker → executor → ETL，`tellurion:docs/SPEC.md` DATA-10）；HTTP 灌数入口只许单次有界任务（DATA-12：以「没有无界批量问题」为前提）。
 
@@ -57,6 +58,10 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 | `visible_at` 用错锚点 | 回测虚高、实盘崩 | 归一化层强制：锚点=**披露日（ann_date）**，不是报告期截止日（`tellurion:docs/SPEC.md` 时间语义）+ 用例钉住财报场景 |
 | 上游改了历史数据 | 同参回测结果漂移 | `dataset_hash` 变化 → 结果可追溯到"哪版数据" |
 | 缓存串号 | 返回别人的数据 | `ErrSnapshotMismatch` + 500 |
+| 批次漏 `visible_at` | 不可见的数据混进快照（前视） | `ingest.GatePoints` 按声明锚点逐点校验、`store.BulkInsert` 事务前再判一次；任一 offender ⇒ `ErrVisibleAtMissing` **整批拒收**（用例 `TestWriter_RejectsWholeBatchWithoutVisibleAt` / `TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting` / PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`） |
+| 同主键重写但内容不同 | 「同 hash 不同内容」静默出现 | `ErrContentConflict` + **整批回滚**（用例 `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`）；同内容重写是 no-op |
+| 往 B/C 集表写 | 同一张表两个可见性锚点 | `store.specFor` 复核 `schema.GateClassFor`：B/C ⇒ `ErrWriteTableNotInASet`，未知 ⇒ `ErrUnmappedDataType`；写面只开 A 集 |
+| 因子端点没有数据依据 | 返回空数组 / 样例值 = 伪数据 | `/factors/{name}@{hash}` 恒 404 `ErrFactorNotFound`，参数形状非法才是 400 |
 
 ## 4. 不变量（可被测试钉住的）
 
@@ -64,6 +69,9 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 2. 任何返回点满足 `visible_at <= as_of`。
 3. `market` / `ingest` 无第二写者（CI 静态检查 + 评审）。
 4. connector 全部走 `ConnectorDeclaration`（漏声明被拒收）。
+5. 写面幂等：同主键同内容重写 = no-op；同主键异内容 = fail-loud 且整批不落（`ON CONFLICT DO NOTHING` + 内容比对，排除 `ingest_time`）。
+6. 写面只落 A 集（`visible_at` 三集合门）；B/C 集只能走各自同步腿或被明确豁免。
+7. `/factors/{name}@{hash}` 在无法复算内容指纹前不返回任何数据（404，不造假）。
 
 ## 5. 与契约文档的关系
 

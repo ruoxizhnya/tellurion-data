@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-10-24
-verified-by: QT-40 X1d D1 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），§4 执行机制、§6.1/§6.5 播种位置同步订正
+verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正
 ---
 
 # DB Schema — tellurion-data
@@ -175,7 +175,7 @@ verified-by: QT-40 X1d D1 —— DDL 归属落到本仓 `internal/schema`（stat
 |---|---|---|
 | D1 | 加列（可空 `TIMESTAMPTZ`，不 NOT NULL、不设默认） | ✅ **已落本仓**（2026-10-24，X1d）：`internal/schema.VisibleAtStatements()`，A 集 12 张各两条（`market.*` 目标 + `public.*` 今天） |
 | D2 | 分批回填（按 6.3 规则 + 6.4 档位） | 一次性重活**必须靠哨兵防重放**：`data_migrations`（`postgres.go:492`，`name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW()`）+ `IF NOT EXISTS (SELECT 1 FROM data_migrations WHERE name='...')`，形状照 Migration 052 / 054（`:521`、`:555`）。DBT-07 的实测教训就记在 §4：哨兵置位后**不可重放**，且默认构建的测试曾把 054 的整表 ×1000 真的作用在 3,926,510 行上 ⇒ 回填腿只允许出现在启动路径或 tagged 集成套件，不许进默认 `go test`（护栏：core `internal/repoguard/store_migration_isolation_test.go`） |
-| D3 | 开门：`ValidatePoints` 加第四判据（只拦新批次） | 与 `ErrVisibleAtMissing` 的新建同一条 commit（对表 E 组：哨兵只增不删不改语义） |
+| D3 | 开门：`ValidatePoints` 加第四判据（只拦新批次） | ✅ **已落本仓**（2026-10-24，X1d 写面），**两道防线**：① `internal/ingest.GatePoints` 按该 data_type 的**声明锚点**逐点校验（缺 ⇒ `ErrVisibleAtMissing`、坏值 ⇒ `ErrAnchorInvalid`），失败**不触达 store**；② `internal/store.BulkInsert` 在开事务前再判一次 `Point.VisibleAt`，任一点为零 ⇒ 整批拒收（防御直达 store 的调用）。core `ValidatePoints` 的第四判据随传输迁移收编；与 `ErrVisibleAtMissing` 的新建同一条 commit（对表 E 组：哨兵只增不删不改语义） |
 | D4 | 读路径切到 `visible_at` | 逐表切；每张表切之前先跑对照腿 |
 
 **回填前先数行**：逐表 `SELECT count(*) FROM <t> WHERE <锚点列> IS NULL` 登记，再决定分批大小——本文件**不写行数**（没实测就不写）。
@@ -185,6 +185,7 @@ verified-by: QT-40 X1d D1 —— DDL 归属落到本仓 `internal/schema`（stat
 ### 6.6 验收（可机械执行）
 
 1. A 集 12 张表都有 `visible_at` 列且可空；B 集 2 张表的 `as_of` 在文档与协议里被**明确承认为** `visible_at`（不是"看起来像"）。
-2. 造一条 `ann_date` 为 NULL 的财报行走 `BulkInsert` ⇒ **拒收**，错误报文点名 `ann_date`。破坏验证的**第二条腿**：把执法判据换成 `available_date IS NOT NULL` 之后，这条测试**必须仍然红**——它若变绿，说明判据被偷换成了那个永不为 NULL 的生成列，即 6.3 点名的假护栏，本节作废。
+2. 造一条 `ann_date` 为 NULL 的财报行走 `BulkInsert` ⇒ **拒收**，错误报文点名 `ann_date`。破坏验证的**第二条腿**：把执法判据换成 `available_date IS NOT NULL` 之后，这条测试**必须仍然红**——它若变绿，说明判据被偷换成了那个永不为 NULL 的生成列，即 6.3 点名的假护栏，本节作废。⚠️ **现状（2026-10-24）**：`fundamentals` 属 C 集，写面在 `specFor` 处以 `ErrWriteTableNotInASet` 拒写（早于锚点校验）⇒ 这条判据的落点是 fundamentals 自己的同步腿，**不在 `BulkInsert` 上**；不许用「写面拒了」冒充「锚点判据已生效」。写面的覆盖面由 A 集 spec 复核（`TestWriteSpecs_MatchASetAndConnectorTypes`）与 B 集拒写用例（`TestWriter_RejectsTablesOutsideASet`）钉住。
 3. 覆盖面要如实登记：B 集与 C 集里「门拦不到」的每一条，都要有一条测试或一条显式豁免，**不许靠"门在 ETL 上"这句话默认全覆盖**。
+4. **已落的测试证据（2026-10-24，G4）**：整批拒收 —— `TestWriter_RejectsWholeBatchWithoutVisibleAt`、`TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting`、PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`；B 集拒写 —— `TestWriter_RejectsTablesOutsideASet`、PG 腿 `TestPG_BulkInsert_RejectsBSetType`；同 hash 重写 —— `TestWriter_SameContentRewriteIsNoOp` / `TestPG_BulkInsert_IsIdempotentOnSameContent`，异内容 —— `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`。**破坏验证**：把 `store.BulkInsert` 的 `VisibleAt` 判空短路（`if false && …`）⇒ 整批拒收用例红；逐字节还原后绿（SHA256 一致）。
 

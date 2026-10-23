@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-23
-verified-by: QT-40 X1b/X1c 核心落地后的现状订正 —— §2.1 首句（不再是「一个包都没有」）、门禁断言 3、§8 施工状态
+last-verified: 2026-10-24
+verified-by: QT-40 G4 —— 写面落 `internal/store` + ETL 落 `internal/ingest`；§2.1 包数、§8 X1a/X1b/X1d 状态同步（ADR-0004）
 ---
 
 # 架构 — tellurion-data
@@ -26,7 +26,7 @@ core / analytics / strategy / agent
 
 ### 2.1 六个限界上下文的包级隔离（对表 T4，2026-10-22 立）
 
-> **这是目标分层，不是现状**——2026-10-23 实测：已按本表建起 3 个包（`internal/ingest` / `internal/normalize` / `internal/serving`，内容见 §8 的 X1b/X1c 状态）；`internal/derived` / `internal/evidence` / `internal/sync` 仍是目标，代码在 core。
+> **这是目标分层，不是现状**——2026-10-24 实测：已建起 5 个包（`internal/ingest` / `internal/normalize` / `internal/serving` 对应本表前三个上下文；`internal/store` 是存储读写实现、`internal/schema` 是 DDL 归属，二者不是限界上下文；内容见 §8 的 X1b/X1c/X1d 状态）；`internal/derived` / `internal/evidence` / `internal/sync` 仍是目标，代码在 core。
 > 义务来源是 `tellurion-docs:docs/adr/adr-027-modular-decomposition-to-independent-services.md` §2.6.2（data-service 的 **7 个**限界上下文里，只有 Reduction 物理独立，**其余 6 个在本仓内按包强制隔离** = 编译期边界 + 该 ADR §6 门禁断言），
 > 由 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2 的 data 行点名：「`tellurion-data:docs/ARCHITECTURE.md` 今天没有这段分层（实测 grep `限界上下文` 零命中）」——本节就是补上它。
 > ADR-027 §7 同时禁止把这 7 个上下文都拆成服务（单人自托管，拆 7 个服务是运维灾难；DDD 的价值在**语言边界**，不在进程数）。所以本表的产物是**包**，不是仓。
@@ -87,6 +87,7 @@ contracts（协议类型） + kit（logging/http/db）
 - [`adr/0001-统一协议与-visible-at-第二道防线.md`](adr/0001-统一协议与-visible-at-第二道防线.md)
 - [`adr/0002-market-ingest-ddl归属与-visible-at-三集合.md`](adr/0002-market-ingest-ddl归属与-visible-at-三集合.md)
 - [`adr/0003-connector搬入本仓传输以窄-port-留在-core.md`](adr/0003-connector搬入本仓传输以窄-port-留在-core.md)
+- [`adr/0004-写面归属-store-与幂等内容比对.md`](adr/0004-写面归属-store-与幂等内容比对.md)
 
 ## 7. 非目标（明确不做）
 
@@ -105,10 +106,10 @@ contracts（协议类型） + kit（logging/http/db）
 | X1d | schema 归属迁移 | 无第二写者 |
 | X0 | `dataset_snapshot_hash` 记入结果 | 与 `strategy_ref` 同款留痕 |
 
-**施工状态（2026-10-23 实测，`go build/vet/test ./...` 全绿）**
+**施工状态（2026-10-24 实测，`go build/vet/test ./...` 全绿）**
 
-- **X1a 🟡 部分**：contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput`（六分量 hash 唯一定义）；`UnifiedDataPoint` 仍未进 contracts。
-- **X1b 🔶 取数面已接线，写面未接**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）与 `internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）。**2026-10-24**：四个取数 port 已有 PG 实现（`internal/store`，`DATABASE_URL` 有值时装配，DDL 由 `internal/schema` 执行）。**未落**：connector 的取数传输与写路径（X1c）、`/factors/{name}@{hash}`。
+- **X1a 🟡 部分**：contracts `v0.4.0`（2026-10-24 切 pin）已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput`（六分量 hash 唯一定义）；**`UnifiedDataPoint` 仍未进 contracts**（`go list …/tellurion-contracts/...` 无 `dataprotocol` 包）⇒ 本地镜像 `internal/ingest/point.go` 保留。
+- **X1b 🔶 取数面 + 写面代码已落，装配未接**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）、`internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）；**2026-10-24 G4**：`internal/ingest` 落 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate`，`internal/store` 落写面 `BulkInsert`（A 集表、`ON CONFLICT DO NOTHING` + 内容比对）。**未落**：同步作业对 `ETLPipeline` 的装配仍在 core（`sync_jobs` → worker → ETL）、`/factors/{name}@{hash}` 仅路由恒 404。
 - **X1c 🔶 connector 已搬入，传输留在 core**：`internal/ingest` 有 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 **12 connector 的取数/归一化实现**；声明真源 = 每个 connector 的 `Declarations()`，过渡期 `Catalog()` 双真相**已删除**。**未落**：传输实现（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端）仍在 core，经 `ingest.Transports` 注入；core 侧的旧 `pkg/data/source` 尚未删（跨仓切换）。
-- **X1d 🔶 DDL 归属已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿（B 集承认 `as_of`、C 集逐条豁免，见 `db-schema.md` §6）。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、`visible_at` 回填的实际执行（须在启动路径或 tagged 套件，默认测试不触碰）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
+- **X1d 🔶 DDL 归属 + 写面已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿；`store.BulkInsert` 走 `schema.GateClassFor` 三集合门（B/C 集拒写，缺 `visible_at` 整批拒收），见 `db-schema.md` §6。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、`visible_at` 回填的实际执行（须在启动路径或 tagged 套件，默认测试不触碰）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
 - **X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。
