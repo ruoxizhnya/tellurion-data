@@ -6,10 +6,7 @@ verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是�
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-23）**：下表三个端点**仍无 HTTP handler**（本仓没有 `cmd/`），端点契约不变。
-> 但 aggregator 的 **port 面**已落地：`internal/serving` 的 `Aggregator.Resolve` / `Snapshot`
-> 覆盖 resolve 与 `{hash}` 的全部语义（参数校验 / 六分量 hash / 强幂等缓存），
-> `internal/normalize` 提供 PIT 闸门与频率聚合。本条只描述**代码位置**，不改契约。
+> **实现状态（2026-10-23 更新）**：`GET /datasets/resolve` 与 `GET /datasets/{hash}` 的 **HTTP handler 已落地**（`internal/httpapi/server.go` + `cmd/dataservice`，标准库 `net/http`；哨兵 → 状态码映射见 `sentinelCodes`，未登记错误一律 500）。**端口仍无 PG 实现**：进程以 nil aggregator 启动，数据端点 fail-closed 成 `503 dependency_unavailable`（`/health` 常绿），PG port 实现随 X1d 落地。`/factors/{name}@{hash}` 仍无实现（无端点代码，openapi 不收）。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一入口**，connector 与存储不直接对外。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
