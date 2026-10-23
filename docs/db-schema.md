@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-22
-verified-by: QT-40 对表 T5 收尾 —— 新增 §6（`visible_at` 加列范围 / 按 TimeSemantics 重算 / 不可回填三档 / 上线次序），§1.2 与 §3 红线 2 同步指回该节
+last-verified: 2026-10-24
+verified-by: QT-40 X1d D1 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），§4 执行机制、§6.1/§6.5 播种位置同步订正
 ---
 
 # DB Schema — tellurion-data
@@ -66,8 +66,8 @@ verified-by: QT-40 对表 T5 收尾 —— 新增 §6（`visible_at` 加列范�
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
 | `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
-| `sync_jobs` / `sync_schedules` | 同步任务与调度 | 无前缀（`public` 默认）→ 目标 `ingest` |
-| `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest` |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | 无前缀（`public` 默认）→ 目标 `ingest`（本仓 DDL 已建 `ingest.sync_jobs` / `ingest.sync_schedules`，物理仍在 `public`） |
+| `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
 
@@ -95,6 +95,11 @@ verified-by: QT-40 对表 T5 收尾 —— 新增 §6（`visible_at` 加列范�
 ## 4. 建表与迁移
 
 **现状（必须先知道）**：core 的迁移是「**启动时按序执行一组幂等 DDL**」——唯一真相是 `pkg/storage/postgres.go` 的 `migrationStatements()` 数组（`migrate()` 在服务启动时逐条跑）；**没有版本表、没有 down、没有执行记录**（有意取舍，理由见 core 的 `migrations/README.md`）。`migrations/`（14 个）与 `docs/migrations/`（25 个）里的 `.sql` 是**历史镜像，不执行**——改它们不会改库。
+
+**X1d 起（2026-10-24）**：`market` / `ingest` 两个 schema 的 DDL 归属已落到本仓 `internal/schema`（`Statements()` / `VisibleAtStatements()` / `BackfillStatements()`）。执行机制沿用 core 式 ①：有序幂等语句数组 + 启动时执行，不引入迁移库。
+
+- **目标态**：本仓的数组是唯一真相；core 的内联数组在物理搬迁（D4）完成前仍是运行期事实，**这段双份是已登记的过渡状态**，不是新写者。
+- **不许做的**：在本仓数组里静默 `ALTER TABLE ... SET SCHEMA`（§1 注：迁移不是改名）；也不许把 `visible_at` 直接写进 `CREATE TABLE`（列必须走独立的加列腿，否则目标侧与今天侧的列会各自长出来）。
 
 **本仓约定**（从建仓第一天执行）：
 
@@ -168,7 +173,7 @@ verified-by: QT-40 对表 T5 收尾 —— 新增 §6（`visible_at` 加列范�
 
 | 步 | 动作 | 机制 |
 |---|---|---|
-| D1 | 加列（可空 `TIMESTAMPTZ`，不 NOT NULL、不设默认） | 追加进 core 的 `migrationStatements()` 数组（§4：X1d 之前内联 DDL 是唯一执行路径；本仓 `migrations/` 约定从第一个建表单起才生效） |
+| D1 | 加列（可空 `TIMESTAMPTZ`，不 NOT NULL、不设默认） | ✅ **已落本仓**（2026-10-24，X1d）：`internal/schema.VisibleAtStatements()`，A 集 12 张各两条（`market.*` 目标 + `public.*` 今天） |
 | D2 | 分批回填（按 6.3 规则 + 6.4 档位） | 一次性重活**必须靠哨兵防重放**：`data_migrations`（`postgres.go:492`，`name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW()`）+ `IF NOT EXISTS (SELECT 1 FROM data_migrations WHERE name='...')`，形状照 Migration 052 / 054（`:521`、`:555`）。DBT-07 的实测教训就记在 §4：哨兵置位后**不可重放**，且默认构建的测试曾把 054 的整表 ×1000 真的作用在 3,926,510 行上 ⇒ 回填腿只允许出现在启动路径或 tagged 集成套件，不许进默认 `go test`（护栏：core `internal/repoguard/store_migration_isolation_test.go`） |
 | D3 | 开门：`ValidatePoints` 加第四判据（只拦新批次） | 与 `ErrVisibleAtMissing` 的新建同一条 commit（对表 E 组：哨兵只增不删不改语义） |
 | D4 | 读路径切到 `visible_at` | 逐表切；每张表切之前先跑对照腿 |

@@ -21,3 +21,4 @@
 | 编号 | 标题 | 状态 |
 |---|---|---|
 | [0001](0001-统一协议与-visible-at-第二道防线.md) | 统一协议与 visible-at 第二道防线 | 已裁决 |
+| [0002](0002-market-ingest-ddl归属与-visible-at-三集合.md) | market / ingest 的 DDL 归属本仓 + visible_at 三集合 | 已裁决 |

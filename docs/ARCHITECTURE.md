@@ -85,6 +85,7 @@ contracts（协议类型） + kit（logging/http/db）
 ## 6. 关键决策
 
 - [`adr/0001-统一协议与-visible-at-第二道防线.md`](adr/0001-统一协议与-visible-at-第二道防线.md)
+- [`adr/0002-market-ingest-ddl归属与-visible-at-三集合.md`](adr/0002-market-ingest-ddl归属与-visible-at-三集合.md)
 
 ## 7. 非目标（明确不做）
 
@@ -108,4 +109,5 @@ contracts（协议类型） + kit（logging/http/db）
 - **X1a 🟡 部分**：contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput`（六分量 hash 唯一定义）；`UnifiedDataPoint` 仍未进 contracts。
 - **X1b 🔶 核心已落，HTTP 未接**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）与 `internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）。**未落**：四个取数 port 的真实实现（`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver` 今天只有接口）与 HTTP handler。
 - **X1c 🔶 注册门已落，connector 未搬**：`internal/ingest` 的 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 12 connector 的声明清单 `Catalog()`；取数传输仍在 core `pkg/data/source`。
-- **X1d ⬜**；**X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。
+- **X1d 🔶 DDL 归属已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿（B 集承认 `as_of`、C 集逐条豁免，见 `db-schema.md` §6）。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、`visible_at` 回填的实际执行（须在启动路径或 tagged 套件，默认测试不触碰）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
+- **X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。
