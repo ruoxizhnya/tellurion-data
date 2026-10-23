@@ -6,7 +6,7 @@ verified-by: QT-40 X1b 核心落地 —— 实现状态与错误码「今天是�
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-23 更新）**：`GET /datasets/resolve` 与 `GET /datasets/{hash}` 的 **HTTP handler 已落地**（`internal/httpapi/server.go` + `cmd/dataservice`，标准库 `net/http`；哨兵 → 状态码映射见 `sentinelCodes`，未登记错误一律 500）。**端口仍无 PG 实现**：进程以 nil aggregator 启动，数据端点 fail-closed 成 `503 dependency_unavailable`（`/health` 常绿），PG port 实现随 X1d 落地。`/factors/{name}@{hash}` 仍无实现（无端点代码，openapi 不收）。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
+> **实现状态（2026-10-24 更新，X1d）**：`GET /datasets/resolve` 与 `GET /datasets/{hash}` 的 **HTTP handler 已落地**（`internal/httpapi/server.go` + `cmd/dataservice`，标准库 `net/http`；哨兵 → 状态码映射见 `sentinelCodes`，未登记错误一律 500）。**四个取数 port 已有 PG 实现**（`internal/store`：`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver`），进程在 `DATABASE_URL` 有值时启动即执行本仓 schema 的 DDL 并接线；**为空时仍 fail-closed 503**（`/health` 常绿）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（默认 `market`；物理搬迁完成前设空串走 `public`）。`/factors/{name}@{hash}` 仍无实现（无端点代码，openapi 不收）。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一入口**，connector 与存储不直接对外。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。

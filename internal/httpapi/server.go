@@ -29,6 +29,9 @@ type Server struct {
 // New 构造 HTTP Server。
 func New(agg *serving.Aggregator) *Server { return &Server{agg: agg} }
 
+// HasAggregator 报告取数 port 是否已接线（进程启动日志用；不影响路由）。
+func (s *Server) HasAggregator() bool { return s.agg != nil }
+
 // Routes 返回路由表。
 //
 // `/datasets/resolve` 与 `/datasets/{hash}`：Go 1.22 ServeMux 里字面段优先
