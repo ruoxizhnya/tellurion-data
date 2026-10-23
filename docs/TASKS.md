@@ -34,7 +34,7 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施�
 |---|---|---|---|
 | X1a 协议冻结 | 🟡 部分 | contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` 仍未进 contracts（X1c 协议冻结仍挂 QT-05 剩余半边） |
 | X1b aggregator | 🔶 核心已落 | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收） | 四个 port 的真实实现（`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver` 今天只有接口，无 PG 实现）与 HTTP handler |
-| X1c connector 声明 | 🔶 注册门已落 | `internal/ingest`：`Registry`（漏声明 / 非法枚举 / 缺 `VisibleExpr` / 锚点与 wire schema 矛盾 ⇒ fail-closed 拒收）+ 12 connector 的 18 条声明清单 `Catalog()`（与 core `pkg/data/source/declarations.go` 逐条对齐） | 12 个 connector 的取数与归一化实现搬入（传输仍在 core，随 X1c 迁；届时 `Catalog()` 由其 `Declarations()` 取代） |
+| X1c connector 声明 | 🔶 注册门已落 | `internal/ingest`：`Registry`（漏声明 / 非法枚举 / 缺 `VisibleExpr` / 锚点与 wire schema 矛盾 ⇒ fail-closed 拒收）+ 12 connector 的 18 条声明清单 `Catalog()`（与 core `pkg/data/source/declarations.go` 逐条对齐）；**2026-10-23**：写侧可见性闸门 `GatePoints` 已落（声明锚点列判据、整批拒收、假护栏反证测试）+ wire 点位本地镜像 `UnifiedDataPoint`（`VisibleAt` 随闸门流转，X1a 冻结后随包迁走） | 12 个 connector 的取数与归一化实现搬入（传输仍在 core，随 X1c 迁；届时 `Catalog()` 由其 `Declarations()` 取代）。**前提实测（2026-10-23）**：core `pkg/data/source` 20 个非测试文件里 15 个零 core import 可直接平移，4 个 tushare adapter 依赖 `tellurion:pkg/data.TushareClient`（传输本体）、`etl.go` 依赖 `storage.BulkInserter`（写入面 = X1d 的归属迁移对象）——迁移量 ~3.5k 行，须按 connector 逐个单搬，不随本单一次吞下 |
 | X1d schema 归属 | ⬜ | —— | 全部 |
 
 **已登记的取舍与风险（必须随 X1b 一起读）**

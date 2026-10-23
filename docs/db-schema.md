@@ -123,7 +123,7 @@ verified-by: QT-40 对表 T5 收尾 —— 新增 §6（`visible_at` 加列范�
 
 | 项 | 定案 |
 |---|---|
-| 执法位置 | `ValidatePoints`（`tellurion:pkg/data/source/etl.go:168`）——归一化之后、入库之前。它今天只判 `Symbol`/`TradeTime`/`Data` 非空，且缺项是**静默丢弃并计数**（返回 `([]UnifiedDataPoint, int)`）⇒ 加第四判据是**行为变更**：现在"少一条"进统计，改后"少可见时点"**整批拒收** |
+| 执法位置 | `ValidatePoints`（`tellurion:pkg/data/source/etl.go:168`）——归一化之后、入库之前。它今天只判 `Symbol`/`TradeTime`/`Data` 非空，且缺项是**静默丢弃并计数**（返回 `([]UnifiedDataPoint, int)`）⇒ 加第四判据是**行为变更**：现在"少一条"进统计，改后"少可见时点"**整批拒收**。**2026-10-23 进展**：写侧门已在**数据服务侧**落地 = `tellurion-data:internal/ingest/gate.go` 的 `GatePoints`（判据 = **声明锚点列本身**非空且可解析，缺列报 `ErrVisibleAtMissing`、坏值报新哨兵 `ErrAnchorInvalid`，两者分诊；`available_date` 生成列当判据的假护栏有反证测试钉住）——core `ValidatePoints` 的第四判据随传输迁移（X1c）收编到同一处 |
 | 「该批次」指什么 | 本次调用的入参切片，不是整张表。**只作用于写入路径的新批次，不追溯历史行**（历史行走 6.4） |
 | 判据写法 | **「该 data_type 声明的锚点列本身非空」**，不是「有一个长得像可见时间的列非空」。差别是实打实的，见 6.3 的 `available_date` 条 |
 | 读侧的另一半 | `api-schema.md` §1 注：resolve 物化时按 `visible_at <= as_of` 筛。**口径订正（本次对表逮到两处措辞）**：本仓 `docs/adr/0001` 决策 ① 写的是 `visible_at <= current_bar_time`，core 对表 L2 写的是 `visible_at <= as_of` —— 两条都不算错，但指的是**两次不同的比较**（前者在消费点逐 bar，后者在物化时给上界）。定案：**data 侧只声明并落列；比较可以发生在消费点，但任何一侧都不许重算 `visible_at`**。已 Accepted 的 ADR-0001 不原地改写，措辞合并放它的后继条目里 |
