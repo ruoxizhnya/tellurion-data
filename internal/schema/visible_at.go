@@ -1,5 +1,7 @@
 package schema
 
+import "strings"
+
 // 本文件是 `docs/db-schema.md` §6.2 那条「三个集合」的代码化版本。
 //
 // 三个集合不是「所有表都加一列」的糊法，判据是**在册声明**
@@ -92,6 +94,63 @@ func CSetExemptTables() []string {
 		out = append(out, e.Table)
 	}
 	return out
+}
+
+// GateClass 是写侧闸门对一张表的分类（§6.2 三集合）。
+//
+// 它回答的唯一问题是「这张表能不能经 BulkInsert 写、写完 visible_at 落在
+// 哪一列」，**不是**「这张表归谁建」。未知表一律 fail-closed（GateClassFor
+// 返回 false），因为「没登记」与「门口放行」必须是两个结果。
+type GateClass string
+
+const (
+	// GateClassA 是加 `visible_at` 列的 12 张：写入必须显式带可见时刻。
+	GateClassA GateClass = "A"
+	// GateClassB 是承认现成 `as_of` 的 2 张：**不走 BulkInsert**，
+	// 由各自的同步腿写；写面见到它必须拒绝，而不是猜一列去塞。
+	GateClassB GateClass = "B"
+	// GateClassC 是明确在门外的表：既不加列，也不许走 BulkInsert。
+	GateClassC GateClass = "C"
+)
+
+// gateClassByTable 由三张集合表构造（canonicalTable 归一化后做键）。
+var gateClassByTable = func() map[string]GateClass {
+	m := make(map[string]GateClass, len(aSetTables)+len(bSetTables)+len(cSetExemptions))
+	for _, t := range aSetTables {
+		m[canonicalTable(t)] = GateClassA
+	}
+	for _, b := range bSetTables {
+		m[canonicalTable(b.Table)] = GateClassB
+	}
+	for _, e := range cSetExemptions {
+		m[canonicalTable(e.Table)] = GateClassC
+	}
+	return m
+}()
+
+// GateClassFor 返回表的闸门分类。
+//
+// 容忍今天与目标两侧的 schema 前缀（`market.` / `public.`）：同一张
+// `ohlcv_daily_qfq` 在 D4 物理搬迁前住在 `public`，搬后住在 `market`，
+// 分类不该随位置变化。其它前缀（`quant.` / `ingest.`）是表名的一部分，
+// 原样参与匹配。
+//
+// 未知表返回 `("", false)`——调用方必须把 false 当拒收，不许当默认档。
+func GateClassFor(table string) (GateClass, bool) {
+	c, ok := gateClassByTable[canonicalTable(table)]
+	return c, ok
+}
+
+// canonicalTable 只剥「今天/目标」两个位置前缀，不剥业务 schema：
+// `quant.macro_series` 不是 `market.macro_series` 的同表异位。
+func canonicalTable(table string) string {
+	t := strings.ToLower(strings.TrimSpace(table))
+	for _, p := range []string{"market.", "public."} {
+		if strings.HasPrefix(t, p) {
+			return strings.TrimPrefix(t, p)
+		}
+	}
+	return t
 }
 
 // VisibleAtStatements 返回 A 集 12 张表的加列语句（§6.5 D1）。

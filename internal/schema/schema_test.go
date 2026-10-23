@@ -189,6 +189,66 @@ func TestStatements_DoNotInlineVisibleAtIntoCreateTable(t *testing.T) {
 	}
 }
 
+// 写侧闸门必须能按表名查到分类，且分类结果与三张集合表逐一对上：
+// 查不到 = 写面拒收（fail-closed），不是「默认 A 集」。
+func TestGateClassFor_ClassifiesEveryRegisteredTable(t *testing.T) {
+	for _, table := range ASetTables() {
+		c, ok := GateClassFor(table)
+		require.True(t, ok, "A 集表 %s 必须可分类", table)
+		assert.Equal(t, GateClassA, c)
+		// market. / public. 两个位置前缀必须归一到同一档（D4 搬迁不改分类）。
+		c, ok = GateClassFor("market." + table)
+		require.True(t, ok, "market.%s 必须可分类", table)
+		assert.Equal(t, GateClassA, c)
+		c, ok = GateClassFor("public." + table)
+		require.True(t, ok, "public.%s 必须可分类", table)
+		assert.Equal(t, GateClassA, c)
+	}
+
+	for _, b := range BSetAnchors() {
+		c, ok := GateClassFor(b.Table)
+		require.True(t, ok, "B 集表 %s 必须可分类", b.Table)
+		assert.Equal(t, GateClassB, c)
+	}
+
+	for _, table := range CSetExemptTables() {
+		c, ok := GateClassFor(table)
+		require.True(t, ok, "C 集表 %s 必须可分类", table)
+		assert.Equal(t, GateClassC, c)
+	}
+}
+
+// 未知表必须返回 false（而不是某个默认档）：写面看到 false 要拒收整批。
+func TestGateClassFor_UnknownTableIsFailClosed(t *testing.T) {
+	for _, table := range []string{"", "  ", "no_such_table", "public.no_such_table", "quant.no_such_table"} {
+		c, ok := GateClassFor(table)
+		assert.False(t, ok, "未知表 %q 不许分类成功", table)
+		assert.Empty(t, c)
+	}
+}
+
+// 三集合互斥：一张表属于两档说明 §6.2 的分档自相矛盾，写面会按最后写入者
+// 随机选一档（map 构造顺序）。这条测试把「重叠」变成红。
+func TestGateClassFor_SetsAreDisjoint(t *testing.T) {
+	seen := make(map[string]GateClass)
+	record := func(table string, want GateClass) {
+		key := canonicalTable(table)
+		if got, dup := seen[key]; dup {
+			t.Fatalf("表 %s 同时属于 %s 与 %s（三集合必须互斥）", table, got, want)
+		}
+		seen[key] = want
+	}
+	for _, table := range ASetTables() {
+		record(table, GateClassA)
+	}
+	for _, b := range BSetAnchors() {
+		record(b.Table, GateClassB)
+	}
+	for _, table := range CSetExemptTables() {
+		record(table, GateClassC)
+	}
+}
+
 func sentinelName(stmt string) string {
 	const marker = "WHERE name = '"
 	i := strings.Index(stmt, marker)

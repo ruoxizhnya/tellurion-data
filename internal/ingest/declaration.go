@@ -5,9 +5,9 @@
 // （`market.FrequencySpec`），未声明 / 声明非法 / 声明与 wire schema 矛盾者
 // 一律 fail-closed 拒收（`ErrDeclaration*` 三兄弟）。
 //
-// 取数传输（Fetch / HealthCheck / RateLimit）与 9 方法 port 尚在
-// `tellurion:pkg/data/source`，随 X1c 迁入；本包今天只落**注册期闸门**，
-// 让 12 个 connector 搬过来时有可执行的接收面，而不是搬完再补门。
+// 取数传输（HTTP/SDK 客户端）仍在 `tellurion:pkg/data/source`，经 `Transports`
+// 窄接口注入；本包承载注册门、兜底取数编排（`Registry.Fetch`）、ETL 管线
+// （`ETLPipeline`）、写侧可见性闸门（`GatePoints`）与去重（`Deduplicate`）。
 package ingest
 
 import (
@@ -96,14 +96,22 @@ var (
 )
 
 // Registry 是 connector 注册表。并发安全。
+//
+// chains 是「每个 data_type 的兜底链」（按登记顺序，先登记的优先）。
+// 它由 `Register` 自动维护，不用手抄一份——手抄的链迟早与 SupportedTypes
+// 漂移，而漂移后果是「链里有一个从不服务该类型的源」，取数时才炸。
 type Registry struct {
 	mu         sync.RWMutex
 	connectors map[string]Connector
+	chains     map[string][]string
 }
 
 // NewRegistry 返回空注册表。
 func NewRegistry() *Registry {
-	return &Registry{connectors: make(map[string]Connector)}
+	return &Registry{
+		connectors: make(map[string]Connector),
+		chains:     make(map[string][]string),
+	}
 }
 
 // Register 校验并登记 connector，通过返回 nil。
@@ -128,7 +136,43 @@ func (r *Registry) Register(c Connector) error {
 		return fmt.Errorf("%w: %s", ErrAlreadyRegistered, name)
 	}
 	r.connectors[name] = c
+	// 兜底链按登记顺序追加（先登记 = 先尝试）。追加去重：同一 connector
+	// 重复声明同一类型会被注册门拒掉，这里的去重只防 SetChain 之后的登记。
+	for _, dt := range c.SupportedTypes() {
+		r.chains[dt] = appendUnique(r.chains[dt], name)
+	}
 	return nil
+}
+
+// SetChain 覆盖某 data_type 的兜底链（运维显式配置 / 测试注入）。
+// names 里的未知名字不在这里拒——取数时按 ErrAdapterNotRegistered 报错，
+// 让 misconfig 在作业时可见，而不是注册期静默吞掉。
+func (r *Registry) SetChain(dataType string, names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]string, len(names))
+	copy(cp, names)
+	r.chains[dataType] = cp
+}
+
+// Chains 返回兜底链的快照（拷贝），供装配日志与测试对账。
+func (r *Registry) Chains() map[string][]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string][]string, len(r.chains))
+	for dt, names := range r.chains {
+		cp := make([]string, len(names))
+		copy(cp, names)
+		out[dt] = cp
+	}
+	return out
+}
+
+func appendUnique(xs []string, s string) []string {
+	if containsString(xs, s) {
+		return xs
+	}
+	return append(xs, s)
 }
 
 // Get 按名字取 connector。

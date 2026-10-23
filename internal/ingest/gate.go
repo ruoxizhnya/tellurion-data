@@ -3,6 +3,7 @@ package ingest
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,17 +43,44 @@ var anchorTimeLayouts = []string{
 //
 // 没有任何 connector 声明该类型 ⇒ ErrDeclarationMissing（fail-closed：
 // 写入路径不许给「没登记过可见语义」的类型放行）。
+//
+// 遍历顺序按 connector 名排序：多个源服务同一 data_type 时（如日线有
+// tushare 与 mootdx），map 遍历顺序会让「取哪条声明」随机。排序让结果
+// 可复现；若两条声明对同一类型的可见锚点不一致，那是注册面自相矛盾，
+// 直接拒收而不是按名字顺序挑一个。
 func (r *Registry) DeclarationFor(dataType string) (ConnectorDeclaration, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, c := range r.connectors {
+	names := make([]string, 0, len(r.connectors))
+	for name := range r.connectors {
+		names = append(names, name)
+	}
+	r.mu.RUnlock()
+	sort.Strings(names)
+
+	var found ConnectorDeclaration
+	have := false
+	for _, name := range names {
+		c, err := r.Get(name)
+		if err != nil {
+			continue
+		}
 		for _, d := range c.Declarations() {
-			if d.DataType == dataType {
-				return d, nil
+			if d.DataType != dataType {
+				continue
+			}
+			if have && (d.VisibleField != found.VisibleField || d.TimeSemantics != found.TimeSemantics) {
+				return ConnectorDeclaration{}, fmt.Errorf("%w: data type %q has conflicting declarations (visible anchor %q vs %q)",
+					ErrDeclarationMismatch, dataType, found.VisibleField, d.VisibleField)
+			}
+			if !have {
+				found, have = d, true
 			}
 		}
 	}
-	return ConnectorDeclaration{}, fmt.Errorf("%w: no registered connector declares data type %q", ErrDeclarationMissing, dataType)
+	if !have {
+		return ConnectorDeclaration{}, fmt.Errorf("%w: no registered connector declares data type %q", ErrDeclarationMissing, dataType)
+	}
+	return found, nil
 }
 
 // GatePoints 是写侧闸门：逐点校验声明的可见锚点，给每个点落 `VisibleAt`。
