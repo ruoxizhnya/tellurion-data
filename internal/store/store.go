@@ -25,15 +25,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"tellurion-data/internal/serving"
 )
 
 // ErrUnsupportedFrequency 是「该 port 不服务这个频率」。fail-closed：
 // 15m 由 aggregator 用 1m 聚合，本层不物化、也不假装能读。
-var ErrUnsupportedFrequency = errors.New("store: unsupported source frequency")
+//
+// 包一层 `serving.ErrInvalidParameter`：对调用方而言这是**请求参数**问题
+// （要 15m 却打到了只读 1m/1d 的 port），HTTP 面应映射成 400 而不是 500。
+var ErrUnsupportedFrequency = fmt.Errorf("%w: unsupported source frequency", serving.ErrInvalidParameter)
 
 // ErrUnknownUniverse 是票池既不是显式 symbols、也不认识 index_code / 名字。
 // 不认识就拒，不猜一个指数（猜错 = 静默换票池，比报错危险得多）。
-var ErrUnknownUniverse = errors.New("store: unknown universe")
+// 同样包 `serving.ErrInvalidParameter` ⇒ 400。
+var ErrUnknownUniverse = fmt.Errorf("%w: unknown universe", serving.ErrInvalidParameter)
 
 // Rows 是 `pgx.Rows` 的最小读面。抽成接口只为让 SQL 装配可被无库测试
 // （假的 Rows 逐行喂值），生产实现就是 `*pgxpool.Pool` 返回的 `pgx.Rows`。
@@ -112,10 +118,8 @@ func (s *Store) scanAll(ctx context.Context, sql string, args []any, fn func(Row
 	return rows.Err()
 }
 
-// 编译期自证：`*pgxpool.Pool` 的 Query 返回 `pgx.Rows`，与本包的 Rows 同形。
-var _ = func(p *pgxpool.Pool) {
-	var _ func(context.Context, string, ...any) (pgx.Rows, error) = p.Query
-}
+// 编译期自证：`pgx.Rows` 的方法集满足本包的 `Rows`（PoolQuerier 靠这一条）。
+var _ Rows = (pgx.Rows)(nil)
 
 // PoolQuerier 把 `*pgxpool.Pool` 适配成本包的 `Querier`。
 //

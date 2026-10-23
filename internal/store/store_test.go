@@ -297,6 +297,13 @@ func TestNew_RejectsNilQuerierAndDottedSchema(t *testing.T) {
 	require.Error(t, err)
 }
 
+// 请求级失败必须能被 HTTP 面识别成 400（不是 500）：两个 port 哨兵都把
+// serving.ErrInvalidParameter 包在里面。这条测试钉住分诊语义。
+func TestPortErrors_MapToInvalidParameter(t *testing.T) {
+	assert.ErrorIs(t, ErrUnsupportedFrequency, serving.ErrInvalidParameter)
+	assert.ErrorIs(t, ErrUnknownUniverse, serving.ErrInvalidParameter)
+}
+
 // 表前缀是过渡开关：空串 → public（今天），"market" → 目标。
 func TestTablePrefix_SwitchesBetweenTargetAndToday(t *testing.T) {
 	today, err := New(&fakeDB{}, Options{MarketSchema: ""})
