@@ -10,7 +10,7 @@
 |---|---|
 | `docs/` | 本仓文档：台账 / 边界 / 决策 / 归档 —— 从这里进：`docs/README.md` |
 | `AGENTS.md` | 本仓入口（构建、边界、禁止、依赖版本） |
-| `internal/ingest` | connector 注册门 + 12 connector 声明清单（catalog） |
+| `internal/ingest` | connector 注册门 + 12 connector 取数/归一化（声明真源 = 各自 `Declarations()`） |
 | `internal/normalize` | 频率聚合（1m → 15m/1d）+ PIT 闸门 |
 | `internal/serving` | aggregator（票池解析 · 取数 · 聚合 · PIT · hash · 缓存） |
 | `doc.go` | 根包文档占位（无实现） |

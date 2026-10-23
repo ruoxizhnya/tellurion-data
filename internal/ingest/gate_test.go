@@ -135,21 +135,18 @@ func TestGatePointsRejectsUndeclaredAnchor(t *testing.T) {
 }
 
 // 注册表按 data_type 取声明：没登记的类型 fail-closed，不给放行。
+//
+// 用**真实 connector** 而不是测试替身：这条判据的价值就在于「实现自己声明
+// 的锚点能不能被取到」；替身会让测试与搬迁后的真源脱钩。
 func TestRegistryDeclarationFor(t *testing.T) {
 	reg := NewRegistry()
-	require.NoError(t, reg.Register(&catalogConnector{name: "eastmoney",
-		types: []string{DataTypeCapitalFlow},
-		decls: []ConnectorDeclaration{gateDecl("capital_flow", VisibleFieldTradeTime)},
-		anchors: map[string]DataSchema{
-			DataTypeCapitalFlow: anchorSchema(DataTypeCapitalFlow, "trade_date", "date"),
-		},
-	}))
+	require.NoError(t, reg.Register(NewEastmoneyAdapter(NewEastmoneyClient())))
 
-	decl, err := reg.DeclarationFor("capital_flow")
+	decl, err := reg.DeclarationFor(DataTypeCapitalFlow)
 	require.NoError(t, err)
-	assert.Equal(t, "capital_flow", decl.DataType)
+	assert.Equal(t, DataTypeCapitalFlow, decl.DataType)
 
-	_, err = reg.DeclarationFor("hot_search")
+	_, err = reg.DeclarationFor(DataTypeHotSearch)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDeclarationMissing)
 }

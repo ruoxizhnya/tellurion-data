@@ -159,13 +159,22 @@ func TestRegistry_GetUnknown(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotRegistered)
 }
 
-// ─── catalog：12 个 connector 的声明清单 ────────────────────────
+// ─── 12 个 connector 的声明（真源 = 各自的 Declarations()） ──────────
+//
+// 过渡期的 `Catalog()` 清单已删除：它手抄一份声明，而实现自己也有一份，
+// 两份迟早漂移，且漂移方向恰好是「注册门放行了一个实际没声明的源」。
+// 下面这些测试跑在**真实 connector** 上（传输注入 nil ⇒ 门 disabled，
+// 但声明与 schema 仍然完整，正是注册门要检查的部分）。
 
-func TestCatalog_AllConnectorsPassTheRegistrationGate(t *testing.T) {
+func registerAll(t *testing.T, reg *Registry) {
+	t.Helper()
+	require.NoError(t, RegisterConnectors(reg, Transports{}))
+}
+
+func TestConnectors_AllPassTheRegistrationGate(t *testing.T) {
 	reg := NewRegistry()
-	for _, c := range Catalog() {
-		require.NoError(t, reg.Register(c), "connector %s must pass the declaration gate", c.Name())
-	}
+	registerAll(t, reg)
+
 	require.Equal(t, []string{
 		"alpha_vantage",
 		"eastmoney",
@@ -182,19 +191,19 @@ func TestCatalog_AllConnectorsPassTheRegistrationGate(t *testing.T) {
 	}, reg.Names(), "12 个 connector 的名字是跨仓契约，改名会静默改变注册面")
 }
 
-func TestCatalog_CoversAllWireDataTypes(t *testing.T) {
-	reg := NewRegistry()
+// 18 条声明 / 15 个 wire data_type：与 core `pkg/data/source/declarations.go`
+// 逐条对齐。数字变了就是声明面变了，必须同步文档与 core。
+func TestConnectors_CoverAllWireDataTypes(t *testing.T) {
 	covered := map[string]bool{}
 	total := 0
-	for _, c := range Catalog() {
-		require.NoError(t, reg.Register(c))
+	for _, c := range Connectors(Transports{}) {
 		for _, d := range c.Declarations() {
 			covered[d.DataType] = true
 			total++
 		}
 	}
 
-	require.Equal(t, 18, total, "18 条声明（与 tellurion:pkg/data/source/declarations.go 逐条对齐）")
+	require.Equal(t, 18, total, "18 条声明（与 core declarations.go 逐条对齐）")
 	expected := []string{
 		DataTypeOHLCDaily, DataTypeOHLCMinute, DataTypeRealtime, DataTypeCapitalFlow,
 		DataTypeFundamental, DataTypeSectors, DataTypeStockSector, DataTypeTopList,
@@ -207,8 +216,8 @@ func TestCatalog_CoversAllWireDataTypes(t *testing.T) {
 	}
 }
 
-func TestCatalog_FundamentalAnchorIsAnnDateNotTradeTime(t *testing.T) {
-	for _, conn := range Catalog() {
+func TestConnectors_FundamentalAnchorIsAnnDateNotTradeTime(t *testing.T) {
+	for _, conn := range Connectors(Transports{}) {
 		if conn.Name() != "tushare" {
 			continue
 		}
@@ -225,8 +234,8 @@ func TestCatalog_FundamentalAnchorIsAnnDateNotTradeTime(t *testing.T) {
 	t.Fatal("tushare must declare fundamentals")
 }
 
-func TestCatalog_MacroAnchorIsAsOf(t *testing.T) {
-	for _, conn := range Catalog() {
+func TestConnectors_MacroAnchorIsAsOf(t *testing.T) {
+	for _, conn := range Connectors(Transports{}) {
 		if conn.Name() != "tushare_macro" {
 			continue
 		}
@@ -240,17 +249,34 @@ func TestCatalog_MacroAnchorIsAsOf(t *testing.T) {
 	t.Fatal("tushare_macro must be in the catalog")
 }
 
-func TestCatalog_ReturnsIndependentCopies(t *testing.T) {
-	first := Catalog()
+func TestConnectors_ReturnIndependentCopies(t *testing.T) {
+	first := Connectors(Transports{})
 	decls := first[0].Declarations()
 	decls[0].DataType = "hacked"
 	decls[0].VisibleField = "hacked"
 
-	second := Catalog()
+	second := Connectors(Transports{})
 	require.NotEqual(t, "hacked", second[0].Declarations()[0].DataType)
 	require.NotEqual(t, "hacked", second[0].Declarations()[0].VisibleField)
 
 	types := second[1].SupportedTypes()
 	types[0] = "hacked"
-	require.NotEqual(t, "hacked", Catalog()[1].SupportedTypes()[0])
+	require.NotEqual(t, "hacked", Connectors(Transports{})[1].SupportedTypes()[0])
+}
+
+// 声明清单必须是 connector 自己产出的，不能有第二个来源：把 12 个门的
+// 声明逐条与「同名 wire 契约」对比，任一门的 SupportedTypes 与其声明集合
+// 不等即红（这正是删掉 Catalog() 后要保住的判据）。
+func TestConnectors_DeclarationsMatchSupportedTypes(t *testing.T) {
+	for _, c := range Connectors(Transports{}) {
+		supported := map[string]bool{}
+		for _, dt := range c.SupportedTypes() {
+			supported[dt] = true
+		}
+		declared := map[string]bool{}
+		for _, d := range c.Declarations() {
+			declared[d.DataType] = true
+		}
+		require.Equal(t, supported, declared, "connector %s 的 SupportedTypes 与 Declarations 必须一一对应", c.Name())
+	}
 }

@@ -32,17 +32,17 @@ verified-by: QT-40 X1b/X1c 核心落地 —— 状态 ⬜→🔶，新增「施�
 
 | 序列 | 状态 | 已落 | 未落（不假装完成） |
 |---|---|---|---|
-| X1a 协议冻结 | 🟡 部分 | contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` 仍未进 contracts（X1c 协议冻结仍挂 QT-05 剩余半边） |
-| X1b aggregator | 🔶 核心已落 | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收）；**2026-10-23**：HTTP 面已接——`internal/httpapi`（resolve/snapshot/health，哨兵→状态码映射）+ `cmd/dataservice`；同 hash 两次拉取**逐位一致**已到 wire 级测试 | 四个 port 的真实实现（`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver` 今天只有接口，无 PG 实现）——未接线的进程数据端点 fail-closed 503 |
-| X1c connector 声明 | 🔶 注册门已落 | `internal/ingest`：`Registry`（漏声明 / 非法枚举 / 缺 `VisibleExpr` / 锚点与 wire schema 矛盾 ⇒ fail-closed 拒收）+ 12 connector 的 18 条声明清单 `Catalog()`（与 core `pkg/data/source/declarations.go` 逐条对齐）；**2026-10-23**：写侧可见性闸门 `GatePoints` 已落（声明锚点列判据、整批拒收、假护栏反证测试）+ wire 点位本地镜像 `UnifiedDataPoint`（`VisibleAt` 随闸门流转，X1a 冻结后随包迁走） | 12 个 connector 的取数与归一化实现搬入（传输仍在 core，随 X1c 迁；届时 `Catalog()` 由其 `Declarations()` 取代）。**前提实测（2026-10-23）**：core `pkg/data/source` 20 个非测试文件里 15 个零 core import 可直接平移，4 个 tushare adapter 依赖 `tellurion:pkg/data.TushareClient`（传输本体）、`etl.go` 依赖 `storage.BulkInserter`（写入面 = X1d 的归属迁移对象）——迁移量 ~3.5k 行，须按 connector 逐个单搬，不随本单一次吞下 |
-| X1d schema 归属 | ⬜ | —— | 全部 |
+| X1a 协议冻结 | 🟡 部分 | contracts `v0.1.0` 已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` **仍未进 contracts**：G1 第二批发版（QT-05 剩余半边）尚未发生——2026-10-24 实测 upstream 最新 tag 是 `v0.3.0`，包清单里**没有** `dataprotocol` / `UnifiedDataPoint`（解压 zip 逐文件核对）。⇒ 本仓的 wire 本地镜像 `internal/ingest/point.go` **继续保留**，不提前删；G1 发版后随包迁走、调用点改前缀 |
+| X1b aggregator | 🔶 取数面已接线（2026-10-24） | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收）；`internal/httpapi`（resolve/snapshot/health，哨兵→状态码映射）+ `cmd/dataservice`；**四个 port 已有 PG 实现** `internal/store`（`DATABASE_URL` 有值即装配；空则 503） | `/factors/{name}@{hash}` 仍无实现；**写面（BulkInsert / ETL 落库）未接线**；`visible_at` 只从列取、未回填的行会被 PIT 整批拒收（D2 未执行前的预期行为） |
+| X1c connector 声明 | 🔶 connector 已搬（2026-10-24） | **12 个 connector 的取数/归一化已搬入** `internal/ingest`（`declarations_*.go` 各自持声明；运行时 9 方法面在 `adapter.go`）；**过渡期 `Catalog()` 双真相已删除**，装配改 `Connectors(Transports)`；`TushareTransport` / `MootdxTransport` 窄接口把传输留在 core（本仓不 import 实现包）。测试跑在真实 connector 上（18 条声明 / 15 个 data_type；SupportedTypes ↔ Declarations 一一对应） | **传输实现仍在 core**（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端与 raw 归档），本仓只按 `Transports` 注入；core 侧 `pkg/data/source` 的旧实现未删（跨仓切换不在本仓权限内）。`etl.go` 的 `BulkInsert` 写面随 X1d 归位，尚未接线 |
+| X1d schema 归属 | 🔶 DDL 归属已落（2026-10-24） | `internal/schema`：`market` / `ingest` 建表（19 张，`TableNames()` 可对账）、`visible_at` 三集合（A 集 12 张 × 目标/今天两侧、B 集承认 `as_of`、C 集逐条豁免）、哨兵防重放的回填腿（`BackfillStatements()`，与建表分开返回）；DDL 在 `DATABASE_URL` 有值时由 `cmd/dataservice` 启动执行 | **物理搬迁**（`SET SCHEMA` 到 `market` / `ingest`）未做——core 内联 DDL 仍是运行期事实；**回填未实际执行**（须在启动开关或 tagged 套件里跑）；**第二写者未真正消灭**：core 侧同步腿仍在写 `market` / `ingest`，本仓只能先把 owner 与写闸门立起来 |
 
 **已登记的取舍与风险（必须随 X1b 一起读）**
 
 - **`as_of` 不在冻结六分量里**：同六分量、不同 `as_of` 会撞同一 hash。处置 = 缓存对同 hash 不同 metadata / 内容报 `ErrSnapshotMismatch`（fail-closed，绝不静默返回别人的数据集），并有测试钉住。是否把 `as_of` 升为第七分量属 QT-03 后继裁决。
 - **聚合先于 PIT 过滤**：bucket 内任一条 1m bar 的可见时刻都不晚于 bucket 结束；若先过滤再聚合会造出「看起来完整、实际缺尾」的半桶。
 - **15m 不物化、1d 直读日线表**：`sourceFrequency` 是唯一映射；1d 不从分钟合成（避免日线口径随分钟完整度漂移）。
-- **catalog 是过渡期双真相**：本仓自持一份 12 connector 声明清单，是因为本仓 CI 明令不得 checkout 其他仓（`tellurion-data:.github/workflows/ci.yml` 头注释）；X1c 搬 connector 时必须删除本表，改用 connector 自己的 `Declarations()`。
+- ~~**catalog 是过渡期双真相**~~ **已消除（2026-10-24）**：`Catalog()` 清单已删除，声明改由每个 connector 自己的 `Declarations()` 提供；`Connectors(Transports)` 只做装配。守卫：18 条声明 / 15 个 data_type / `SupportedTypes ↔ Declarations` 一一对应（破坏验证：改一条声明的 DataType → 三条测试同时红）。
 
 
 ---
