@@ -50,9 +50,15 @@ type ConnectorDeclaration struct {
 
 // SchemaField 是 wire schema 的单列。Type 取值集与 core 一致：
 // "string" | "float" | "int" | "date" | "datetime"。
+//
+// Required / Unit 是 X1c 搬 connector 时补上的两个字段（core 同形）：
+// 注册门只关心 Name/Type（锚点校验），Required/Unit 供 ETL 与运维读，
+// 参与「缺失≠0」与单位口径的声明。
 type SchemaField struct {
-	Name string
-	Type string
+	Name     string
+	Type     string
+	Required bool
+	Unit     string // "yuan" | "percent" | "share" | ""
 }
 
 // DataSchema 声明某个数据类型在 wire 上的字段形状。

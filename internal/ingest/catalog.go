@@ -26,21 +26,21 @@ import (
 
 // Wire data type 字面值（与 core `pkg/data/source/adapter.go` 常量同值）。
 const (
-	dataTypeOHLCDaily   = "ohlcv_daily"
-	dataTypeOHLCMinute  = "ohlcv_minute"
-	dataTypeRealtime    = "realtime_quote"
-	dataTypeCapitalFlow = "capital_flow"
-	dataTypeFundamental = "fundamentals"
-	dataTypeSectors     = "sectors"
-	dataTypeStockSector = "stock_sector"
-	dataTypeTopList     = "top_list"
-	dataTypeLimitUpPool = "limit_up_pool"
-	dataTypeAnnounce    = "announcements"
-	dataTypeNews        = "news"
-	dataTypeHotSearch   = "hot_search"
-	dataTypeGlobalOHLCV = "global_ohlcv"
-	dataTypeMacro       = "macro_series"
-	dataTypeDailyBasic  = "daily_basic"
+	DataTypeOHLCDaily   = "ohlcv_daily"
+	DataTypeOHLCMinute  = "ohlcv_minute"
+	DataTypeRealtime    = "realtime_quote"
+	DataTypeCapitalFlow = "capital_flow"
+	DataTypeFundamental = "fundamentals"
+	DataTypeSectors     = "sectors"
+	DataTypeStockSector = "stock_sector"
+	DataTypeTopList     = "top_list"
+	DataTypeLimitUpPool = "limit_up_pool"
+	DataTypeAnnounce    = "announcements"
+	DataTypeNews        = "news"
+	DataTypeHotSearch   = "hot_search"
+	DataTypeGlobalOHLCV = "global_ohlcv"
+	DataTypeMacro       = "macro_series"
+	DataTypeDailyBasic  = "daily_basic"
 )
 
 // catalogConnector 是 catalog 阶段的 Connector 实现（无传输）。
@@ -97,12 +97,12 @@ func CatalogNames() []string {
 func tushareConnector() Connector {
 	return &catalogConnector{
 		name:  "tushare",
-		types: []string{dataTypeOHLCDaily, dataTypeFundamental},
+		types: []string{DataTypeOHLCDaily, DataTypeFundamental},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeOHLCDaily, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeOHLCDaily, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 			// 财报：TradeTime 承载报告期截止日，可见锚点必须是披露日
 			//（规范层 market.Fundamental.AnnDate），否则前视洞回来。
-			decl(dataTypeFundamental, market.VisibleOnAnnouncementDay, "", VisibleFieldAnnDate, market.FreqSpecEvent),
+			decl(DataTypeFundamental, market.VisibleOnAnnouncementDay, "", VisibleFieldAnnDate, market.FreqSpecEvent),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -111,13 +111,13 @@ func tushareConnector() Connector {
 func tushareMacroConnector() Connector {
 	return &catalogConnector{
 		name:  "tushare_macro",
-		types: []string{dataTypeMacro},
+		types: []string{DataTypeMacro},
 		decls: []ConnectorDeclaration{
 			// 锚点取 as_of（导入时刻），不取 obs_date：观测日早于真实发布日。
-			decl(dataTypeMacro, market.VisibleOnAnnouncementDay, "", "as_of", market.FreqSpecEvent),
+			decl(DataTypeMacro, market.VisibleOnAnnouncementDay, "", "as_of", market.FreqSpecEvent),
 		},
 		anchors: map[string]DataSchema{
-			dataTypeMacro: anchorSchema(dataTypeMacro, "as_of", "datetime"),
+			DataTypeMacro: anchorSchema(DataTypeMacro, "as_of", "datetime"),
 		},
 	}
 }
@@ -125,9 +125,9 @@ func tushareMacroConnector() Connector {
 func tushareMoneyflowConnector() Connector {
 	return &catalogConnector{
 		name:  "tushare_moneyflow",
-		types: []string{dataTypeCapitalFlow},
+		types: []string{DataTypeCapitalFlow},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeCapitalFlow, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeCapitalFlow, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -136,13 +136,13 @@ func tushareMoneyflowConnector() Connector {
 func tushareDailyBasicConnector() Connector {
 	return &catalogConnector{
 		name:  "tushare_daily_basic",
-		types: []string{dataTypeDailyBasic},
+		types: []string{DataTypeDailyBasic},
 		decls: []ConnectorDeclaration{
 			// 换手率族由全日成交量统计得出，收盘前不存在（蓝图 §4.2 高危 PIT）。
-			decl(dataTypeDailyBasic, market.VisibleAfterClose, "", "trade_date", market.FreqSpecDaily),
+			decl(DataTypeDailyBasic, market.VisibleAfterClose, "", "trade_date", market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{
-			dataTypeDailyBasic: anchorSchema(dataTypeDailyBasic, "trade_date", "date"),
+			DataTypeDailyBasic: anchorSchema(DataTypeDailyBasic, "trade_date", "date"),
 		},
 	}
 }
@@ -150,13 +150,13 @@ func tushareDailyBasicConnector() Connector {
 func mootdxConnector() Connector {
 	return &catalogConnector{
 		name:  "mootdx",
-		types: []string{dataTypeRealtime, dataTypeOHLCMinute, dataTypeOHLCDaily},
+		types: []string{DataTypeRealtime, DataTypeOHLCMinute, DataTypeOHLCDaily},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeRealtime, market.VisibleCustom,
+			decl(DataTypeRealtime, market.VisibleCustom,
 				"visible_at = fetch_time（实时快照，观察时刻即可见）", VisibleFieldTradeTime, market.FreqSpecIntraday),
-			decl(dataTypeOHLCMinute, market.VisibleCustom,
+			decl(DataTypeOHLCMinute, market.VisibleCustom,
 				"visible_at = bar_period_end（分钟 bar 周期结束即可见）", VisibleFieldTradeTime, market.FreqSpecIntraday),
-			decl(dataTypeOHLCDaily, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeOHLCDaily, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -165,9 +165,9 @@ func mootdxConnector() Connector {
 func eastmoneyConnector() Connector {
 	return &catalogConnector{
 		name:  "eastmoney",
-		types: []string{dataTypeCapitalFlow},
+		types: []string{DataTypeCapitalFlow},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeCapitalFlow, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeCapitalFlow, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -176,11 +176,11 @@ func eastmoneyConnector() Connector {
 func eastmoneySectorsConnector() Connector {
 	return &catalogConnector{
 		name:  "eastmoney_sectors",
-		types: []string{dataTypeSectors, dataTypeStockSector},
+		types: []string{DataTypeSectors, DataTypeStockSector},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeSectors, market.VisibleCustom,
+			decl(DataTypeSectors, market.VisibleCustom,
 				"visible_at = fetch_time（盘中板块快照，观察时刻即可见）", VisibleFieldTradeTime, market.FreqSpecIntraday),
-			decl(dataTypeStockSector, market.VisibleCustom,
+			decl(DataTypeStockSector, market.VisibleCustom,
 				"visible_at = fetch_time（个股板块映射，观察时刻即可见）", VisibleFieldTradeTime, market.FreqSpecEvent),
 		},
 		anchors: map[string]DataSchema{},
@@ -190,10 +190,10 @@ func eastmoneySectorsConnector() Connector {
 func eastmoneyTopListConnector() Connector {
 	return &catalogConnector{
 		name:  "eastmoney_toplist",
-		types: []string{dataTypeTopList, dataTypeLimitUpPool},
+		types: []string{DataTypeTopList, DataTypeLimitUpPool},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeTopList, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
-			decl(dataTypeLimitUpPool, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeTopList, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeLimitUpPool, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -202,13 +202,13 @@ func eastmoneyTopListConnector() Connector {
 func juchaoConnector() Connector {
 	return &catalogConnector{
 		name:  "juchao",
-		types: []string{dataTypeAnnounce},
+		types: []string{DataTypeAnnounce},
 		decls: []ConnectorDeclaration{
 			// 公告时间（ann_time）即可见，披露驱动事件流。
-			decl(dataTypeAnnounce, market.VisibleOnAnnouncementDay, "", "ann_time", market.FreqSpecEvent),
+			decl(DataTypeAnnounce, market.VisibleOnAnnouncementDay, "", "ann_time", market.FreqSpecEvent),
 		},
 		anchors: map[string]DataSchema{
-			dataTypeAnnounce: anchorSchema(dataTypeAnnounce, "ann_time", "datetime"),
+			DataTypeAnnounce: anchorSchema(DataTypeAnnounce, "ann_time", "datetime"),
 		},
 	}
 }
@@ -216,15 +216,15 @@ func juchaoConnector() Connector {
 func xueqiuConnector() Connector {
 	return &catalogConnector{
 		name:  "xueqiu",
-		types: []string{dataTypeHotSearch, dataTypeNews},
+		types: []string{DataTypeHotSearch, DataTypeNews},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeHotSearch, market.VisibleCustom,
+			decl(DataTypeHotSearch, market.VisibleCustom,
 				"visible_at = fetch_time（热搜榜快照，观察时刻即可见）", VisibleFieldTradeTime, market.FreqSpecIntraday),
-			decl(dataTypeNews, market.VisibleCustom,
+			decl(DataTypeNews, market.VisibleCustom,
 				"visible_at = publish_time（新闻发布时刻即可见）", "publish_time", market.FreqSpecEvent),
 		},
 		anchors: map[string]DataSchema{
-			dataTypeNews: anchorSchema(dataTypeNews, "publish_time", "datetime"),
+			DataTypeNews: anchorSchema(DataTypeNews, "publish_time", "datetime"),
 		},
 	}
 }
@@ -232,9 +232,9 @@ func xueqiuConnector() Connector {
 func alphaVantageConnector() Connector {
 	return &catalogConnector{
 		name:  "alpha_vantage",
-		types: []string{dataTypeGlobalOHLCV},
+		types: []string{DataTypeGlobalOHLCV},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeGlobalOHLCV, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeGlobalOHLCV, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}
@@ -243,9 +243,9 @@ func alphaVantageConnector() Connector {
 func yahooFinanceConnector() Connector {
 	return &catalogConnector{
 		name:  "yahoo_finance",
-		types: []string{dataTypeGlobalOHLCV},
+		types: []string{DataTypeGlobalOHLCV},
 		decls: []ConnectorDeclaration{
-			decl(dataTypeGlobalOHLCV, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
+			decl(DataTypeGlobalOHLCV, market.VisibleAfterClose, "", VisibleFieldTradeTime, market.FreqSpecDaily),
 		},
 		anchors: map[string]DataSchema{},
 	}

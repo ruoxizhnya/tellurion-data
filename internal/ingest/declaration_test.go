@@ -196,10 +196,10 @@ func TestCatalog_CoversAllWireDataTypes(t *testing.T) {
 
 	require.Equal(t, 18, total, "18 条声明（与 tellurion:pkg/data/source/declarations.go 逐条对齐）")
 	expected := []string{
-		dataTypeOHLCDaily, dataTypeOHLCMinute, dataTypeRealtime, dataTypeCapitalFlow,
-		dataTypeFundamental, dataTypeSectors, dataTypeStockSector, dataTypeTopList,
-		dataTypeLimitUpPool, dataTypeAnnounce, dataTypeNews, dataTypeHotSearch,
-		dataTypeGlobalOHLCV, dataTypeMacro, dataTypeDailyBasic,
+		DataTypeOHLCDaily, DataTypeOHLCMinute, DataTypeRealtime, DataTypeCapitalFlow,
+		DataTypeFundamental, DataTypeSectors, DataTypeStockSector, DataTypeTopList,
+		DataTypeLimitUpPool, DataTypeAnnounce, DataTypeNews, DataTypeHotSearch,
+		DataTypeGlobalOHLCV, DataTypeMacro, DataTypeDailyBasic,
 	}
 	require.Len(t, covered, len(expected), "15 个 wire data_type 全部有声明，且不引入仓外新类型")
 	for _, dt := range expected {
@@ -213,7 +213,7 @@ func TestCatalog_FundamentalAnchorIsAnnDateNotTradeTime(t *testing.T) {
 			continue
 		}
 		for _, d := range conn.Declarations() {
-			if d.DataType != dataTypeFundamental {
+			if d.DataType != DataTypeFundamental {
 				continue
 			}
 			require.Equal(t, VisibleFieldAnnDate, d.VisibleField,
@@ -232,7 +232,7 @@ func TestCatalog_MacroAnchorIsAsOf(t *testing.T) {
 		}
 		require.Len(t, conn.Declarations(), 1)
 		d := conn.Declarations()[0]
-		require.Equal(t, dataTypeMacro, d.DataType)
+		require.Equal(t, DataTypeMacro, d.DataType)
 		require.Equal(t, "as_of", d.VisibleField,
 			"观测日 obs_date 早于真实发布日；锚点必须是导入时刻 as_of（2026-10-16 裁决 A）")
 		return

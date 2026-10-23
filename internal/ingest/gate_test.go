@@ -138,10 +138,10 @@ func TestGatePointsRejectsUndeclaredAnchor(t *testing.T) {
 func TestRegistryDeclarationFor(t *testing.T) {
 	reg := NewRegistry()
 	require.NoError(t, reg.Register(&catalogConnector{name: "eastmoney",
-		types: []string{dataTypeCapitalFlow},
+		types: []string{DataTypeCapitalFlow},
 		decls: []ConnectorDeclaration{gateDecl("capital_flow", VisibleFieldTradeTime)},
 		anchors: map[string]DataSchema{
-			dataTypeCapitalFlow: anchorSchema(dataTypeCapitalFlow, "trade_date", "date"),
+			DataTypeCapitalFlow: anchorSchema(DataTypeCapitalFlow, "trade_date", "date"),
 		},
 	}))
 
