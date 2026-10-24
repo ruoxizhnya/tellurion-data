@@ -32,7 +32,7 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 
 | 序列 | 状态 | 已落 | 未落（不假装完成） |
 |---|---|---|---|
-| X1a 协议冻结 | ✅（2026-10-25） | contracts **`v0.6.0`**（2026-10-24 发版、**远端 tag 已推**）新增 `dataprotocol/`：`UnifiedDataPoint` 七字段（含 `VisibleAt`）+ `ToJSON` / `DeduplicateKey` + 15 个 `DataType*` 常量，导出面 447→465。本仓 `require v0.6.0`；`internal/ingest/point.go` 的**逐字段镜像已删**，改为 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`（别名 + 注入时钟的构造器留本侧：契约刻意不读时钟，ADR-0004）；`DeduplicateKey` 公式改为委托契约方法。守卫：`protocol_test.go` 钉住「类型必须是契约那个类型」与去重坐标同值 | 无。**未顺手做（如实）**：`DataType*` 常量仍在本仓 `connectors.go` 各写一遍（与契约定值逐字一致）；`internal/store/write.go` 的写面 `Point` 仍是本地投影（store 刻意不认识采集语义，与 ETL 点位不是同一个形状）。两项常量/投影收编均未随本单 |
+| X1a 协议冻结 | ✅（2026-10-25） | contracts **`v0.6.0`**（2026-10-24 发版、**远端 tag 已推**）新增 `dataprotocol/`：`UnifiedDataPoint` 七字段（含 `VisibleAt`）+ `ToJSON` / `DeduplicateKey` + 15 个 `DataType*` 常量，导出面 447→465。本仓 `require v0.6.0`；`internal/ingest/point.go` 的**逐字段镜像已删**，改为 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`（别名 + 注入时钟的构造器留本侧：契约刻意不读时钟，ADR-0004）；`DeduplicateKey` 公式改为委托契约方法。守卫：`protocol_test.go` 钉住「类型必须是契约那个类型」与去重坐标同值 | 无。**未顺手做（如实）**：`internal/store/write.go` 的写面 `Point` 仍是本地投影（store 刻意不认识采集语义，与 ETL 点位不是同一个形状），投影收编未随本单。**常量腿已收编（2026-10-25）**：`internal/ingest/connectors.go` 的 15 个 `DataType*` 改为 `dataprotocol.DataType*` 别名（导出名不变、12 个 connector 调用点零改；契约改值时本包取值随编译期变化），包内字面量零残留；守卫 `protocol_test.go:TestDataTypeConstantsMatchContract`（破坏验证：把 `DataTypeDailyBasic` 改成本地错误字面量 ⇒ 红，逐字节还原（`sha256 4a565295…`）⇒ 绿）；18 条声明 / 15 个 data_type 一一对应仍绿 |
 | X1b aggregator | 🔶 取数面 + 写面代码已落（2026-10-24） | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收）；`internal/httpapi`（resolve/snapshot/health，哨兵→状态码映射）+ `cmd/dataservice`；**四个 port 已有 PG 实现** `internal/store`（`DATABASE_URL` 有值即装配；空则 503）；**G4 新增**：`internal/ingest` 的 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate` 与 `internal/store.BulkInsert` 写面 | `/factors/{name}@{hash}` 只有路由、**恒 404**（`factor_cache` 无 dataset hash 列，无法复算内容指纹）；**写面装配未接**：同步作业（`sync_jobs` → worker → `ETLPipeline`）仍在 core；`visible_at` 只从列取、未回填的行会被 PIT 整批拒收（生产 D2 未执行前的预期行为） |
 | X1c connector 声明 | 🔶 connector 已搬（2026-10-24） | **12 个 connector 的取数/归一化已搬入** `internal/ingest`（`declarations_*.go` 各自持声明；运行时 9 方法面在 `adapter.go`）；**过渡期 `Catalog()` 双真相已删除**，装配改 `Connectors(Transports)`；`TushareTransport` / `MootdxTransport` 窄接口把传输留在 core（本仓不 import 实现包）。测试跑在真实 connector 上（18 条声明 / 15 个 data_type；SupportedTypes ↔ Declarations 一一对应） | **传输实现仍在 core**（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端与 raw 归档），本仓只按 `Transports` 注入；core 侧 `pkg/data/source` 的旧实现未删（跨仓切换不在本仓权限内）。**写面已归位**（2026-10-24，G4）：`internal/ingest.ETLPipeline` + `internal/store.BulkInsert`；但**同步作业的装配仍在 core**（`sync_jobs` → worker → ETL），core `pkg/data/source/etl.go` 的旧写路径尚未删 |
 | X1d schema 归属 | 🔶 DDL 归属 + 写面已落（2026-10-24） | `internal/schema`：`market` / `ingest` 建表（19 张，`TableNames()` 可对账）、`visible_at` 三集合（A 集 12 张 × 目标/今天两侧、B 集承认 `as_of`、C 集逐条豁免、`GateClassFor` 分类）、哨兵防重放的回填腿（`BackfillStatements()`，与建表分开返回）；DDL 在 `DATABASE_URL` 有值时由 `cmd/dataservice` 启动执行。**G4 写面**：`internal/store.BulkInsert` 只开 A 集（B/C 集拒写）、事务前 `visible_at` 判零整批拒收、`ON CONFLICT DO NOTHING` + 内容比对（同内容 no-op / 异内容 `ErrContentConflict` 整批回滚） | **物理搬迁**（`SET SCHEMA` 到 `market` / `ingest`）未做——core 内联 DDL 仍是运行期事实；**回填只在测试库执行过**（2026-10-24，tagged 套件 `-tags backfill` + `DATA_TEST_DSN`），**生产未回填**；**第二写者未真正消灭**：core 侧同步腿仍在写 `market` / `ingest`，且仍用 `DO UPDATE`（与本仓内容比对语义并存，见 ADR-0004 代价）；**写面装配未接**：`ETLPipeline` 尚未挂到本仓同步作业（作业层仍在 core） |
@@ -70,6 +70,16 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 | 4 · 守卫 | ✅ `internal/ingest/protocol_test.go`：`TestUnifiedDataPointIsContractType`（类型必须 == 契约类型）+ `TestDeduplicateKeyDelegatesToContract`（UTC 归一 / 纳秒精度） | 本笔 |
 
 **破坏验证（X1a 收编）**：把别名改回逐字段本地 struct（七字段同形、自带 `DeduplicateKey`）⇒ `TestUnifiedDataPointIsContractType` 红（`ingest.UnifiedDataPoint` ≠ `dataprotocol.UnifiedDataPoint`）；逐字节还原（`sha256 f9b02f6f…`）后复跑绿。
+
+**施工记录（2026-10-25，X1a 常量腿；`go build/vet/test ./...` 全绿）**
+
+| 步 | 结果 | 提交（本仓 main） |
+|---|---|---|
+| 1 · 常量别名 | ✅ `internal/ingest/connectors.go` 的 15 个 `DataType*` 改 `dataprotocol.DataType*` 别名（导出名不变、调用点零改，契约改值编译期随动）；包内字面量零残留 | 本笔 |
+| 2 · 守卫 | ✅ `internal/ingest/protocol_test.go` 新增 `TestDataTypeConstantsMatchContract`（15 个常量逐一 == 契约值） | 本笔 |
+| 3 · 注册面 | ✅ `TestConnectors_CoverAllWireDataTypes`（18 条声明 / 15 个 data_type）、`TestConnectors_DeclarationsMatchSupportedTypes` 同轮 PASS | 本笔 |
+
+**破坏验证（常量腿）**：把 `DataTypeDailyBasic` 改成 `"daily_basic_broken"` ⇒ 守卫红；逐字节还原（`sha256 4a565295…`）后复跑绿。
 
 **验收三条的实测证据（本仓 `go test`）**
 

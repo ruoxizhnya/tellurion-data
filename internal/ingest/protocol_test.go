@@ -33,3 +33,32 @@ func TestDeduplicateKeyDelegatesToContract(t *testing.T) {
 		t.Fatalf("contract DeduplicateKey() = %q, want %q", got, want)
 	}
 }
+
+// QT-40 X1a（常量腿）：15 个 DataType* 必须是契约常量的别名。
+//
+// 编译期自证的是「别名指向契约符号」；这条测试守住回归——把某个常量改回
+// 本地字面量（且契约随后改值）时当场红，避免 wire 取值出现第二份副本。
+func TestDataTypeConstantsMatchContract(t *testing.T) {
+	cases := []struct{ name, got, want string }{
+		{"DataTypeOHLCDaily", DataTypeOHLCDaily, dataprotocol.DataTypeOHLCDaily},
+		{"DataTypeOHLCMinute", DataTypeOHLCMinute, dataprotocol.DataTypeOHLCMinute},
+		{"DataTypeRealtime", DataTypeRealtime, dataprotocol.DataTypeRealtime},
+		{"DataTypeCapitalFlow", DataTypeCapitalFlow, dataprotocol.DataTypeCapitalFlow},
+		{"DataTypeFundamental", DataTypeFundamental, dataprotocol.DataTypeFundamental},
+		{"DataTypeSectors", DataTypeSectors, dataprotocol.DataTypeSectors},
+		{"DataTypeStockSector", DataTypeStockSector, dataprotocol.DataTypeStockSector},
+		{"DataTypeTopList", DataTypeTopList, dataprotocol.DataTypeTopList},
+		{"DataTypeLimitUpPool", DataTypeLimitUpPool, dataprotocol.DataTypeLimitUpPool},
+		{"DataTypeAnnounce", DataTypeAnnounce, dataprotocol.DataTypeAnnounce},
+		{"DataTypeNews", DataTypeNews, dataprotocol.DataTypeNews},
+		{"DataTypeHotSearch", DataTypeHotSearch, dataprotocol.DataTypeHotSearch},
+		{"DataTypeGlobalOHLCV", DataTypeGlobalOHLCV, dataprotocol.DataTypeGlobalOHLCV},
+		{"DataTypeMacro", DataTypeMacro, dataprotocol.DataTypeMacro},
+		{"DataTypeDailyBasic", DataTypeDailyBasic, dataprotocol.DataTypeDailyBasic},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want contract value %q", tc.name, tc.got, tc.want)
+		}
+	}
+}

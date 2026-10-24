@@ -1,5 +1,7 @@
 package ingest
 
+import "github.com/ruoxizhnya/tellurion-contracts/dataprotocol"
+
 // 本文件是 12 个 connector 的**唯一装配面**，取代过渡期的 `Catalog()`
 // 声明清单（`docs/TASKS.md` QT-40 已登记的「catalog 是过渡期双真相」）。
 //
@@ -11,26 +13,28 @@ package ingest
 // 因此装配参数用 `Transports` 显式列出，nil 表示该门以 disabled 注册
 // （取数时跳过，启动不失败）。
 
-// Wire data type 字面值（与 core `pkg/data/source/adapter.go` 常量同值）。
+// Wire data type 取值（契约单源：`tellurion-contracts:dataprotocol`，QT-40 X1a）。
 //
 // 它们是**跨语言契约**：落库的 data_type、声明里的 DataType、读方的过滤值
-// 必须逐字一致。集中定义在这里，12 个 connector 各自引用，不再各写一遍。
+// 必须逐字一致。取值只在契约里定义一次，这里保留本包导出名做别名，12 个
+// connector 的调用点零改动；契约改值时本包取值在编译期随之改变，不再有
+// 第二份副本漂移。
 const (
-	DataTypeOHLCDaily   = "ohlcv_daily"
-	DataTypeOHLCMinute  = "ohlcv_minute"
-	DataTypeRealtime    = "realtime_quote"
-	DataTypeCapitalFlow = "capital_flow"
-	DataTypeFundamental = "fundamentals"
-	DataTypeSectors     = "sectors"
-	DataTypeStockSector = "stock_sector"
-	DataTypeTopList     = "top_list"
-	DataTypeLimitUpPool = "limit_up_pool"
-	DataTypeAnnounce    = "announcements"
-	DataTypeNews        = "news"
-	DataTypeHotSearch   = "hot_search"
-	DataTypeGlobalOHLCV = "global_ohlcv"
-	DataTypeMacro       = "macro_series"
-	DataTypeDailyBasic  = "daily_basic"
+	DataTypeOHLCDaily   = dataprotocol.DataTypeOHLCDaily
+	DataTypeOHLCMinute  = dataprotocol.DataTypeOHLCMinute
+	DataTypeRealtime    = dataprotocol.DataTypeRealtime
+	DataTypeCapitalFlow = dataprotocol.DataTypeCapitalFlow
+	DataTypeFundamental = dataprotocol.DataTypeFundamental
+	DataTypeSectors     = dataprotocol.DataTypeSectors
+	DataTypeStockSector = dataprotocol.DataTypeStockSector
+	DataTypeTopList     = dataprotocol.DataTypeTopList
+	DataTypeLimitUpPool = dataprotocol.DataTypeLimitUpPool
+	DataTypeAnnounce    = dataprotocol.DataTypeAnnounce
+	DataTypeNews        = dataprotocol.DataTypeNews
+	DataTypeHotSearch   = dataprotocol.DataTypeHotSearch
+	DataTypeGlobalOHLCV = dataprotocol.DataTypeGlobalOHLCV
+	DataTypeMacro       = dataprotocol.DataTypeMacro
+	DataTypeDailyBasic  = dataprotocol.DataTypeDailyBasic
 )
 
 // Transports 是 connector 依赖的传输实现集合。nil 字段 = 该门 disabled。
