@@ -32,7 +32,7 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 
 | 序列 | 状态 | 已落 | 未落（不假装完成） |
 |---|---|---|---|
-| X1a 协议冻结 | 🟡 部分 | contracts `v0.4.0`（2026-10-24 切 pin）已含 `domain/market`（`OHLCV` / `Frequency` / `FrequencySpec` / `TimeSemantics` / 可见时刻函数）与 `engine` 的 `DatasetSnapshotInput` 六分量 hash；本仓 `require` 该版本并离线编译通过 | `UnifiedDataPoint` **仍未进 contracts**：G1 第二批发版（QT-05 剩余半边）尚未发生——2026-10-24 实测 upstream 已发 `v0.4.0`，但包清单里**仍没有** `dataprotocol` / `UnifiedDataPoint`（`go list …/tellurion-contracts/...` 核对）。⇒ 本仓的 wire 本地镜像 `internal/ingest/point.go` **继续保留**，不提前删；G1 发版后随包迁走、调用点改前缀 |
+| X1a 协议冻结 | ✅（2026-10-25） | contracts **`v0.6.0`**（2026-10-24 发版、**远端 tag 已推**）新增 `dataprotocol/`：`UnifiedDataPoint` 七字段（含 `VisibleAt`）+ `ToJSON` / `DeduplicateKey` + 15 个 `DataType*` 常量，导出面 447→465。本仓 `require v0.6.0`；`internal/ingest/point.go` 的**逐字段镜像已删**，改为 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`（别名 + 注入时钟的构造器留本侧：契约刻意不读时钟，ADR-0004）；`DeduplicateKey` 公式改为委托契约方法。守卫：`protocol_test.go` 钉住「类型必须是契约那个类型」与去重坐标同值 | 无。**未顺手做（如实）**：`DataType*` 常量仍在本仓 `connectors.go` 各写一遍（与契约定值逐字一致），常量收编未随本单 |
 | X1b aggregator | 🔶 取数面 + 写面代码已落（2026-10-24） | `internal/serving`：`Resolve`（参数校验 → 票池解析 → 取数 → 聚合 → PIT → 六分量 hash → 强幂等缓存）、`Snapshot`（重算 hash + 内容指纹自证）、`Metadata` 回显同源校验；`internal/normalize`：`Aggregate`（1m→15m/1d，会话内对齐、不跨午休、秒级边界）与 `VisibleAsOf`（`visible_at <= as_of`，缺可见时间点整批拒收）；`internal/httpapi`（resolve/snapshot/health，哨兵→状态码映射）+ `cmd/dataservice`；**四个 port 已有 PG 实现** `internal/store`（`DATABASE_URL` 有值即装配；空则 503）；**G4 新增**：`internal/ingest` 的 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate` 与 `internal/store.BulkInsert` 写面 | `/factors/{name}@{hash}` 只有路由、**恒 404**（`factor_cache` 无 dataset hash 列，无法复算内容指纹）；**写面装配未接**：同步作业（`sync_jobs` → worker → `ETLPipeline`）仍在 core；`visible_at` 只从列取、未回填的行会被 PIT 整批拒收（生产 D2 未执行前的预期行为） |
 | X1c connector 声明 | 🔶 connector 已搬（2026-10-24） | **12 个 connector 的取数/归一化已搬入** `internal/ingest`（`declarations_*.go` 各自持声明；运行时 9 方法面在 `adapter.go`）；**过渡期 `Catalog()` 双真相已删除**，装配改 `Connectors(Transports)`；`TushareTransport` / `MootdxTransport` 窄接口把传输留在 core（本仓不 import 实现包）。测试跑在真实 connector 上（18 条声明 / 15 个 data_type；SupportedTypes ↔ Declarations 一一对应） | **传输实现仍在 core**（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端与 raw 归档），本仓只按 `Transports` 注入；core 侧 `pkg/data/source` 的旧实现未删（跨仓切换不在本仓权限内）。**写面已归位**（2026-10-24，G4）：`internal/ingest.ETLPipeline` + `internal/store.BulkInsert`；但**同步作业的装配仍在 core**（`sync_jobs` → worker → ETL），core `pkg/data/source/etl.go` 的旧写路径尚未删 |
 | X1d schema 归属 | 🔶 DDL 归属 + 写面已落（2026-10-24） | `internal/schema`：`market` / `ingest` 建表（19 张，`TableNames()` 可对账）、`visible_at` 三集合（A 集 12 张 × 目标/今天两侧、B 集承认 `as_of`、C 集逐条豁免、`GateClassFor` 分类）、哨兵防重放的回填腿（`BackfillStatements()`，与建表分开返回）；DDL 在 `DATABASE_URL` 有值时由 `cmd/dataservice` 启动执行。**G4 写面**：`internal/store.BulkInsert` 只开 A 集（B/C 集拒写）、事务前 `visible_at` 判零整批拒收、`ON CONFLICT DO NOTHING` + 内容比对（同内容 no-op / 异内容 `ErrContentConflict` 整批回滚） | **物理搬迁**（`SET SCHEMA` 到 `market` / `ingest`）未做——core 内联 DDL 仍是运行期事实；**回填只在测试库执行过**（2026-10-24，tagged 套件 `-tags backfill` + `DATA_TEST_DSN`），**生产未回填**；**第二写者未真正消灭**：core 侧同步腿仍在写 `market` / `ingest`，且仍用 `DO UPDATE`（与本仓内容比对语义并存，见 ADR-0004 代价）；**写面装配未接**：`ETLPipeline` 尚未挂到本仓同步作业（作业层仍在 core） |
@@ -44,7 +44,7 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 | 1 · X1d schema 归属 | 🔶 DDL 归属已落：`internal/schema`（19 张表 / A 集 12 张 `visible_at` 两侧加列 / B 集承认 `as_of` / C 集逐条豁免 / 哨兵回填腿）。**禁 `SET visible_at = trade_date` 有测试钉住** | `9e68de6` |
 | 2 · 4 个 port 的 PG 实现 | ✅ `internal/store` 四 port 落地并接线：`DATABASE_URL` 有值 → 建池 → 执行 DDL → aggregator；空 → 503。`visible_at` 只从列里取，NULL 交 PIT 整批拒收 | `ae85295` |
 | 3 · 12 connector 搬入 | ✅ 12 个门搬入 `internal/ingest`（11 个文件，东财 sectors/toplist 同文件两门），一 connector 一 commit；**`Catalog()` 双真相已删除** | `a659ff0` + `34e3978`…`92e66fd`（12 笔）+ `00aeb25` |
-| 4 · `UnifiedDataPoint` 迁 contracts | ⛔ **阻塞（前置未解除）**：G1 第二批次尚未发版——upstream 已发 `v0.4.0`，包清单仍无 `dataprotocol` / `UnifiedDataPoint`。本地镜像 `internal/ingest/point.go` 保留，不提前删 | —— |
+| 4 · `UnifiedDataPoint` 迁 contracts | ⛔ **阻塞（前置未解除）**：G1 第二批次尚未发版——upstream 已发 `v0.4.0`，包清单仍无 `dataprotocol` / `UnifiedDataPoint`。本地镜像 `internal/ingest/point.go` 保留，不提前删（**2026-10-25 已解除**：contracts `v0.6.0` 已推，见下方 X1a 收编记录） | —— |
 
 **施工记录（2026-10-24，G4 三步；`go build/vet/test ./...` 全绿）**
 
@@ -59,6 +59,17 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 | 步 | 结果 | 提交（本仓 main） |
 |---|---|---|
 | P6 · `visible_at` 回填（仅测试库） | ✅ `internal/schema/backfill_pg_test.go`（`-tags backfill`，默认构建不编译）：临时 schema 真跑 `BackfillStatements()`；A 集 12 张逐档取值（after_close / 锚点列 / ingest_time / created_at）、哨兵防重放与二次执行不改值、B 集 `as_of` 不改写、C 集无 `visible_at`；DSN 只认 `DATA_TEST_DSN` 且库名须 `_test`——生产 DSN（`DATABASE_URL`）与生产库名**自动 skip**，已设但连不上 fail-loud。**生产库未回填** | —— |
+
+**施工记录（2026-10-25，X1a 收编 contracts `v0.6.0`；`go build/vet/test ./...` 全绿）**
+
+| 步 | 结果 | 提交（本仓 main） |
+|---|---|---|
+| 1 · 契约 pin | ✅ `go get github.com/ruoxizhnya/tellurion-contracts@v0.6.0`（`v0.5.0 → v0.6.0`）；远端 tag 实测存在（`git ls-remote --tags origin v0.6*`） | 本笔 |
+| 2 · 删镜像 | ✅ `internal/ingest/point.go` 的逐字段 struct 删除，改 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`；`ToJSON` 用契约方法；注入 `IngestTime` 的构造器留本侧（契约不读时钟） | 本笔 |
+| 3 · 去重坐标单源 | ✅ `internal/ingest/dedupe.go` 的 `DeduplicateKey(p)` 改为委托 `p.DeduplicateKey()`，不再另写公式 | 本笔 |
+| 4 · 守卫 | ✅ `internal/ingest/protocol_test.go`：`TestUnifiedDataPointIsContractType`（类型必须 == 契约类型）+ `TestDeduplicateKeyDelegatesToContract`（UTC 归一 / 纳秒精度） | 本笔 |
+
+**破坏验证（X1a 收编）**：把别名改回逐字段本地 struct（七字段同形、自带 `DeduplicateKey`）⇒ `TestUnifiedDataPointIsContractType` 红（`ingest.UnifiedDataPoint` ≠ `dataprotocol.UnifiedDataPoint`）；逐字节还原（`sha256 f9b02f6f…`）后复跑绿。
 
 **验收三条的实测证据（本仓 `go test`）**
 
@@ -90,7 +101,7 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 - **传输未搬**：Tushare / 东财 / Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档仍在 core；本仓按 `Transports` 注入。
 - **写面代码已落、装配未接**：`ETLPipeline` 与 `store.BulkInsert` 在本仓（2026-10-24，G4），但**同步作业层仍在 core**（`sync_jobs` → worker → ETL），本仓没有作业装配/调度；core `pkg/data/source/etl.go` 的旧写路径尚未删，且仍用 `ON CONFLICT DO UPDATE`（与 ADR-0004 的内容比对语义并存）。
 - **`/factors/{name}@{hash}` 只有路由**：恒 404 `factor_not_found`。`factor_cache` 没有 dataset hash 列，按 `(name, hash)` 定位并复算内容指纹的条件不存在；表结构变更前**不返回任何数据**。
-- **跨仓腿（报协调者，本仓不做）**：① 物理 `SET SCHEMA` 需要 core 先停第二写者；② 传输实现仍在 core（X1c 已登记）；③ `UnifiedDataPoint` 迁 contracts 等 G0D-C4 发版。
+- **跨仓腿（报协调者，本仓不做）**：① 物理 `SET SCHEMA` 需要 core 先停第二写者；② 传输实现仍在 core（X1c 已登记）；③ ~~`UnifiedDataPoint` 迁 contracts 等 G0D-C4 发版~~ **已解除（2026-10-25）**：contracts `v0.6.0` 已推，本仓镜像已删、改别名，见上方 X1a 收编记录。
 
 **已登记的取舍与风险（必须随 X1b 一起读）**
 
@@ -143,7 +154,7 @@ verified-by: QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本
 
 | 阶段 | 内容 | 上游单号 | 前置 |
 |---|---|---|---|
-| X1a | 协议冻结进 contracts（`UnifiedDataPoint` / `TimeSemantics` / 四类错误码） | `QT-40` | 本仓立项 |
+| X1a | 协议冻结进 contracts（`UnifiedDataPoint` / `TimeSemantics` / 四类错误码） | `QT-40` | ✅ 本仓立项（2026-10-25 已收编 `v0.6.0`） |
 | X1b | aggregator：PIT 过滤 + 频率聚合 + 票池解析 + `dataset_snapshot_hash` | `QT-40` | X1a |
 | X1c | 12 个 connector 收口到 `ConnectorDeclaration`，漏声明即拒收 | `QT-40` | X1b |
 | X1d | `market` / `ingest` schema 归属迁移，消灭第二写者 | `QT-40` | X1c |

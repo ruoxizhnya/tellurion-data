@@ -1,14 +1,10 @@
 package ingest
 
-import "time"
-
-// 去重口径与 core `tellurion:pkg/data/source/unified.go` 逐字一致：
-// `symbol | data_type | trade_time(RFC3339Nano, UTC)`。
-//
-// 为什么带 data_type：同一个 symbol 同一时刻可以同时有日线、资金流、
-// 实时快照三个点，它们写不同的表，不能互相去重。
+// 去重坐标只有一份实现：`dataprotocol.UnifiedDataPoint.DeduplicateKey()`
+// （`symbol | data_type | trade_time`，UTC/RFC3339Nano）。本函数保留包内
+// 调用形状，不另写公式——两处各写一遍就会漂。
 func DeduplicateKey(p UnifiedDataPoint) string {
-	return p.Symbol + "|" + p.DataType + "|" + p.TradeTime.UTC().Format(time.RFC3339Nano)
+	return p.DeduplicateKey()
 }
 
 // Deduplicate 保留每个键的**首次出现**，返回新切片（输入不变）。
