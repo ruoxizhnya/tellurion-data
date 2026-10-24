@@ -19,6 +19,9 @@ go test ./...
 ```
 
 - 这三条是 R1/R2 的判据：**单独 checkout 就能绿**。
+- 可选集成测试（无外部条件时自动 skip）：
+  - `visible_at` 回填（D2，仅测试库）：`DATA_TEST_DSN='postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable' go test -tags backfill ./internal/schema -count=1`
+    —— 默认构建不编译；只读 `DATA_TEST_DSN` 且库名必须以 `_test` 结尾（生产 `DATABASE_URL` / 生产库名自动 skip），已设置但连不上则 fail-loud。临时 schema 跑完即删，不碰目标 `market` / `ingest`。
 - 若某一步需要别的仓的源码目录才过，那是**边界画错了**——停下来修边界，**不要**加 `replace ../xxx` 绕过。
 - 本机同时改多个仓时可用 `go.work` 联调，但**它不入库**（`.gitignore` 已挡）。
 
