@@ -19,16 +19,16 @@ verified-by: QT-40 G4 —— 写面（`Registry.Fetch` / `ETLPipeline` / `GatePo
         ↓
 [存储]  market / ingest（目标态；今天多数表落 public，X1d 分批迁，现状见 db-schema.md §1）  ← 内容真相源，DDL 唯一 owner = 本仓；写面 = `BulkInsert`
         ↓
-[aggregator]  PIT 过滤 · 频率聚合 · 票池解析 · 快照 hash · 缓存 · 因子值   ← 对外唯一面
-        ↓  /datasets/resolve · /datasets/{hash} · /factors/{name}@{hash}
+[aggregator]  PIT 过滤 · 频率聚合 · 票池解析 · 快照 hash · 缓存   ← 对外唯一面
+        ↓  /datasets/resolve · /datasets/{hash}
 core（回测/实盘）   analytics（基准/归因）   strategy（资产）   agent（实验）
 
-（过渡第二路径，X1d 收敛）core ──直读──▶ factor_definitions / factor_cache（因子定义无对外面）
+（过渡第二路径，X1d 收敛）core ──直读──▶ factor_definitions / factor_cache（因子读面只在 core，本仓不提供）
 ```
 
 > **频率分表与聚合口径**（`tellurion:docs/SPEC.md` 频率词表）：`1m` = `ohlcv_minute` 原样；`1d` = `ohlcv_daily_qfq`（唯一进回测的口径）；`15m` **由 1m 聚合产出、不物化**，每次取数实时聚合。图中与 §2 的「频率聚合」只指这一种。
 > **代码落点（2026-10-24，G4）**：图中「归一化」的聚合与 PIT 两段在 `tellurion-data:internal/normalize`，**ETL 编排（`Registry.Fetch` / `ETLPipeline` / `ValidatePoints` / `GatePoints` / `Deduplicate`）在 `tellurion-data:internal/ingest`**；「aggregator」在 `tellurion-data:internal/serving`；存储的**读面（四个取数 port）与写面（`BulkInsert`）都在** `tellurion-data:internal/store`（`visible_at` 只从列里取、缺列交 PIT 整批拒收；写面只落 A 集表）。**仍在 core**：connector 的传输实现（Tushare/东财/Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档，经 `ingest.Transports` 注入）与同步作业的装配（`sync_jobs` → worker → `ETLPipeline`）；core 侧 `pkg/data/source` 的旧写路径尚未删。
-> **因子边**：因子**值**走对外面 `GET /factors/{name}@{hash}`（见 `api-schema.md` §1）；因子**定义**（`factor_definitions`）无对外面，今天 core 直读 `factor_definitions` / `factor_cache` —— **过渡第二路径**（如实登记上图），X1d 后收敛为只经 API（见 `db-schema.md` §5）。
+> **因子边（裁-14，2026-10-25）**：本仓**不提供因子读面**——`/factors/{name}@{hash}` 已撤掉。因子**值**与**定义**的生产方和读端点都在 core（`pkg/data` → `SaveFactorCacheBatch`；`cmd/data/handlers_factor.go`），今天 core 直读 `factor_definitions` / `factor_cache`（过渡路径，如实登记上图）。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。
 
 ## 2. 关键时序
 
@@ -61,7 +61,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 | 批次漏 `visible_at` | 不可见的数据混进快照（前视） | `ingest.GatePoints` 按声明锚点逐点校验、`store.BulkInsert` 事务前再判一次；任一 offender ⇒ `ErrVisibleAtMissing` **整批拒收**（用例 `TestWriter_RejectsWholeBatchWithoutVisibleAt` / `TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting` / PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`） |
 | 同主键重写但内容不同 | 「同 hash 不同内容」静默出现 | `ErrContentConflict` + **整批回滚**（用例 `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`）；同内容重写是 no-op |
 | 往 B/C 集表写 | 同一张表两个可见性锚点 | `store.specFor` 复核 `schema.GateClassFor`：B/C ⇒ `ErrWriteTableNotInASet`，未知 ⇒ `ErrUnmappedDataType`；写面只开 A 集 |
-| 因子端点没有数据依据 | 返回空数组 / 样例值 = 伪数据 | `/factors/{name}@{hash}` 恒 404 `ErrFactorNotFound`，参数形状非法才是 400 |
+| 因子读面误挂本仓 | 常驻 404 被读成「该数据集没有该因子」 | 裁-14 已撤路由；重新引入 `/factors/*` ⇒ `TestFactorRouteIsRemoved` 红（路由表与契约双向对拍） |
 
 ## 4. 不变量（可被测试钉住的）
 
@@ -71,7 +71,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 4. connector 全部走 `ConnectorDeclaration`（漏声明被拒收）。
 5. 写面幂等：同主键同内容重写 = no-op；同主键异内容 = fail-loud 且整批不落（`ON CONFLICT DO NOTHING` + 内容比对，排除 `ingest_time`）。
 6. 写面只落 A 集（`visible_at` 三集合门）；B/C 集只能走各自同步腿或被明确豁免。
-7. `/factors/{name}@{hash}` 在无法复算内容指纹前不返回任何数据（404，不造假）。
+7. 本仓**不提供因子读面**（裁-14）：路由表里没有 `/factors/*`，因子值 / 定义一律由 core 提供。
 
 ## 5. 与契约文档的关系
 

@@ -6,7 +6,6 @@ import "errors"
 //   - ErrMissingParameter / ErrInvalidParameter / ErrUniverseAmbiguous / ErrUnexpectedSymbol ⇒ 400
 //   - ErrEmptyUniverse / ErrEmptyCalendar ⇒ 409（明确失败，不返回空数据集）
 //   - ErrSnapshotNotFound ⇒ 404（「没这个 hash」）
-//   - ErrFactorNotFound ⇒ 404（因子端点未实现 / 没这个因子；**不得用伪数据填**）
 //   - ErrSnapshotMismatch ⇒ 500 + 告警（内容与 hash 不符 / 缓存串号）
 //
 // 哨兵只增不删、不改语义。
@@ -33,8 +32,4 @@ var (
 	ErrSnapshotNotFound = errors.New("serving: dataset snapshot not found")
 	// ErrSnapshotMismatch 是内容与 hash 不符（500 + 告警）。
 	ErrSnapshotMismatch = errors.New("serving: dataset snapshot content does not match its hash")
-	// ErrFactorNotFound 是因子端点暂无该 (name, hash) 的内容。
-	// 今天 `factor_cache` 没有 dataset hash 列，真实实现要等表结构变更；
-	// 在那之前该端点**恒 404**，绝不返回「看起来像因子」的伪数据。
-	ErrFactorNotFound = errors.New("serving: factor not found")
 )

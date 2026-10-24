@@ -1,12 +1,12 @@
 ---
 status: active
-last-verified: 2026-10-24
-verified-by: QT-40 G4 —— `/factors/{name}@{hash}` 路由上线（未实现前恒 404）与 `ErrFactorNotFound` 入错误表；内部链路补 visible_at 整批门
+last-verified: 2026-10-25
+verified-by: 裁-14 落地（D4-1）——撤掉 `/factors/{name}@{hash}` 路由与恒 404 占位；因子读面只在 core。路由表由 `internal/httpapi` 的 `TestRouteTableIsThePublishedSurface` / `TestFactorRouteIsRemoved` 钉住
 ---
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-24 更新，X1d）**：`GET /datasets/resolve` 与 `GET /datasets/{hash}` 的 **HTTP handler 已落地**（`internal/httpapi/server.go` + `cmd/dataservice`，标准库 `net/http`；哨兵 → 状态码映射见 `sentinelCodes`，未登记错误一律 500）。**四个取数 port 已有 PG 实现**（`internal/store`：`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver`），进程在 `DATABASE_URL` 有值时启动即执行本仓 schema 的 DDL 并接线；**为空时仍 fail-closed 503**（`/health` 常绿）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（默认 `market`；物理搬迁完成前设空串走 `public`）。`/factors/{name}@{hash}` 仍无实现（无端点代码，openapi 不收）。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
+> **实现状态（2026-10-25 更新，裁-14）**：`GET /datasets/resolve` 与 `GET /datasets/{hash}` 的 **HTTP handler 已落地**（`internal/httpapi/server.go` + `cmd/dataservice`，标准库 `net/http`；哨兵 → 状态码映射见 `sentinelCodes`，未登记错误一律 500）。**四个取数 port 已有 PG 实现**（`internal/store`：`BarSource` / `TradingCalendar` / `DataVersioner` / `UniverseResolver`），进程在 `DATABASE_URL` 有值时启动即执行本仓 schema 的 DDL 并接线；**为空时仍 fail-closed 503**（`/health` 常绿）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（默认 `market`；物理搬迁完成前设空串走 `public`）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core，本仓 openapi / 本文同步删除该路径。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一入口**，connector 与存储不直接对外。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
@@ -20,13 +20,12 @@ verified-by: QT-40 G4 —— `/factors/{name}@{hash}` 路由上线（未实现�
 |---|---|---|
 | GET | `/datasets/resolve?universe=&index_code=&from=&to=&freq=&adjustment=&as_of=` | 解析票池 + 窗口 + 频率 + 复权口径 + 可见时点 ⇒ `{dataset_hash, metadata}`（`metadata` 回显六分量） |
 | GET | `/datasets/{hash}` | 按 hash 取数据（同一 hash 两次结果必须**字节一致**） |
-| GET | `/factors/{name}@{hash}` | 按数据集 hash 取**已落库的因子值**（不是求值服务，见 §5） |
 
 内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。
 
-> **实现状态（2026-10-24，G4 落账）**：
+> **实现状态（2026-10-25，裁-14 落账）**：
 > - `/datasets/resolve`、`/datasets/{hash}`：已实现（`internal/httpapi` + `internal/serving`）。
-> - `/factors/{name}@{hash}`：**路由已上线，但恒 404 `factor_not_found`**。`factor_cache` 没有 dataset hash 列，按 `(name, hash)` 定位并复算内容指纹的条件不存在；在表结构变更前**不返回任何伪数据**（空数组 / 样例值都不行）。参数形状非法（缺 `@` / 缺 name / 缺 hash）⇒ 400 `invalid_parameter`，与「没这个因子」分开。
+> - `/factors/{name}@{hash}`：**已撤掉**（裁-14，2026-10-25）。路由表里不存在它 ⇒ ServeMux 默认 404；不再有 `factor_not_found` 文案。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**。上移触发条件（任一成立再启动整体迁移）：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
 
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
@@ -44,8 +43,7 @@ verified-by: QT-40 G4 —— `/factors/{name}@{hash}` 路由上线（未实现�
 | `ErrUnsupported` | ✅（`tellurion:pkg/data/source/adapter.go:73`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
 | `ErrVisibleAtMissing` | ✅（`tellurion-data:internal/normalize/pit.go`） | 数据点缺 `visible_at` | 拒收该批次；**不许用 mtime 兜底**。⚠️ 代价：历史行无该列、不可回填 ⇒ 与 X1d 加列同批设计（对表 T5） |
 | `ErrSnapshotMismatch` | ✅（`tellurion-data:internal/serving/errors.go`） | hash 与返回内容不一致 | 500 + 告警（数据已被篡改或缓存串了）；与「没这个 hash」（404）**必须是两个码** |
-| `ErrFactorNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | `/factors/{name}@{hash}` 尚无按 `(name, hash)` 定位并复算内容指纹的依据（`factor_cache` 无 dataset hash 列），或该 `(name, hash)` 不存在 | 404 `factor_not_found`；**不许返回空数组 / 样例值**（伪数据）。参数形状非法（缺 `@` / 缺 name / 缺 hash）走 `ErrInvalidParameter` ⇒ 400，与「没这个因子」分开 |
-| `ErrMissingParameter` / `ErrInvalidParameter` / `ErrUniverseAmbiguous` / `ErrEmptyUniverse` / `ErrEmptyCalendar` / `ErrEmptyDataVersion` / `ErrUnexpectedSymbol` / `ErrSnapshotNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | resolve 参数缺失 / 非法 / 票池二义 / 票池为空 / 日历为空 / 数据版本为空 / 越界 symbol；按 hash 取不到 | 400 / 409 / 404 的分诊口径见该文件头注释；哨兵只增不删 |
+| `ErrMissingParameter` / `ErrInvalidParameter` / `ErrUniverseAmbiguous` / `ErrEmptyUniverse` / `ErrEmptyCalendar` / `ErrEmptyDataVersion` / `ErrUnexpectedSymbol` / `ErrSnapshotNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | resolve 参数缺失 / 非法 / 票池二义 / 票池为空 / 日历为空 / 数据版本为空 / 越界 symbol；按 hash 取不到 | 400 / 409 / 404 的分诊口径见该文件头注释；哨兵只增不删（**唯一例外**：`ErrFactorNotFound` 随裁-14 撤路由一并删除，不再有第二个「因子读面在本仓」的真相） |
 
 ## 3. 幂等性与重试
 
@@ -65,5 +63,5 @@ verified-by: QT-40 G4 —— `/factors/{name}@{hash}` 路由上线（未实现�
 - 不提供逐 bar / 逐笔取数接口
 - **不把本仓做成「HTTP 包装的通用 DB 网关」**（`tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2 对 ADR-027 §7 的对账结论）：core `cmd/data` 今天那批 `GET /ohlcv/:symbol`、`GET /fundamental/:symbol` 是**逐 symbol 逐日期的 DB 代理形状**，X1b 的归位是**并入 resolve + dataset**，不是原样搬进本仓——逐个端点的去处见对表 D 组
 - 不提供回测结果存储（那是 run）
-- 不提供策略 / 因子**计算**（只提供已落库的因子值）——**因子定义与 SeriesSpec 归 strategy**（ADR-027 §2.6.1 / ADR-028 §6），求值在消费点（§7「不做因子服务」）；三条界线的定案见对表 G 组 L1
+- 不提供策略 / 因子**计算**，也**不提供因子读面**（裁-14 撤掉 `/factors/{name}@{hash}`）——因子定义与值一律由 core 提供；**因子定义与 SeriesSpec 归 strategy**（ADR-027 §2.6.1 / ADR-028 §6），求值在消费点（§7「不做因子服务」）；三条界线的定案见对表 G 组 L1
 - 不提供跨 schema join（宁可多一次调用）

@@ -178,30 +178,46 @@ func TestErrorMapping(t *testing.T) {
 	assert.Equal(t, "empty_universe", body.Error.Code)
 }
 
-// 因子端点：形状合法但内容未实现 ⇒ 恒 404 factor_not_found，绝不返回伪数据。
-// 即使 aggregator 未接线也一样 404（不能把「没实现」伪装成依赖不可用）。
-func TestFactorEndpointIsAlways404AndNeverFake(t *testing.T) {
+// 裁-14（2026-10-25）：`/factors/{name}@{hash}` 已撤掉。
+//
+// 判据两条：
+//   - 路由表里没有它（ServeMux 的默认 404，而不是带 JSON 错误码的业务 404）；
+//   - 响应里不出现 `factor_not_found` —— 常驻 404 会被读成「该数据集没有该因子」。
+func TestFactorRouteIsRemoved(t *testing.T) {
 	for _, agg := range []*serving.Aggregator{nil, newTestAggregator(t, []string{"600519.SH"})} {
 		r := New(agg).Routes()
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/factors/momentum@deadbeef", nil))
-		require.Equal(t, http.StatusNotFound, rec.Code)
-		var body errorBody
-		require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "factor_not_found", body.Error.Code)
-		assert.NotContains(t, rec.Body.String(), "\"data\"", "404 响应不得携带任何数据字段")
+		for _, path := range []string{"/factors/momentum@deadbeef", "/factors/momentum", "/factors/@x"} {
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusNotFound, rec.Code, path)
+			assert.NotContains(t, rec.Body.String(), "factor_not_found", path)
+			assert.NotContains(t, rec.Body.String(), "dataset_hash", path)
+		}
 	}
+}
 
-	// 形状非法（缺 @ / 缺 name / 缺 hash）⇒ 400，与「没这个因子」分开。
-	r := New(nil).Routes()
-	for _, path := range []string{"/factors/momentum", "/factors/@deadbeef", "/factors/momentum@"} {
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		require.Equal(t, http.StatusBadRequest, rec.Code, path)
-		var body errorBody
-		require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "invalid_parameter", body.Error.Code, path)
-	}
+// TestRouteTableIsThePublishedSurface 钉住对外路由集合：`/health` + 两条数据面。
+// 新增端点必须先改 `docs/api-schema.md`（路由表与契约双向对拍），再加到这里。
+func TestRouteTableIsThePublishedSurface(t *testing.T) {
+	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	r := srv.Routes()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// resolve 缺参数 ⇒ 400（说明路由存在且 handler 在位），不是 404。
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/datasets/resolve", nil))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// 未知 hash ⇒ 业务 404 snapshot_not_found（说明 `/datasets/{hash}` 在位）。
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/datasets/deadbeef", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	var body errorBody
+	require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "snapshot_not_found", body.Error.Code)
 }
 
 // 端口未接线：/health 常绿，数据端点 fail-closed 503 dependency_unavailable。
