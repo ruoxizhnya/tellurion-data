@@ -13,7 +13,7 @@ verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一读入口**，connector 与存储不直接对外；写面只有投点这一条，且**只接受有界批次**。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
-> **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.1` 的 `auth/httpadapter`，策略表在本仓
+> **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
 > `internal/httpapi/policy.go`。`/health` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
 > `viewer` 及以上（any-of 写全，不是层级）；**写端点只接受 `service` / `admin`**（见 §1 策略表注）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；

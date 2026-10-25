@@ -146,6 +146,15 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 
 **破坏验证（G6）**：把两条 Rules 的 `service` 抽掉 ⇒ `TestServedPolicyServiceRole` 红在 wire 层（`/datasets/resolve` 实得 403 `forbidden`，期望 503 `dependency_unavailable`）；逐字节还原（`sha256 16956C20…` 与还原后一致）后 `TestServedPolicyServiceRole` / `TestRouteTableEqualsServedPolicy` / `TestAuthWireThreeStates` 三条复跑绿。
 
+> **订正（2026-10-25，随 kit `KT-11` / `v0.1.4`）· 上面第 2 步「不升 kit」的结论已被证伪 ⇒ 本仓 pin 现为 `v0.1.4`**
+> 第 2 步当时判的是「**角色档位**能不能用 `service` 串」——那一半仍然成立（`Authorize` 走 any-of 精确串匹配，不依赖 kit 的角色枚举）。
+> 它漏判的是**同一条 token 能否过 `Authenticate`**：`v0.1.1` 的 `authenticate()` 无条件要求 `claims.UserIDInt64()`，
+> 而裁-17 的口径是 `sub=service:<repo>`（非数字）⇒ 服务 token 在**进入策略表之前**就 401 `malformed token subject`，
+> `TestServedPolicyServiceRole` 当时能过是因为它用的是 `IssueTokens` 签的**数字 subject** + `role=service`，绕开了这个形状。
+> kit `v0.1.4`（`KT-11`）只对 `claims.Role == auth.ServiceRole` 放宽该校验，其余输入仍 401。
+> **本仓动作**：`go.mod` / `go.sum` 升 `v0.1.4`（`go.sum` 两行取自 `sum.golang.org`；`v0.1.4/go.mod` 的 hash 与 `v0.1.1` 逐字节相同 ⇒ 依赖图未变），
+> `AGENTS.md` §4 那一行同步。**验收证据 = CI 退出码**（本机无 Go 工具链，`go build/vet/test` 一条都没复跑，不拿本机绿当结论）。
+
 > **裁决（2026-10-25，主任口径）· ⑨：`visible_at` 生产库回填 —— 暂不授权**
 > 裁决全文见 `tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑨。
 >
@@ -186,7 +195,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
   - **端点从未对真 PG 跑过一次**：`store.Writer` 的 PG 腿是 opt-in（`DATA_TEST_DSN`），HTTP → assembly → PG 的**整条**在本机没有跑通过（取证与复现命令见 `api-schema.md` §1 末的 ⚠️）。登记为缺口，不写成「端到端已验收」。
 - ~~**`/factors/{name}@{hash}` → 裁-14（2026-10-25）**~~ **✅ 已落（D4-1，2026-10-25，本笔）**：路由、`handleFactor`、`ErrFactorNotFound` 与恒 404 占位全部撤掉，不做表迁移。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算（因子 / 回测 / IC）列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**，本仓 openapi / api-schema 同步删除该路径。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
 - ~~**鉴权未移植（裁-15，2026-10-25 已定，可开工）**~~ **✅ 已落（2026-10-25，W4）**：新 `dataservice` 已接 kit `v0.1.1` 的 net/http 适配；`servedPolicy` = `/health` Public + `/datasets/*` viewer；旧 `cmd/data` 的 REV-17 表 28 条逐条移植为 `legacyREV17`（端点迁入时直接挂闸）；路由表 ≡ 策略表守卫 + 三态测试已落。**未落**：REV-17 对应的端点和真实保护仍在 core `cmd/data`（本仓只持迁移表）；core `proxyRequest` 已转发 `Authorization`（2026-10-25）。
-  - ~~**服务间凭证（裁-17 定稿，2026-10-25）：`servedPolicy` 两条 Roles 需加 `"service"`**~~ **✅ 本仓半边已落（G6，2026-10-25，本笔）**：`GET /datasets/resolve`、`GET /datasets/{hash}` 的 Roles 现为 `service` + viewer / trader / admin，`/health` 保持 Public；**没升 kit**（服务 token 就是 `kind=access` 上的角色串，pin 的 `v0.1.1` 即可验，见上方施工记录第 2 步）。**仍未落**：部署清单给 `data-service` 配 `JWT_SECRET` 与调用方 `service` token 属 core QT-71 腿。
+  - ~~**服务间凭证（裁-17 定稿，2026-10-25）：`servedPolicy` 两条 Roles 需加 `"service"`**~~ **✅ 本仓半边已落（G6，2026-10-25，本笔）**：`GET /datasets/resolve`、`GET /datasets/{hash}` 的 Roles 现为 `service` + viewer / trader / admin，`/health` 保持 Public；~~**没升 kit**（服务 token 就是 `kind=access` 上的角色串，pin 的 `v0.1.1` 即可验，见上方施工记录第 2 步）~~ **⚠️ 这半句已订正（2026-10-25，随 kit `KT-11` / `v0.1.4`）：`v0.1.1` 的 `Authenticate` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，策略表根本读不到 ⇒ 本仓 pin 已升 `v0.1.4`，理由与取证见上方 G6 施工记录末的订正块**。**仍未落**：部署清单给 `data-service` 配 `JWT_SECRET` 与调用方 `service` token 属 core QT-71 腿。
 - **跨仓腿（报协调者，本仓不做）**：① 物理 `SET SCHEMA` 需要 core 先停第二写者；② 传输实现仍在 core（X1c 已登记）；③ ~~`UnifiedDataPoint` 迁 contracts 等 G0D-C4 发版~~ **已解除（2026-10-25）**：contracts `v0.6.0` 已推，本仓镜像已删、改别名，见上方 X1a 收编记录。
 
 **已登记的取舍与风险（必须随 X1b 一起读）**
