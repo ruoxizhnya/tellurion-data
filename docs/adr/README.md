@@ -25,3 +25,4 @@
 | [0003](0003-connector搬入本仓传输以窄-port-留在-core.md) | connector 搬入本仓，传输以窄 port 留在 core | 已裁决 |
 | [0004](0004-写面归属-store-与幂等内容比对.md) | 写面归属 store，幂等用内容比对而非 last-write-wins | 已裁决 |
 | [0005](0005-鉴权接入-kit适配与REV-17移植.md) | 鉴权接入：kit net/http 适配 + REV-17 移植 | 已裁决（2026-10-25） |
+| [0006](0006-跨仓写入经HTTP投点与装配层归属.md) | 跨仓写入经 HTTP 投点；投影与闸门归 `internal/assembly` | 已裁决（2026-10-25，含两条待裁） |

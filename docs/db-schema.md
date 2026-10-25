@@ -45,10 +45,15 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 | `factor_cache` | 因子值结果（按 symbol/date 缓存） |
 | `factor_returns` | 因子分组收益（`factor_name` × `trade_date` × `quintile`，写者 `tellurion:pkg/storage/cache.go`） |
 | `ic_analysis` | 因子 IC 分析结果（`factor_name` × `trade_date`，写者 `tellurion:pkg/storage/cache.go`） |
-| `factor_hypothesis` | 因子假设登记与内置种子（写者 `tellurion:pkg/storage/factor_hypothesis.go`） |
+| `factor_hypothesis` | 因子假设登记与内置种子 —— **⚠️ owner 已改判（2026-10-25，U8 裁决）= `tellurion-agent` 仓的 `ai.*` 域**，**不再属本仓因子域**；core 侧写者 `tellurion:pkg/storage/factor_hypothesis.go` 属过渡期实现 |
 | `factor_registrations` / `factor_registration_audit` / `factor_mining_records` | 因子注册与审计 / 挖掘留痕（D8，同族治理账本：登记记「谁把哪一版接进来」，挖掘留痕记「这一版凭什么进库」；写者同为数据服务挖掘入口） |
 
 > **SPEC-R-02 认领**：`factor_returns` / `ic_analysis` / `factor_hypothesis` 属本仓**因子域**（与 `factor_cache` / `factor_definitions` 同域），唯一 owner = `tellurion-data`。当前 DDL 文本实体在 `tellurion:pkg/storage/postgres.go`（core 内联 DDL 为唯一真相），X1d 按 schema 迁移时随因子域一并搬走；在此之前 core 的写入属过渡期实现，不回写归属。
+>
+> **⚠️ 上面这条 SPEC-R-02 认领已被 U8 裁决部分推翻（2026-10-25，主任口径）**：`factor_hypothesis` 的 owner **改判为 `tellurion-agent` 仓的 `ai.*` 域**（它是 ADR-023 的实验日志，不是仪器域数据）。**本仓只保留 `factor_returns` / `ic_analysis` 的因子域认领**。
+> **依据（实测）**：agent 仓 `pkg/aistore/schema.go` 的 `Tables` 清单**已含 `ai.factor_hypothesis`**（QT-17 迁移时随 core `public.factor_hypothesis` 一起搬，schema 前缀只改 `public` → `ai`）⇒ **事实上的 owner 已经是 agent**；本条 SPEC-R-02 认领是**过期快照**，不改会让 X1d 的 schema 清单与 agent 的 `ai.*` 表名单各写一次（撞车）。
+> **落地动作**：① 本表 `factor_hypothesis` 行已改判（见上）；② SPEC-R-02 的结案表出订正条；③ `tellurion-agent` 的 `ai.*` 表名单**已含**该表（实测在册），**本轮无需再动**。
+> **裁决全文**：`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑪。
 
 ### 1.4 专题数据
 
@@ -70,6 +75,8 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
+
+> **⚠️ 这条红线今天只对两条链成立（2026-10-25 实测，H4 ② 落账）**：`capital_flow` 与 `top_list` 的写入方**只有本仓**（core 的那两条作业改成 `POST /ingest/points`，不再自己 `ON CONFLICT DO UPDATE`）。core 仍是下列表的写者：`ohlcv_daily_qfq`（`tellurion:pkg/storage/ohlcv.go:15,53`）、`sectors` 与 `stock_sector_map`（`tellurion:pkg/storage/sector.go:56,96`），另有两处带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`）。**判点数以 grep 为准，本节不写死的数**（写进去的那个数下一次漂移没人负责）。物理 `SET SCHEMA` 搬迁（D4）因此**仍未解除**：搬走 A 集表会让 core 那三处**无前缀**写点落到 `public` 的新同名表上，悄悄造出两份真相 —— 那一步的前置是「core 的 A 集写点全部归一或停写」，不是「停掉两个 executor」。
 
 > **迁移不是改名**：X1d 的头号目标是"单一写者"，不是"统一前缀"。今天多数表无前缀（落默认 schema），搬进 `market` 要动所有读方 —— 分批进行，每批都要过对拍。
 
@@ -189,4 +196,5 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 3. 覆盖面要如实登记：B 集与 C 集里「门拦不到」的每一条，都要有一条测试或一条显式豁免，**不许靠"门在 ETL 上"这句话默认全覆盖**。
 4. **已落的测试证据（2026-10-24，G4）**：整批拒收 —— `TestWriter_RejectsWholeBatchWithoutVisibleAt`、`TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting`、PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`；B 集拒写 —— `TestWriter_RejectsTablesOutsideASet`、PG 腿 `TestPG_BulkInsert_RejectsBSetType`；同 hash 重写 —— `TestWriter_SameContentRewriteIsNoOp` / `TestPG_BulkInsert_IsIdempotentOnSameContent`，异内容 —— `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`。**破坏验证**：把 `store.BulkInsert` 的 `VisibleAt` 判空短路（`if false && …`）⇒ 整批拒收用例红；逐字节还原后绿（SHA256 一致）。
 5. **回填测试证据（2026-10-24，P6，仅测试库）**：`TestBackfillSuite_TestDatabaseOnly`（`-tags backfill`）PASS —— A 集 12 张回填后无 NULL 且逐档取值符合 §6.3/§6.4（after_close 显式 15:00 北京、锚点列、`ingest_time`、`created_at`），哨兵逐条对账且二次执行不改值，B 集 `as_of` 不改写、C 集无 `visible_at`；临时 schema 跑完即删。**生产 DSN 自动 skip**由 `TestBackfillTestDSN_ProductionDatabaseIsSkippedNotRun` 钉住（只读 `DATA_TEST_DSN`，库名须 `_test`）。**破坏验证**：`057a` 改成 `SET visible_at = trade_date` ⇒ 禁止第四档用例 + 测试库取值/零点两条断言红；逐字节还原后绿（SHA256 一致）。
+6. **写面经 HTTP 的覆盖面（2026-10-25，H4 ②）**：`POST /ingest/points` 的 A 集门与 `ON CONFLICT DO NOTHING` 语句形状由 `internal/httpapi/points_test.go:TestIngestPointsThroughRealWriter` 在**真 `store.Writer`** 上钉住（B 集 `daily_basic` / C 集 `fundamentals` 过闸门后仍被写面拒收，且一条 INSERT 都没发出；A 集 `ohlcv_daily` 发出的 SQL 含 `visible_at` 列）。「缺 `visible_at` 整批不落」在装配层另有一条独立腿（`internal/assembly`：`TestWriteRejectsWholeBatchWithoutAnchorAndNeverCallsStore`）。⚠️ **诚实边界**：这两条都不连库 —— 真 SQL 作用在真表上的腿仍只有 `internal/store` 的 `DATABASE_URL`-gated PG 套件；写端点**没有被端到端真跑过一次**。
 

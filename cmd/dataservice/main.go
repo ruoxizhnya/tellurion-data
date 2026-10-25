@@ -28,6 +28,7 @@ import (
 	"github.com/ruoxizhnya/tellurion-kit/auth"
 	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
+	"tellurion-data/internal/assembly"
 	"tellurion-data/internal/httpapi"
 	"tellurion-data/internal/schema"
 	"tellurion-data/internal/serving"
@@ -87,13 +88,18 @@ func envFirst(names ...string) string {
 }
 
 func statusLine(srv *httpapi.Server) string {
+	read := "data ports unwired: /datasets/* -> 503"
 	if srv.HasAggregator() {
-		return "data ports wired to PG"
+		read = "data ports wired to PG"
 	}
-	return "data ports unwired: /datasets/* -> 503"
+	write := "write面 unwired: POST /ingest/points -> 503"
+	if srv.HasPointsWriter() {
+		write = "write面 wired to PG"
+	}
+	return read + "; " + write
 }
 
-// build 装配 HTTP 面。DSN 为空时返回 nil aggregator（503 形态）。
+// build 装配 HTTP 面。DSN 为空时返回 nil aggregator 与 nil 写面（503 形态）。
 func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 	authorizer := httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokens))
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
@@ -113,7 +119,8 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		return nil, nil, err
 	}
 
-	st, err := store.New(store.PoolQuerier(pool), store.Options{MarketSchema: os.Getenv("DATA_MARKET_SCHEMA")})
+	opts := store.Options{MarketSchema: os.Getenv("DATA_MARKET_SCHEMA")}
+	st, err := store.New(store.PoolQuerier(pool), opts)
 	if err != nil {
 		pool.Close()
 		return nil, nil, err
@@ -128,7 +135,27 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		pool.Close()
 		return nil, nil, err
 	}
-	return httpapi.New(agg, authorizer), pool.Close, nil
+
+	// 写面装配：声明来自零传输的注册表（闸门要知道每个 data_type 的锚点列），
+	// 落库走 `store.Writer`。传输仍在 core，所以这里**不装取数链**——
+	// 只装「别人把点投进来」这一半（`internal/assembly` 头注释）。
+	writer, err := store.NewWriter(store.PoolWriteDB(pool), opts)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	declarations, err := assembly.DeclarationsRegistry()
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	points, err := assembly.New(declarations, writer, nil)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+
+	return httpapi.New(agg, authorizer, httpapi.WithPoints(points)), pool.Close, nil
 }
 
 // execer 是执行 DDL 的最小面（`*pgxpool.Pool` 满足它）。

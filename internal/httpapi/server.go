@@ -1,9 +1,10 @@
 // Package httpapi 是数据服务的 HTTP 面（`docs/api-schema.md` §1）。
 //
-// aggregator 是唯一入口：本包只做参数解析、哨兵 → HTTP 状态码映射与
-// JSON 编码，不实现任何取数/哈希语义。端口未接线的进程仍然可起
-// （/health 常绿），数据端点一律 fail-closed 成 503 dependency_unavailable
-// —— 与 tellurion-analytics 的同款处置。
+// aggregator 是唯一读入口：本包只做参数解析、哨兵 → HTTP 状态码映射与
+// JSON 编码，不实现任何取数/哈希/写入语义。写面只有一条 `POST /ingest/points`
+// —— 它把批次交给 `internal/assembly`，闸门与幂等判定都在那一边。
+// 端口未接线的进程仍然可起（/health 常绿），数据端点一律 fail-closed 成
+// 503 dependency_unavailable —— 与 tellurion-analytics 的同款处置。
 package httpapi
 
 import (
@@ -17,20 +18,29 @@ import (
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
 
+	"tellurion-data/internal/assembly"
 	"tellurion-data/internal/serving"
 )
 
-// Server 持 aggregator。agg 为 nil 表示端口未接线（X1d 的 PG 实现落地前
-// 的唯一合法形态）。所有端点都过鉴权闸（裁-15）。
+// maxIngestBodyBytes 是投点请求体的字节上限。它与
+// `assembly.MaxPointsPerRequest` 一起构成「HTTP 灌数入口只许单次有界任务」
+// 这条红线（`docs/dataflow.md` §2）的两道门：前者拦大报文，后者拦大批次。
+const maxIngestBodyBytes = 8 << 20
+
+// Server 持读面 aggregator 与写面装配。两者为 nil 都表示端口未接线
+// （本仓唯一合法的两态：接了 PG 就可用，没接就 503）。
+// 所有端点都过鉴权闸（裁-15）。
 type Server struct {
 	agg        *serving.Aggregator
+	points     *assembly.Writer
 	authorizer Authorizer
 }
 
-// Option 按需装配可选面（当前只有鉴权闸）。
+// Option 按需装配可选面（鉴权闸、写面装配）。
 type Option func(*Server)
 
-// New 构造 HTTP Server。
+// New 构造 HTTP Server。写面装配用 `WithPoints` 注入（不塞进位置参数：
+// 读面与写面的接线是两件事，一个进程可以只有其中一半）。
 func New(agg *serving.Aggregator, opts ...Option) *Server {
 	s := &Server{agg: agg}
 	for _, opt := range opts {
@@ -39,8 +49,16 @@ func New(agg *serving.Aggregator, opts ...Option) *Server {
 	return s
 }
 
+// WithPoints 装配写面（`POST /ingest/points`）。nil = 未接线 ⇒ 该端点 503。
+func WithPoints(w *assembly.Writer) Option {
+	return func(s *Server) { s.points = w }
+}
+
 // HasAggregator 报告取数 port 是否已接线（进程启动日志用；不影响路由）。
 func (s *Server) HasAggregator() bool { return s.agg != nil }
+
+// HasPointsWriter 报告写面是否已接线（同上）。
+func (s *Server) HasPointsWriter() bool { return s.points != nil }
 
 // routeSpec 是「注册模式 + handler」；路由表与策略表由守卫测试双向对拍。
 type routeSpec struct {
@@ -55,6 +73,9 @@ func (s *Server) routes() []routeSpec {
 		// 于通配段，"resolve" 不会被当成 hash。
 		{"GET /datasets/resolve", s.handleResolve},
 		{"GET /datasets/{hash}", s.handleSnapshot},
+		// 写面唯一的一条：已归一的点位投进来，闸门 + 幂等 + A 集门都在
+		// `internal/assembly` / `internal/store` 那一侧。
+		{"POST /ingest/points", s.handleIngestPoints},
 	}
 }
 
@@ -82,6 +103,40 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleIngestPoints 是写面唯一的入口（QT-40 H4 ②）。
+//
+// 三道门都在这里，缺一不可：
+//   - 字节上限 + `DisallowUnknownFields`：`visible_at` / `ingest_time` 是
+//     服务器独占的字段，投进来必须解码失败而不是「忽略掉」——被忽略的字段
+//     会让调用方以为自己的可见时刻生效了。
+//   - `UseNumber`：金融数值折成 float64 是静默精度损失，`store` 的
+//     `toFloat64` 收 json.Number。
+//   - 有界：`assembly.MaxPointsPerRequest` 拦批次，`maxIngestBodyBytes` 拦
+//     报文。无界批量一律走作业层（`docs/dataflow.md` §2 红线）。
+//
+// 判定本身一条都不在这里：闸门、去重、A 集门、内容比对全在
+// `internal/assembly` → `internal/store`，本 handler 只做编码与分诊。
+func (s *Server) handleIngestPoints(w http.ResponseWriter, r *http.Request) {
+	if s.points == nil {
+		writeDependency(w, "write面 is not wired (no PG store or declaration registry)")
+		return
+	}
+	var req assembly.Request
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIngestBodyBytes))
+	dec.DisallowUnknownFields()
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, fmt.Errorf("%w: body is not a valid point batch: %v", serving.ErrInvalidParameter, err))
+		return
+	}
+	result, err := s.points.Write(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
@@ -176,13 +231,23 @@ func writeError(w http.ResponseWriter, err error) {
 			return
 		}
 	}
+	// 写面的分诊表在 `internal/assembly`（那些哨兵来自 assembly / ingest /
+	// store 三层，本包不该 import 那三个包去自己凑一张表）。
+	if status, code, ok := assembly.WireError(err); ok {
+		writeJSON(w, status, errorBody{Error: errPayload{Code: code, Message: err.Error()}})
+		return
+	}
 	writeJSON(w, http.StatusInternalServerError, errorBody{Error: errPayload{Code: "internal", Message: err.Error()}})
 }
 
 func writeDependencyUnavailable(w http.ResponseWriter) {
+	writeDependency(w, "data ports are not wired (PG implementations land with X1d)")
+}
+
+func writeDependency(w http.ResponseWriter, reason string) {
 	writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: errPayload{
 		Code:    "dependency_unavailable",
-		Message: "data ports are not wired (PG implementations land with X1d)",
+		Message: reason,
 	}})
 }
 

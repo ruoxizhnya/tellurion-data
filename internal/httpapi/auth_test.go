@@ -4,22 +4,30 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"testing"
 
 	"github.com/ruoxizhnya/tellurion-kit/auth"
 	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 3 条路由与
+// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 4 条路由与
 // servedPolicy 必须双向一一对应。漏登策略 / 表里写了不存在的路由都会红。
 func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	srv := New(nil)
 	routes := srv.routePatterns()
 	policy := ServedPolicyEntries()
 
-	if len(routes) != 3 {
-		t.Fatalf("route table has %d entries, want 3: %v", len(routes), routes)
+	// 逐条点名，不是只数条数：加一条没登记策略的路由要红，删一条路由也要红，
+	// 而「条数刚好对上但内容换了」这种漂移只有清单能拦住。
+	want := []string{"GET /datasets/resolve", "GET /datasets/{hash}", "GET /health", "POST /ingest/points"}
+	got := append([]string(nil), routes...)
+	sort.Strings(got)
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("route table = %v, want %v", got, want)
 	}
 	if len(routes) != len(policy) {
 		t.Fatalf("route table has %d entries, policy has %d", len(routes), len(policy))
@@ -36,6 +44,17 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 			t.Errorf("policy entry %q has no registered route", k)
 		}
 	}
+}
+
+// 写面的档位单独钉住：读端点对外开放到 viewer，写端点不许跟着一起放开。
+func TestServedPolicyWriteRouteRolesAreNarrow(t *testing.T) {
+	entries := ServedPolicyEntries()
+	rule, ok := entries["POST /ingest/points"]
+	require.True(t, ok, "写端点必须有策略条目（缺条目 = 未登记的写面）")
+	assert.Equal(t, []string{"service", "admin"}, rule.Roles,
+		"写面只开 service（目标态机器凭证）+ admin（今天唯一能签发的档）")
+	assert.False(t, rule.Public, "写面永远不公开")
+	assert.False(t, rule.AnyAuthenticated, "写面不许 any-authenticated：viewer 也是 authenticated")
 }
 
 // TestLegacyREV17PolicyIsVerbatim 钉住「逐条移植」：条目与档位必须与旧

@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-10-24
-verified-by: QT-40 G4 —— 写面落 `internal/store` + ETL 落 `internal/ingest`；§2.1 包数、§8 X1a/X1b/X1d 状态同步（ADR-0004）。P6 —— `visible_at` 回填仅在测试库经 tagged 套件执行，§8 X1d 未落项订正
+verified-by: QT-40 H4 ② —— 写端点 `POST /ingest/points` + `internal/assembly` 装配层（ADR-0006），§2.1 包数与 §8 X1b 状态同步。上一版：QT-40 G4（写面落 `internal/store` + ETL 落 `internal/ingest`，ADR-0004）；P6（`visible_at` 回填仅在测试库经 tagged 套件执行）
 ---
 
 # 架构 — tellurion-data
@@ -26,7 +26,7 @@ core / analytics / strategy / agent
 
 ### 2.1 六个限界上下文的包级隔离（对表 T4，2026-10-22 立）
 
-> **这是目标分层，不是现状**——2026-10-24 实测：已建起 5 个包（`internal/ingest` / `internal/normalize` / `internal/serving` 对应本表前三个上下文；`internal/store` 是存储读写实现、`internal/schema` 是 DDL 归属，二者不是限界上下文；内容见 §8 的 X1b/X1c/X1d 状态）；`internal/derived` / `internal/evidence` / `internal/sync` 仍是目标，代码在 core。
+> **这是目标分层，不是现状**——2026-10-25 实测：已建起 6 个包（`internal/ingest` / `internal/normalize` / `internal/serving` 对应本表前三个上下文；`internal/store` 是存储读写实现、`internal/schema` 是 DDL 归属，二者不是限界上下文；**`internal/assembly` 也不是限界上下文**——它是「采集」与「存储」两个上下文之间那条被 ADR-0004 禁止直接互相 import 的**接缝**，唯一持有 `UnifiedDataPoint → store.Point` 的投影，见 ADR-0006）；`internal/derived` / `internal/evidence` / `internal/sync` 仍是目标，代码在 core。
 > 义务来源是 `tellurion-docs:docs/adr/adr-027-modular-decomposition-to-independent-services.md` §2.6.2（data-service 的 **7 个**限界上下文里，只有 Reduction 物理独立，**其余 6 个在本仓内按包强制隔离** = 编译期边界 + 该 ADR §6 门禁断言），
 > 由 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1.2 的 data 行点名：「`tellurion-data:docs/ARCHITECTURE.md` 今天没有这段分层（实测 grep `限界上下文` 零命中）」——本节就是补上它。
 > ADR-027 §7 同时禁止把这 7 个上下文都拆成服务（单人自托管，拆 7 个服务是运维灾难；DDD 的价值在**语言边界**，不在进程数）。所以本表的产物是**包**，不是仓。
@@ -117,7 +117,7 @@ contracts（协议类型） + kit（logging/http/db）
 **施工状态（2026-10-24 实测，`go build/vet/test ./...` 全绿）**
 
 - **X1a ✅（2026-10-25）**：contracts `v0.6.0` 新增 `dataprotocol` 包（`UnifiedDataPoint` 七字段 + `ToJSON` / `DeduplicateKey` + 15 个 `DataType*` 常量），本仓 `require v0.6.0` 后**删掉 `internal/ingest/point.go` 的逐字段镜像**，改 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`；构造器（注入 `IngestTime`，契约不读时钟）与包内 `DeduplicateKey` 委托留本侧。守卫见 `internal/ingest/protocol_test.go`。
-- **X1b 🔶 取数面 + 写面代码已落，装配未接**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）、`internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）；**2026-10-24 G4**：`internal/ingest` 落 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate`，`internal/store` 落写面 `BulkInsert`（A 集表、`ON CONFLICT DO NOTHING` + 内容比对）。**未落**：同步作业对 `ETLPipeline` 的装配仍在 core（`sync_jobs` → worker → ETL）；~~`/factors/{name}@{hash}` 仅路由恒 404~~ **已撤（裁-14，2026-10-25）**——因子读面只在 core，本仓路由表不含 `/factors/*`。
+- **X1b 🔶 取数面 + 写面代码已落，写面装配已接到 HTTP 投点（2026-10-25 H4 ②）**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）、`internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）；**2026-10-24 G4**：`internal/ingest` 落 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate`，`internal/store` 落写面 `BulkInsert`（A 集表、`ON CONFLICT DO NOTHING` + 内容比对）；**2026-10-25 H4 ②**：新增 `internal/assembly`（投影唯一处 + `DeclarationsRegistry()` 零传输声明面 + `Pipeline()`），`POST /ingest/points` 经它落库，`cmd/dataservice` 在 `DATABASE_URL` 有值时装出写面（为空 503）。**仍未落**：同步作业的**调度与取数**仍在 core（`sync_jobs` → worker → executor；core 的 `capital_flow` / `top_list` 两条改成「取数在 core、落库投点在本仓」，其余同步腿仍由 core 直写 `public`）；作业侧的 `Pipeline()` **今天没有本仓生产调用方**（传输仍在 core，ADR-0003）；~~`/factors/{name}@{hash}` 仅路由恒 404~~ **已撤（裁-14，2026-10-25）**——因子读面只在 core，本仓路由表不含 `/factors/*`。
 - **X1c 🔶 connector 已搬入，传输留在 core**：`internal/ingest` 有 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 **12 connector 的取数/归一化实现**；声明真源 = 每个 connector 的 `Declarations()`，过渡期 `Catalog()` 双真相**已删除**。**未落**：传输实现（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端）仍在 core，经 `ingest.Transports` 注入；core 侧的旧 `pkg/data/source` 尚未删（跨仓切换）。
 - **X1d 🔶 DDL 归属 + 写面已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿；`store.BulkInsert` 走 `schema.GateClassFor` 三集合门（B/C 集拒写，缺 `visible_at` 整批拒收），见 `db-schema.md` §6。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、生产库 `visible_at` 回填（D2 只在测试库经 tagged 套件执行，见 `docs/TASKS.md`）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
 - **X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。

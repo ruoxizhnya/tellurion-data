@@ -8,10 +8,20 @@ import kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 // `service`（裁-17）：这两条的调用方是 core / analytics，用 `service` 角色的长期
 // token，不是人类会话的 `trader`。它就是一个普通 access token 上的角色串
 // （kit 只按 kind=access + 角色 any-of 判定），所以本仓不因它升 kit 版本。
+//
+// `POST /ingest/points` 是**写面**，档位只有 `service` + `admin`：
+//   - `service` 是目标态的机器凭证（core 的作业层经它投点）；
+//   - `admin` 是今天唯一能签出的那一档 —— core 的 `pkg/auth` 角色集仍是
+//     {viewer, trader, admin}，`service` 要能签发是 QT-71 的活。不开 `admin`
+//     这条腿今天就不可用；开了的代价是「持 admin token 者能写 A 集表」，
+//     在单人自托管实验室里这与「本人能写」是同一件事。
+//   - 刻意**不开** viewer/trader：读档位与写档位混在同一档里，将来给写面
+//     收紧就说不清谁在什么时候为什么放开的。
 var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /health":           {Public: true},
 	"GET /datasets/resolve": {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /datasets/{hash}":  {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"POST /ingest/points":   {Roles: []string{"service", "admin"}},
 })
 
 // legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
