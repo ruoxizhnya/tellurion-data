@@ -85,7 +85,7 @@ contracts（协议类型） + kit（logging/http/db）
 ## 5.1 鉴权（2026-10-25）
 
 - 机制：kit `v0.1.1` 的 `auth/httpadapter`（Bearer → `Parse` → `kind=access` → 角色 any-of + 启动闸）；本仓只写策略表（`internal/httpapi/policy.go`）。
-- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = viewer 及以上。旧 `cmd/data` 的 REV-17 表（28 条）逐条移植为 `legacyREV17`，等端点迁入时直接挂闸。
+- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）逐条移植为 `legacyREV17`，等端点迁入时直接挂闸。
 - 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。无 secret + 回环 = 开放；无 secret + 非回环 = **拒绝启动**。
 - 裁决落 [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)。
 

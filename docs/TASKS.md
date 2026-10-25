@@ -132,15 +132,30 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 
 **跨仓腿（core）**：`cmd/analysis/handlers_proxy.go` 的 `proxyRequest` 已把入站 `Authorization` 转发给数据服务（2026-10-25）；core 侧守卫 `TestProxyForwardsAuthorization` / `TestProtectedRouteThroughProxyDoesNotLoseCredentials` 证明 `POST /api/v1/ohlcv/bulk` 经代理不 401。
 
+**施工记录（2026-10-25，G6 · 裁-17 本仓半边：`servedPolicy` 加 `service`；`go build/vet/test ./...` 全绿）**
+
+| 步 | 结果 | 提交（本仓 main） |
+|---|---|---|
+| 1 · 前提实测 | ✅ 派工写「无独立可开工项」，实测本仓有一条**已裁决未开工**的独立项：裁-17 只落了文档（`90e0efb`），`policy.go` 两条 `/datasets/*` 的 Roles 仍是 `{viewer, trader, admin}` | 本笔 |
+| 2 · 依赖判定 | ✅ **不升 kit**：本仓 pin 的 `v0.1.1` `httpadapter.Authorize`（模块缓存 `tellurion-kit@v0.1.1/auth/httpadapter/httpadapter.go:159-163`）按角色 any-of **精确串匹配**、不看角色枚举；kit 本地 `main`（`v0.1.2`，KT-09）新增的 `IssueServiceToken` 铸的是 `Kind: KindAccess` + 调用方给的角色串（`auth/service_token.go:41-44`）⇒ 服务 token 就是普通 access token，**pin 版本即可验**，本仓不为此改 `go.mod` | 本笔 |
+| 3 · 策略表 | ✅ `servedPolicy` 两条读端点 Roles 加 `service`；`/health` 保持 Public（裁-17 原口径） | 本笔 |
+| 4 · 测试 | ✅ `TestServedPolicyServiceRole`：service token 在 `/datasets/resolve` 与 `/datasets/{hash}` 都走到 handler（断 503 **且** 报文 `code=dependency_unavailable`——只看状态码会把闸拦下的 503 `auth_unavailable` 误读成过闸）；合法签名但角色 `writer` 仍 403 `forbidden`；策略表逐条含 `service` + `/health` 仍 Public | 本笔 |
+| 5 · 文档 | ✅ `api-schema.md`（鉴权注 / 策略表 / 守卫清单 / 403 触发行）、`ARCHITECTURE.md` §6 策略行 | 本笔 |
+
+**破坏验证（G6）**：把两条 Rules 的 `service` 抽掉 ⇒ `TestServedPolicyServiceRole` 红在 wire 层（`/datasets/resolve` 实得 403 `forbidden`，期望 503 `dependency_unavailable`）；逐字节还原（`sha256 16956C20…` 与还原后一致）后 `TestServedPolicyServiceRole` / `TestRouteTableEqualsServedPolicy` / `TestAuthWireThreeStates` 三条复跑绿。
+
+**仍未落（core 半边，不在本仓）**：部署清单给 `data-service` 配 `JWT_SECRET` 与调用方 `service` token = core QT-71 腿；本仓只保证「给了 service token 就能读」，不保证生产上已经配发。
+
 **未落项（如实登记，不写成已完成）**
 
 - **第二写者未消灭**：core 侧同步腿仍在写 `market` / `ingest`；本仓只能先立 owner（DDL）与写闸门。物理 `SET SCHEMA` 搬迁（D4）未做。
+  - **写点实测口径（G6，2026-10-25 更正本条的粗糙表述）**：core 里**带 schema 前缀**写 `market.` / `ingest.` 的生产点只有两处——`tellurion:pkg/storage/index_daily.go:31`（`market.index_daily`）与 `tellurion:pkg/storage/ingest_raw.go:62`（`ingest.raw`）；主力同步腿 `tellurion:pkg/storage/bulk_insert.go:331` 拼的是**无前缀**表名（`ohlcv_daily_qfq` / `ohlcv_minute`），今天落 `public`。所以「停第二写者」**不等于**「core 整个同步层停写」：真正要做的是那两处前缀写点归一 + 无前缀写点在表搬走后的 search_path / 限定名处置（本仓 `DATA_MARKET_SCHEMA` 设空串走 `public` 就是这个过渡开关，见 `api-schema.md` 引言）。判据以 grep 为准，别引用任何文档里写死的点数。
 - **`visible_at` 生产未回填**：D2 已**只在测试库**经 tagged 套件真跑（`internal/schema/backfill_pg_test.go`，`DATA_TEST_DSN` + 库名 `_test`）；生产库回填仍须显式启动开关或运维执行，**未做**。未回填的行会被 PIT 整批拒收（生产 D2 前序红线：D2 未完成期间读路径不许按 `visible_at` 过滤）。
 - **传输未搬**：Tushare / 东财 / Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档仍在 core；本仓按 `Transports` 注入。
 - **写面代码已落、装配未接**：`ETLPipeline` 与 `store.BulkInsert` 在本仓（2026-10-24，G4），但**同步作业层仍在 core**（`sync_jobs` → worker → ETL），本仓没有作业装配/调度；core `pkg/data/source/etl.go` 的旧写路径尚未删，且仍用 `ON CONFLICT DO UPDATE`（与 ADR-0004 的内容比对语义并存）。
 - ~~**`/factors/{name}@{hash}` → 裁-14（2026-10-25）**~~ **✅ 已落（D4-1，2026-10-25，本笔）**：路由、`handleFactor`、`ErrFactorNotFound` 与恒 404 占位全部撤掉，不做表迁移。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算（因子 / 回测 / IC）列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**，本仓 openapi / api-schema 同步删除该路径。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
 - ~~**鉴权未移植（裁-15，2026-10-25 已定，可开工）**~~ **✅ 已落（2026-10-25，W4）**：新 `dataservice` 已接 kit `v0.1.1` 的 net/http 适配；`servedPolicy` = `/health` Public + `/datasets/*` viewer；旧 `cmd/data` 的 REV-17 表 28 条逐条移植为 `legacyREV17`（端点迁入时直接挂闸）；路由表 ≡ 策略表守卫 + 三态测试已落。**未落**：REV-17 对应的端点和真实保护仍在 core `cmd/data`（本仓只持迁移表）；core `proxyRequest` 已转发 `Authorization`（2026-10-25）。
-  - **服务间凭证（裁-17 定稿，2026-10-25）**：`servedPolicy` 的 `GET /datasets/resolve`、`GET /datasets/{hash}` 两条 Roles 需加 **`"service"`**（调用方是 core / analytics，用 `service` 角色长期 token，不是 `trader`）；`/health` 保持 Public。部署清单给 `data-service` 配 `JWT_SECRET` 与调用方 token 属 core QT-71 腿。
+  - ~~**服务间凭证（裁-17 定稿，2026-10-25）：`servedPolicy` 两条 Roles 需加 `"service"`**~~ **✅ 本仓半边已落（G6，2026-10-25，本笔）**：`GET /datasets/resolve`、`GET /datasets/{hash}` 的 Roles 现为 `service` + viewer / trader / admin，`/health` 保持 Public；**没升 kit**（服务 token 就是 `kind=access` 上的角色串，pin 的 `v0.1.1` 即可验，见上方施工记录第 2 步）。**仍未落**：部署清单给 `data-service` 配 `JWT_SECRET` 与调用方 `service` token 属 core QT-71 腿。
 - **跨仓腿（报协调者，本仓不做）**：① 物理 `SET SCHEMA` 需要 core 先停第二写者；② 传输实现仍在 core（X1c 已登记）；③ ~~`UnifiedDataPoint` 迁 contracts 等 G0D-C4 发版~~ **已解除（2026-10-25）**：contracts `v0.6.0` 已推，本仓镜像已删、改别名，见上方 X1a 收编记录。
 
 **已登记的取舍与风险（必须随 X1b 一起读）**

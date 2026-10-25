@@ -12,7 +12,8 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.1` 的 `auth/httpadapter`，策略表在本仓
-> `internal/httpapi/policy.go`。`/health` 公开；数据面读端点需 `viewer` 及以上（any-of 写全）。**全部端点**
+> `internal/httpapi/policy.go`。`/health` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
+> `viewer` 及以上（any-of 写全，不是层级）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；
 > 无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配 `JWT_SECRET` 或声明容器只在回环发布）。
 
@@ -34,9 +35,9 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
 > **鉴权策略表（2026-10-25，裁-15）**：
-> - **本仓实际路由**（`servedPolicy`）：`GET /health` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = viewer（含 trader / admin）。
+> - **本仓实际路由**（`servedPolicy`）：`GET /health` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17：调用方是 core / analytics 的长期服务 token，不是人类会话的 `trader`）+ viewer / trader / admin。
 > - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓，**但对应端点尚未迁入**（仍在 core）。保留这张表是为了端点迁移时「同一路由、同一角色」不再重新拍板；守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论。
-> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）。
+> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）。
 > - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。
 
 ## 2. 错误码与 fail-closed 语义
@@ -49,7 +50,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 | 错误 | 今天是否已存在 | 触发 | 调用方行为 |
 |---|---|---|---|
 | 无凭证 / token 过期 | ✅ 2026-10-25 | 数据面端点未带 / 带了坏 `Bearer` | 401 `unauthenticated`；不重试，补齐凭证 |
-| 角色不足 | ✅ 2026-10-25 | 角色不在策略表（数据面需 viewer 及以上） | 403 `forbidden`；不重试 |
+| 角色不足 | ✅ 2026-10-25 | 角色不在策略表（数据面接受 `service` / `viewer` / `trader` / `admin`） | 403 `forbidden`；不重试 |
 | 鉴权闸未装配 | ✅ 2026-10-25 | 进程未装 `Authorizer` | 503 `auth_unavailable`；**拒绝而非放行** |
 | `ErrDeclarationMissing` | ✅（`tellurion:pkg/data/source/contract.go:66`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
 | `ErrDeclarationInvalid` / `ErrDeclarationMismatch` | ✅（`:67` / `:68`） | 声明非法（枚举 / 缺 `VisibleExpr` / 重复）／声明与数据形态矛盾 | 注册期拒收 |

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -224,4 +225,72 @@ func TestAuthWireThreeStates(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("open access: %d %s", rec.Code, rec.Body.String())
 	}
+}
+
+// TestServedPolicyServiceRole 钉住裁-17：数据面两条读端点接受 `service` 角色
+// （调用方是 core / analytics 的长期 token，不是人类会话的 trader），
+// 未列进策略表的角色仍 403，`/health` 仍 Public 而不是改成按角色起。
+//
+// 503 有两种，必须按报文 code 区分：走到 handler 才是 `dependency_unavailable`
+// （agg 未接线），闸没装配是 `auth_unavailable`。只看状态码会把「被闸拦下」
+// 误读成「已过闸」。
+func TestServedPolicyServiceRole(t *testing.T) {
+	svc := auth.NewTokenService(auth.Config{JWTSecret: []byte("data-service-role-test")})
+	h := New(nil, WithAuthorizer(NewAuthorizer(svc))).Routes()
+
+	serviceToken, _, err := svc.IssueTokens(0, "service:core", "service")
+	if err != nil {
+		t.Fatalf("issue service token: %v", err)
+	}
+	for _, path := range []string{"/datasets/resolve", "/datasets/deadbeef"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || errorCodeOf(t, rec.Body.Bytes()) != "dependency_unavailable" {
+			t.Fatalf("%s as service: code=%d err=%q body=%s, want 503 dependency_unavailable",
+				path, rec.Code, errorCodeOf(t, rec.Body.Bytes()), rec.Body.String())
+		}
+	}
+
+	// 合法签名但角色不在策略表 ⇒ 403：加 service 不是「放开一切 token」。
+	other, _, err := svc.IssueTokens(0, "someone", "writer")
+	if err != nil {
+		t.Fatalf("issue other-role token: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/datasets/deadbeef", nil)
+	req.Header.Set("Authorization", "Bearer "+other)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || errorCodeOf(t, rec.Body.Bytes()) != "forbidden" {
+		t.Fatalf("writer role: code=%d err=%q, want 403 forbidden", rec.Code, errorCodeOf(t, rec.Body.Bytes()))
+	}
+
+	// 策略表逐条含 service；/health 保持 Public（静默改回按角色起也红）。
+	for _, key := range []string{"GET /datasets/resolve", "GET /datasets/{hash}"} {
+		rule, ok := ServedPolicyEntries()[key]
+		if !ok {
+			t.Fatalf("missing policy for %q", key)
+		}
+		if !allowedByRule(rule, "service") {
+			t.Errorf("%s does not admit role %q: %v", key, "service", rule.Roles)
+		}
+	}
+	health, ok := ServedPolicyEntries()["GET /health"]
+	if !ok || !health.Public {
+		t.Errorf("GET /health must stay Public (裁-17), got %+v ok=%t", health, ok)
+	}
+}
+
+func errorCodeOf(t *testing.T, body []byte) string {
+	t.Helper()
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode error body %q: %v", body, err)
+	}
+	return payload.Error.Code
 }

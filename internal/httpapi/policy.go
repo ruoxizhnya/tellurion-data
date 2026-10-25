@@ -4,10 +4,14 @@ import kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
 // servedPolicy 是本仓**实际对外**的「路由 × 角色」表（裁-15）。
 // `/health` 必须公开（探针不带 token）；数据面读端点按 viewer 起。
+//
+// `service`（裁-17）：这两条的调用方是 core / analytics，用 `service` 角色的长期
+// token，不是人类会话的 `trader`。它就是一个普通 access token 上的角色串
+// （kit 只按 kind=access + 角色 any-of 判定），所以本仓不因它升 kit 版本。
 var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /health":           {Public: true},
-	"GET /datasets/resolve": {Roles: []string{"viewer", "trader", "admin"}},
-	"GET /datasets/{hash}":  {Roles: []string{"viewer", "trader", "admin"}},
+	"GET /datasets/resolve": {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /datasets/{hash}":  {Roles: []string{"service", "viewer", "trader", "admin"}},
 })
 
 // legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
