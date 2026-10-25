@@ -1,6 +1,6 @@
 # tellurion-data
 
-> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地（注册门 + 频率聚合/PIT + aggregator/缓存），HTTP 面与取数存储 port 未接线（见 `docs/TASKS.md` QT-40）
+> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地；HTTP 面（3 路由 + 鉴权闸）与取数存储 port 已接线，REV-17 策略已移植（见 `docs/TASKS.md` QT-40）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
@@ -13,6 +13,8 @@
 | `internal/ingest` | connector 注册门 + 12 connector 取数/归一化（声明真源 = 各自 `Declarations()`） |
 | `internal/normalize` | 频率聚合（1m → 15m/1d）+ PIT 闸门 |
 | `internal/serving` | aggregator（票池解析 · 取数 · 聚合 · PIT · hash · 缓存） |
+| `internal/httpapi` | HTTP 面（`/health` + `/datasets/*`；全端点鉴权闸） |
+| `cmd/dataservice` | 进程入口（默认 `:8081`；无 secret 且非回环 → 拒绝启动） |
 | `doc.go` | 根包文档占位（无实现） |
 
 ## 快速开始
@@ -24,6 +26,9 @@ go test ./...
 ```
 
 本仓**单独 checkout 就能跑通**上面三条。需要别的仓源码才过 → 边界错了，不是加 `replace` 能解决的问题。
+
+> 起服务：默认 `:8081`（全网卡）且无 `JWT_SECRET` 会被启动闸**拒绝**（不允许无鉴权数据面暴露）。
+> 本地开发用 `-addr 127.0.0.1:8081`；容器形态必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published` 或配 `JWT_SECRET`。
 
 ## 边界
 

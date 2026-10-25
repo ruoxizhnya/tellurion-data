@@ -18,12 +18,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/ruoxizhnya/tellurion-kit/auth"
+	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
 	"tellurion-data/internal/httpapi"
 	"tellurion-data/internal/schema"
@@ -33,9 +36,24 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8081", "listen address")
+	jwtSecret := flag.String("jwt-secret", envFirst("JWT_SECRET", "AUTH_JWT_SECRET"),
+		"JWT secret shared with analysis (empty = open access on loopback only)")
+	exposure := flag.String("insecure-exposure", os.Getenv("AUTH_INSECURE_EXPOSURE"),
+		"explicit exposure declaration for open access on a non-loopback bind (only loopback-published is accepted)")
 	flag.Parse()
 
-	srv, cleanup, err := build()
+	// 启动闸（裁-15）：本服务默认 `:8081`（全网卡），无 secret 必须显式声明容器
+	// 只在回环发布，否则拒绝启动——不允许把无鉴权数据面暴露到网络。
+	startup := kithttp.DecideStartup(*jwtSecret, true, bindHost(*addr), *exposure)
+	if startup.Refuse {
+		log.Fatalf("data-service: %s", startup.Reason)
+	}
+	if startup.Insecure {
+		log.Printf("data-service: WARNING authentication disabled (open access); bind address %q must be loopback or loopback-published", *addr)
+	}
+	tokens := auth.NewTokenService(auth.Config{JWTSecret: startup.Secret})
+
+	srv, cleanup, err := build(tokens)
 	if err != nil {
 		log.Fatalf("data-service wiring failed: %v", err)
 	}
@@ -43,10 +61,29 @@ func main() {
 		defer cleanup()
 	}
 
-	log.Printf("data-service listening on %s (%s)", *addr, statusLine(srv))
+	log.Printf("data-service listening on %s (%s, auth=%t)", *addr, statusLine(srv), tokens.Enabled())
 	if err := http.ListenAndServe(*addr, srv.Routes()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// bindHost 从 -addr 取绑定主机；取不到端口时原样当主机比（空 = 全网卡）。
+func bindHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// envFirst 按顺序取第一个非空环境变量（core 历史用法 JWT_SECRET、配置口径 AUTH_JWT_SECRET）。
+func envFirst(names ...string) string {
+	for _, name := range names {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func statusLine(srv *httpapi.Server) string {
@@ -57,10 +94,11 @@ func statusLine(srv *httpapi.Server) string {
 }
 
 // build 装配 HTTP 面。DSN 为空时返回 nil aggregator（503 形态）。
-func build() (*httpapi.Server, func(), error) {
+func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
+	authorizer := httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokens))
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
-		return httpapi.New(nil), nil, nil
+		return httpapi.New(nil, authorizer), nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,7 +128,7 @@ func build() (*httpapi.Server, func(), error) {
 		pool.Close()
 		return nil, nil, err
 	}
-	return httpapi.New(agg), pool.Close, nil
+	return httpapi.New(agg, authorizer), pool.Close, nil
 }
 
 // execer 是执行 DDL 的最小面（`*pgxpool.Pool` 满足它）。

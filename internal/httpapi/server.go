@@ -21,26 +21,59 @@ import (
 )
 
 // Server 持 aggregator。agg 为 nil 表示端口未接线（X1d 的 PG 实现落地前
-// 的唯一合法形态）。
+// 的唯一合法形态）。所有端点都过鉴权闸（裁-15）。
 type Server struct {
-	agg *serving.Aggregator
+	agg        *serving.Aggregator
+	authorizer Authorizer
 }
 
+// Option 按需装配可选面（当前只有鉴权闸）。
+type Option func(*Server)
+
 // New 构造 HTTP Server。
-func New(agg *serving.Aggregator) *Server { return &Server{agg: agg} }
+func New(agg *serving.Aggregator, opts ...Option) *Server {
+	s := &Server{agg: agg}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
 
 // HasAggregator 报告取数 port 是否已接线（进程启动日志用；不影响路由）。
 func (s *Server) HasAggregator() bool { return s.agg != nil }
 
-// Routes 返回路由表。
-//
-// `/datasets/resolve` 与 `/datasets/{hash}`：Go 1.22 ServeMux 里字面段优先
-// 于通配段，"resolve" 不会被当成 hash。
+// routeSpec 是「注册模式 + handler」；路由表与策略表由守卫测试双向对拍。
+type routeSpec struct {
+	pattern string
+	handler http.HandlerFunc
+}
+
+func (s *Server) routes() []routeSpec {
+	return []routeSpec{
+		{"GET /health", s.handleHealth},
+		// `/datasets/resolve` 与 `/datasets/{hash}`：Go 1.22 ServeMux 里字面段优先
+		// 于通配段，"resolve" 不会被当成 hash。
+		{"GET /datasets/resolve", s.handleResolve},
+		{"GET /datasets/{hash}", s.handleSnapshot},
+	}
+}
+
+// routePatterns 只返回注册模式，守卫测试用它与策略表对拍。
+func (s *Server) routePatterns() []string {
+	specs := s.routes()
+	out := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, spec.pattern)
+	}
+	return out
+}
+
+// Routes 返回路由表。每个路由都挂 requireAuth（未装配 Authorizer → 503）。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /datasets/resolve", s.handleResolve)
-	mux.HandleFunc("GET /datasets/{hash}", s.handleSnapshot)
+	for _, spec := range s.routes() {
+		mux.Handle(spec.pattern, s.requireAuth(spec.handler))
+	}
 	// `/factors/{name}@{hash}` 已于裁-14（2026-10-25）撤掉：因子读面只由 core
 	// 提供，本仓没有该端点。不要重新引入——常驻 404 会被调用方读成
 	// 「该数据集没有该因子」；路由不存在才是明确边界。

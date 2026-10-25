@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-24
-verified-by: QT-40 G4 —— 写面（`Registry.Fetch` / `ETLPipeline` / `GatePoints` / `Deduplicate` / `store.BulkInsert`）落到本仓，链路、失败模式与不变量同步
+last-verified: 2026-10-25
+verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 移植）
 ---
 
 # Dataflow — tellurion-data
@@ -33,6 +33,8 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 ## 2. 关键时序
 
 ### 取数（读路径，热）
+0. **鉴权闸**（2026-10-25）：每个请求先过 `requireAuth`——`/health` 公开；`/datasets/*` 需 `viewer` 及以上。
+   未装配 Authorizer → 503 `auth_unavailable`，无凭证 / 坏 token → 401，越权 → 403；通过后才进入 aggregator。
 1. 调用方 `GET /datasets/resolve?universe=csi300&from=…&to=…&freq=1d`
 2. aggregator：票池解析 → 按 `visible_at <= as_of` 过滤 → 频率聚合（口径见 §1 注）→ 算 `dataset_hash`
 3. 返回 `{dataset_hash, metadata}`；调用方拿 hash 请求 `/datasets/{hash}`

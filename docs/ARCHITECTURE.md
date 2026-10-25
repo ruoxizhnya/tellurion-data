@@ -82,12 +82,20 @@ contracts（协议类型） + kit（logging/http/db）
 
 > **箭头图例**（与 `tellurion-docs:docs/REPO-MAP.md` 同向）：`A ──► B` = A 调用 B，箭头指向**被调方**。四方经 HTTP 调用本仓「对外面」（run 前取数 / 异步），本仓只供数、不反向调用（2026-10-21 审查 M24 订正：原图箭头反向，读作「data 调四方」）。
 
+## 5.1 鉴权（2026-10-25）
+
+- 机制：kit `v0.1.1` 的 `auth/httpadapter`（Bearer → `Parse` → `kind=access` → 角色 any-of + 启动闸）；本仓只写策略表（`internal/httpapi/policy.go`）。
+- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = viewer 及以上。旧 `cmd/data` 的 REV-17 表（28 条）逐条移植为 `legacyREV17`，等端点迁入时直接挂闸。
+- 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。无 secret + 回环 = 开放；无 secret + 非回环 = **拒绝启动**。
+- 裁决落 [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)。
+
 ## 6. 关键决策
 
 - [`adr/0001-统一协议与-visible-at-第二道防线.md`](adr/0001-统一协议与-visible-at-第二道防线.md)
 - [`adr/0002-market-ingest-ddl归属与-visible-at-三集合.md`](adr/0002-market-ingest-ddl归属与-visible-at-三集合.md)
 - [`adr/0003-connector搬入本仓传输以窄-port-留在-core.md`](adr/0003-connector搬入本仓传输以窄-port-留在-core.md)
 - [`adr/0004-写面归属-store-与幂等内容比对.md`](adr/0004-写面归属-store-与幂等内容比对.md)
+- [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)
 
 ## 7. 非目标（明确不做）
 

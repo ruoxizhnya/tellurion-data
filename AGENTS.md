@@ -6,9 +6,9 @@
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
-**状态**：X1 施工中（2026-10-23）——`internal/ingest`（注册门 + 12 connector 声明清单）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）已落地；HTTP 面、取数存储 port 与 12 connector 传输仍在 core。
+**状态**：X1 施工中（2026-10-23）——`internal/ingest`（注册门 + 12 connector 声明清单）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）已落地；HTTP 面（3 路由，全部过鉴权闸）、取数存储 port 与 12 connector 传输仍在 core。
 
-**今天的实现**：`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）。本仓是把这三块搬成服务。
+**今天的实现**：本仓 `cmd/dataservice` + `internal/httpapi`（`/health` + `/datasets/resolve` + `/datasets/{hash}`；`auth.go` = kit 适配，`policy.go` = 策略表）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。本仓是把这三块搬成服务。
 
 ## 2. 构建 / 测试（必须单仓可跑）
 
@@ -50,7 +50,7 @@ go test ./...
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | `github.com/ruoxizhnya/tellurion-contracts` | `v0.6.0`（2026-10-24 发版，2026-10-25 X1a 收编切 pin；远端 tag 已推） | 数据协议 / DTO 只认契约；`internal/ingest` 的 `UnifiedDataPoint` 是 `dataprotocol.UnifiedDataPoint` 的别名，本地不再持逐字段镜像 |
-| `github.com/ruoxizhnya/tellurion-kit` | `v0.1.0` 已发版（2026-10-23）；本仓**尚未 require** | 日志 / HTTP / DB 连接；引入前先登记 |
+| `github.com/ruoxizhnya/tellurion-kit` | `v0.1.1`（2026-10-25 引入） | 鉴权机制：`auth`（token 解析）+ `auth/httpadapter`（net/http 适配、启动闸、Policy）。本仓只写策略表，不另造 token 校验 |
 | `github.com/stretchr/testify` | `v1.11.1` | 仅测试用（断言）；与 contracts 仓同版本 |
 | `github.com/jackc/pgx/v5` | `v5.7.3` | PG 驱动/连接池（X1d 的四个 port 实现）。与 core 同版本，避免第二个大版本 |
 

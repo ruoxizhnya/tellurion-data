@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-10-25
-verified-by: D4-1 裁-14 —— 撤掉 `/factors/{name}@{hash}` 路由与恒 404 占位（因子读面只在 core），路由表由 `TestFactorRouteIsRemoved` / `TestRouteTableIsThePublishedSurface` 钉住；QT-40 G4 —— X1d 写面（ingest ETL + store.BulkInsert）落本仓；P6 —— `visible_at` 回填仅在测试库经 tagged 套件真跑（生产未执行）
+verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 逐条移植）；D4-1 裁-14 撤因子读面
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -116,6 +116,22 @@ verified-by: D4-1 裁-14 —— 撤掉 `/factors/{name}@{hash}` 路由与恒 404
 
 **破坏验证（D4-1）**：把 `mux.HandleFunc("GET /factors/{factor}", s.handleHealth)` 加回 `Routes()`（等价于恢复旧占位）⇒ `TestFactorRouteIsRemoved` FAIL（`/factors/momentum@deadbeef` 期望 404 实得 200）；逐字节还原后 `sha256 063DACAEF79B5A53FB4DC6139CAC66D38504D09AFC47B50A78EDC571807A20DC` 与改前一致，复跑 PASS。
 
+**施工记录（2026-10-25，W4 · 鉴权接线 + REV-17 逐条移植；`go build/vet/test ./...` 全绿）**
+
+| 步 | 结果 | 提交（本仓 main） |
+|---|---|---|
+| 1 · 机制接 kit | ✅ `internal/httpapi/auth.go`：`Authorizer` / `NewAuthorizer(*auth.TokenService)` 内部走 kit `v0.1.1` 的 `auth/httpadapter`；`requireAuth` 三态（503 / 401 / 403）；`/health` Public 也过闸 | 本笔 |
+| 2 · 策略表 | ✅ `internal/httpapi/policy.go`：`servedPolicy`（health Public + 两个 `/datasets/*` viewer）+ `legacyREV17`（旧 `cmd/data` 28 条逐条移植，admin / trader / any-authenticated 档位一一对应） | 本笔 |
+| 3 · 路由同源 | ✅ `Server.routes()` 单一列表注册+包闸；`routePatterns()` 供守卫对拍 | 本笔 |
+| 4 · 启动闸 | ✅ `cmd/dataservice`：`-jwt-secret` / `JWT_SECRET` + `-insecure-exposure` / `AUTH_INSECURE_EXPOSURE`；`DecideStartup`——默认 `:8081` 无 secret **拒绝启动** | 本笔 |
+| 5 · 测试 | ✅ `TestRouteTableEqualsServedPolicy`（3 路由 ≡ 3 策略）、`TestLegacyREV17PolicyIsVerbatim`（28 条条目与档位）、`TestLegacyREV17DecisionsMatchOldService`（同一路由+角色结论一致）、`TestAuthWireThreeStates`（health 公开 / 401 / viewer 可读 / 503） | 本笔 |
+| 6 · 依赖 | ✅ `github.com/ruoxizhnya/tellurion-kit v0.1.1`（AGENTS §4） | 本笔 |
+| 7 · 文档 | ✅ `api-schema.md`（策略表 / 401/403/503）、`ARCHITECTURE.md` §5.1/§6、ADR-0005 + 索引、README/AGENTS | 本笔 |
+
+**破坏验证（W4）**：删掉 `servedPolicy` 里的 `GET /datasets/{hash}` ⇒ `TestRouteTableEqualsServedPolicy` 红（route 3 vs policy 2）、`TestAuthWireThreeStates` 红（viewer 期望 503 实得 403）；逐字节还原（`sha256 AA06D41F…`）后两条复跑绿。
+
+**跨仓腿（core）**：`cmd/analysis/handlers_proxy.go` 的 `proxyRequest` 已把入站 `Authorization` 转发给数据服务（2026-10-25）；core 侧守卫 `TestProxyForwardsAuthorization` / `TestProtectedRouteThroughProxyDoesNotLoseCredentials` 证明 `POST /api/v1/ohlcv/bulk` 经代理不 401。
+
 **未落项（如实登记，不写成已完成）**
 
 - **第二写者未消灭**：core 侧同步腿仍在写 `market` / `ingest`；本仓只能先立 owner（DDL）与写闸门。物理 `SET SCHEMA` 搬迁（D4）未做。
@@ -123,7 +139,7 @@ verified-by: D4-1 裁-14 —— 撤掉 `/factors/{name}@{hash}` 路由与恒 404
 - **传输未搬**：Tushare / 东财 / Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档仍在 core；本仓按 `Transports` 注入。
 - **写面代码已落、装配未接**：`ETLPipeline` 与 `store.BulkInsert` 在本仓（2026-10-24，G4），但**同步作业层仍在 core**（`sync_jobs` → worker → ETL），本仓没有作业装配/调度；core `pkg/data/source/etl.go` 的旧写路径尚未删，且仍用 `ON CONFLICT DO UPDATE`（与 ADR-0004 的内容比对语义并存）。
 - ~~**`/factors/{name}@{hash}` → 裁-14（2026-10-25）**~~ **✅ 已落（D4-1，2026-10-25，本笔）**：路由、`handleFactor`、`ErrFactorNotFound` 与恒 404 占位全部撤掉，不做表迁移。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算（因子 / 回测 / IC）列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**，本仓 openapi / api-schema 同步删除该路径。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
-- **鉴权未移植（裁-15，2026-10-25 已定，可开工）**：旧 `cmd/data` 已有完整 REV-17 策略表（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` readonly-post），而新 `dataservice` **零鉴权实现**；`config/data-service.yaml` 已声明与 analysis 共用的 `AUTH_JWT_SECRET`（analysis 签发的 token 在此同样有效）——**配置在说谎**。口径：kit `v0.1.1` 的 net/http 适配 + **逐条照搬** REV-17 表 + route table ≡ policy table 守卫；无 secret + 回环 = 开放，无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配置 secret）。跨仓前置：core [handlers_proxy.go](../tellurion/cmd/analysis/handlers_proxy.go) 的 `proxyRequest` 分支要转发入站 Authorization（`/api/sync/*` 的 ReverseProxy 分支已原样转发）。
+- ~~**鉴权未移植（裁-15，2026-10-25 已定，可开工）**~~ **✅ 已落（2026-10-25，W4）**：新 `dataservice` 已接 kit `v0.1.1` 的 net/http 适配；`servedPolicy` = `/health` Public + `/datasets/*` viewer；旧 `cmd/data` 的 REV-17 表 28 条逐条移植为 `legacyREV17`（端点迁入时直接挂闸）；路由表 ≡ 策略表守卫 + 三态测试已落。**未落**：REV-17 对应的端点和真实保护仍在 core `cmd/data`（本仓只持迁移表）；core `proxyRequest` 已转发 `Authorization`（2026-10-25）。
 - **跨仓腿（报协调者，本仓不做）**：① 物理 `SET SCHEMA` 需要 core 先停第二写者；② 传输实现仍在 core（X1c 已登记）；③ ~~`UnifiedDataPoint` 迁 contracts 等 G0D-C4 发版~~ **已解除（2026-10-25）**：contracts `v0.6.0` 已推，本仓镜像已删、改别名，见上方 X1a 收编记录。
 
 **已登记的取舍与风险（必须随 X1b 一起读）**

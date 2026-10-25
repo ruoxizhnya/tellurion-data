@@ -77,9 +77,19 @@ func newTestAggregator(t *testing.T, universe []string) *serving.Aggregator {
 
 const resolveQuery = "/datasets/resolve?symbols=600519.SH&from=2026-01-05T00:00:00Z&to=2026-01-09T00:00:00Z&freq=1d&adjustment=qfq&as_of=2026-01-10T00:00:00Z"
 
+// allowAllAuthorizer 让既有功能测试聚焦业务语义；鉴权本身由 auth_test.go
+// 用真 kit TokenService 覆盖。
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) Authorize(*http.Request) error { return nil }
+
+func newServer(agg *serving.Aggregator) *Server {
+	return New(agg, WithAuthorizer(allowAllAuthorizer{}))
+}
+
 // resolve 两次同参数 ⇒ 同 hash（强幂等直达 wire）。
 func TestResolveIsIdempotentAcrossRequests(t *testing.T) {
-	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	rec1 := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rec1, httptest.NewRequest(http.MethodGet, resolveQuery, nil))
 	require.Equal(t, http.StatusOK, rec1.Code)
@@ -98,7 +108,7 @@ func TestResolveIsIdempotentAcrossRequests(t *testing.T) {
 
 // 同一 hash 两次拉取逐位一致（api-schema §3 的判据直达 wire）。
 func TestSnapshotSameHashReturnsByteIdenticalBody(t *testing.T) {
-	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	rec := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, resolveQuery, nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -120,7 +130,7 @@ func TestSnapshotSameHashReturnsByteIdenticalBody(t *testing.T) {
 
 // 快照返回内容要过自检：digest 与 metadata 六分量回显在 body 里。
 func TestSnapshotBodyCarriesDigestAndMetadata(t *testing.T) {
-	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	rec := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, resolveQuery, nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -144,7 +154,7 @@ func TestSnapshotBodyCarriesDigestAndMetadata(t *testing.T) {
 // 错误映射：参数缺失 400、票池空 409、hash 不存在 404 —— 分诊口径见
 // internal/serving/errors.go 头注释。
 func TestErrorMapping(t *testing.T) {
-	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	r := srv.Routes()
 
 	cases := []struct {
@@ -169,7 +179,7 @@ func TestErrorMapping(t *testing.T) {
 	}
 
 	// 票池解析为空 ⇒ 409（明确失败，不返回空数据集）。
-	empty := New(newTestAggregator(t, nil))
+	empty := newServer(newTestAggregator(t, nil))
 	rec := httptest.NewRecorder()
 	empty.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, resolveQuery, nil))
 	require.Equal(t, http.StatusConflict, rec.Code)
@@ -185,7 +195,7 @@ func TestErrorMapping(t *testing.T) {
 //   - 响应里不出现 `factor_not_found` —— 常驻 404 会被读成「该数据集没有该因子」。
 func TestFactorRouteIsRemoved(t *testing.T) {
 	for _, agg := range []*serving.Aggregator{nil, newTestAggregator(t, []string{"600519.SH"})} {
-		r := New(agg).Routes()
+		r := newServer(agg).Routes()
 		for _, path := range []string{"/factors/momentum@deadbeef", "/factors/momentum", "/factors/@x"} {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -199,7 +209,7 @@ func TestFactorRouteIsRemoved(t *testing.T) {
 // TestRouteTableIsThePublishedSurface 钉住对外路由集合：`/health` + 两条数据面。
 // 新增端点必须先改 `docs/api-schema.md`（路由表与契约双向对拍），再加到这里。
 func TestRouteTableIsThePublishedSurface(t *testing.T) {
-	srv := New(newTestAggregator(t, []string{"600519.SH"}))
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	r := srv.Routes()
 
 	rec := httptest.NewRecorder()
@@ -222,7 +232,7 @@ func TestRouteTableIsThePublishedSurface(t *testing.T) {
 
 // 端口未接线：/health 常绿，数据端点 fail-closed 503 dependency_unavailable。
 func TestUnwiredAggregatorFailsClosed(t *testing.T) {
-	srv := New(nil)
+	srv := newServer(nil)
 	r := srv.Routes()
 
 	rec := httptest.NewRecorder()
