@@ -50,7 +50,7 @@ go test ./...
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | `github.com/ruoxizhnya/tellurion-contracts` | `v0.6.0`（2026-10-24 发版，2026-10-25 X1a 收编切 pin；远端 tag 已推） | 数据协议 / DTO 只认契约；`internal/ingest` 的 `UnifiedDataPoint` 是 `dataprotocol.UnifiedDataPoint` 的别名，本地不再持逐字段镜像 |
-| `github.com/ruoxizhnya/tellurion-kit` | `v0.1.1`（2026-10-25 引入） | 鉴权机制：`auth`（token 解析）+ `auth/httpadapter`（net/http 适配、启动闸、Policy）。本仓只写策略表，不另造 token 校验 |
+| `github.com/ruoxizhnya/tellurion-kit` | `v0.1.4`（2026-10-25 引入 `v0.1.1`，同日随 KT-11 升 `v0.1.4`） | 鉴权机制：`auth`（token 解析）+ `auth/httpadapter`（net/http 适配、启动闸、Policy）。本仓只写策略表，不另造 token 校验。**`v0.1.4` 起 `role=service` 的非数字 subject 不再被 401** ⇒ core 用 `sub=service:core` 调 `POST /ingest/points` 才真正走得通 |
 | `github.com/stretchr/testify` | `v1.11.1` | 仅测试用（断言）；与 contracts 仓同版本 |
 | `github.com/jackc/pgx/v5` | `v5.7.3` | PG 驱动/连接池（X1d 的四个 port 实现）。与 core 同版本，避免第二个大版本 |
 

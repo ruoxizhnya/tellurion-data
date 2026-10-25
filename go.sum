@@ -69,8 +69,8 @@ github.com/rogpeppe/go-internal v1.6.1 h1:/FiVV8dS/e+YqF2JvO3yXRFbBLTIuSDkuC7aBO
 github.com/rogpeppe/go-internal v1.6.1/go.mod h1:xXDCJY+GAPziupqXw64V24skbSoqbTEfhy4qGm1nDQc=
 github.com/ruoxizhnya/tellurion-contracts v0.6.0 h1:zE5bpoTicgM0y48J95p7hNwf0E9knKMkGKFRlGHaNww=
 github.com/ruoxizhnya/tellurion-contracts v0.6.0/go.mod h1:F8trdn54YaEx1/gRsDpZ/aLX7XZycyB5o5N2OgOHaSA=
-github.com/ruoxizhnya/tellurion-kit v0.1.1 h1:XrWz0PIylfZRsklztkSCaoPAsfvD9Dk4g64o62/Ck1E=
-github.com/ruoxizhnya/tellurion-kit v0.1.1/go.mod h1:VnVSZdoDazVODGxEW8tOGBocrJH1wbjW8ALdefluR5c=
+github.com/ruoxizhnya/tellurion-kit v0.1.4 h1:sRFnvh5XNKIXb3YYJVHI1A59zkjgqf9SbSAyU7vslSY=
+github.com/ruoxizhnya/tellurion-kit v0.1.4/go.mod h1:VnVSZdoDazVODGxEW8tOGBocrJH1wbjW8ALdefluR5c=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
