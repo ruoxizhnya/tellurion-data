@@ -11,6 +11,8 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > 每张单六字段（① 目标 ② 上下文 ③ 要求 ④ 约束与非目标 ⑤ 验收 ⑥ 边界），判据见 `tellurion:AGENTS.md` §8.5。
 > 完成即标 ✅（附日期）并移入 `docs/archive/TASKS-YYYY-MM-DD-archived.md`；本文件只留未完成项。
 
+> **第三轮裁决指针（2026-10-25）**：⑤ 生产 `visible_at` 回填**只授权 9 张 core 无写者的 A 集表**（`ohlcv_daily_qfq` / `sectors` / `stock_sector_map` 等 core 停写后再批；**执行者是运维，不是 agent**）。⑰ `market.index_daily` **owner = core**：本仓须撤认领并删 `internal/schema/market.go:301` 的建表/索引、`TableNames()` 条目、`visible_at.go:54` 的 C 集条目、`docs/db-schema.md:25/151` 的认领，并加守卫（core 与 data 两套 DDL 形状不同，**先建表者定形**）。正文见 `tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` §五。
+
 ---
 
 ## 一、本仓任务
