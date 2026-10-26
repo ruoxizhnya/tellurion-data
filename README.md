@@ -1,6 +1,6 @@
 # tellurion-data
 
-> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地；HTTP 面（3 路由 + 鉴权闸）与取数存储 port 已接线，REV-17 策略已移植（见 `docs/TASKS.md` QT-40）
+> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地；HTTP 面（**4 路由** + 鉴权闸：`GET /health`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，实测 `internal/httpapi/server.go:69-80`）与取数存储 port 已接线，REV-17 策略已移植（见 `docs/TASKS.md` QT-40）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 

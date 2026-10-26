@@ -12,6 +12,13 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > 完成即标 ✅（附日期）并移入 `docs/archive/TASKS-YYYY-MM-DD-archived.md`；本文件只留未完成项。
 
 > **第三轮裁决指针（2026-10-25）**：⑤ 生产 `visible_at` 回填**只授权 9 张 core 无写者的 A 集表**（`ohlcv_daily_qfq` / `sectors` / `stock_sector_map` 等 core 停写后再批；**执行者是运维，不是 agent**）。⑰ `market.index_daily` **owner = core**：本仓须撤认领并删 `internal/schema/market.go:301` 的建表/索引、`TableNames()` 条目、`visible_at.go:54` 的 C 集条目、`docs/db-schema.md:25/151` 的认领，并加守卫（core 与 data 两套 DDL 形状不同，**先建表者定形**）。正文见 `tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` §五。
+>
+> **⑰ 施工前置复核（2026-10-26 实测，仍未落）**：上面四个撤销点今天都还在——`internal/schema/market.go:301`（建表）+ `:317`（索引）、
+> `internal/schema/schema.go:47`（`TableNames()` 条目）、`internal/schema/visible_at.go:54`（C 集条目）、`docs/db-schema.md:25`（认领行）。
+> ⚠️ **并且有一条守卫与它反向耦合，执行 ⑰ 时必须同批改，不能只改一边**：`internal/schema/schema_test.go:69` 现在是
+> `assert.Contains(t, exempt, "market.index_daily")`——它逐字钉住的正是 ⑰ **要撤掉**的那个状态。删掉 C 集条目而不改这条断言 ⇒ 测试当场红；
+> 反过来先把断言改成 `NotContains` 而不删条目 ⇒ 等于用测试给未完成的搬迁发通行证。**判据：同一笔提交里同时删 `visible_at.go:54` 的条目、
+> 把 `:69` 翻成 `assert.NotContains(...)`，并保留 `:73-78` 的「三集合互不重叠」腿不变**（那条腿在撤认领后才会真的开始起作用）。
 
 ---
 
@@ -171,7 +178,14 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > `TestServedPolicyServiceRole` 当时能过是因为它用的是 `IssueTokens` 签的**数字 subject** + `role=service`，绕开了这个形状。
 > kit `v0.1.4`（`KT-11`）只对 `claims.Role == auth.ServiceRole` 放宽该校验，其余输入仍 401。
 > **本仓动作**：`go.mod` / `go.sum` 升 `v0.1.4`（`go.sum` 两行取自 `sum.golang.org`；`v0.1.4/go.mod` 的 hash 与 `v0.1.1` 逐字节相同 ⇒ 依赖图未变），
-> `AGENTS.md` §4 那一行同步。**验收证据 = CI 退出码**（本机无 Go 工具链，`go build/vet/test` 一条都没复跑，不拿本机绿当结论）。
+> `AGENTS.md` §4 那一行同步。**验收证据 = CI 退出码**（写这条的当时本机无 Go 工具链，`go build/vet/test` 一条都没复跑，不拿本机绿当结论）。
+> ⚠️ **2026-10-26 复测订正：「本机无 Go」从今天起不许再当不复跑的理由**。Go **1.25.14 已装**
+> （`C:\Users\ruoxi\AppData\Local\Programs\go1.25.14\bin\go.exe`），只是**不在默认 Git Bash 的 PATH 里**
+> （`command -v go` 空）——先 `export PATH="/c/Users/ruoxi/AppData/Local/Programs/go1.25.14/bin:$PATH"` 就能实跑。
+> 本批对本仓实跑的真实退出码：`gofmt -l .` **空**；`go build ./...` **EXIT=0**；`go vet ./...` **EXIT=0**；
+> `go test ./... -count=1` **EXIT=0**（`-v` 下 **4 条 SKIP**，全是 `TestPG_BulkInsert_*` —— 本机 `127.0.0.1:5432` 无监听，
+> `netstat` 0 行；skip 不是 pass，PG 腿仍要在有库环境补）。两条本机硬限制照旧：`-race` 跑不了
+> （`go env CGO_ENABLED` = 0，`go build -race` 直接 EXIT=2「requires cgo」），故 race 腿仍归 CI。
 
 > **裁决（2026-10-25，主任口径）· ⑨：`visible_at` 生产库回填 —— 暂不授权**
 > 裁决全文见 `tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑨。
@@ -258,6 +272,33 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **③-② 的四个错误码在代码里一个都不存在**（`ErrNoTimeSemantics` / `ErrUnknownDataType` / `ErrVisibleAtMissing` / `ErrSnapshotMismatch` 全仓 grep = 0 命中）。真实在执法的是 `tellurion:pkg/data/source` 的三个注册期哨兵 `ErrDeclarationMissing` / `ErrDeclarationInvalid` / `ErrDeclarationMismatch`（`contract.go:66-68`）。**`ErrNoTimeSemantics` 是 `ErrDeclarationMissing` 的旧名，作废**（见对表 G 组 T1）。
 - **③-② 的 `ErrVisibleAtMissing` 有一条工单没写的代价**：现有已落库数据**没有承载 `visible_at` 的列**，这道门一上线历史行不可回填 ⇒ 必须与 X1d 的 schema 迁移同批设计（加列 + 按 `TimeSemantics` 规则重算，重算不了的处理要成文）。登记为对表 T5 —— **方案已于 2026-10-22 成文** = `docs/db-schema.md` §6（含一条工单没预见的覆盖面限制：`market_activity` / `quant.macro_series` 两个已声明语义的源**不走 BulkInsert**，门挂在 `ValidatePoints` 上拦不到它们）。
 - **⑤ 三条验收的覆盖面要按对表收窄一条**：「改日历/复权口径 → hash 变」这条**已由 QT-03 的向量测试钉住**（`provenance_vector_test.go:194-228`，`DatasetSnapshotHash_UniqueDefinition` 逐分量 mutate），本仓 X1b 新增的判据是**生产者侧**的——六个入参（`universe` / `window` / `frequency` / `data_version` / `calendar` / `adjustment`）逐个 mutate 必须变 hash，测试已落。⚠️ **`as_of` 不在冻结六分量里**（2026-10-23 实现时确认，不是笔误），处置见本单「已登记的取舍与风险」第一条：缓存对同 hash 不同 `as_of` fail-closed。
+
+### SVC-DATA-G1 · 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036）[P0] ⬜
+
+- **① 目标**：本仓对外接口满足 ADR-036 §3 的 G1 五件——版本化 API、错误模型、鉴权/授权、幂等、分页/限流——并各自有可执行判据。
+- **② 上下文**：今天 4 条路由（`/health` + `/datasets/resolve` + `/datasets/{hash}` + `POST /ingest/points`），鉴权已落（`internal/httpapi/auth.go` = kit 适配、`policy.go` = 策略表，写端点档位只 `service` + `admin`）；**实测本仓无 openapi / swagger 文件**（版本化只剩 `docs/api-schema.md` 人读）；`/readyz` 全 workspace 代码 0 命中；分页与限流今天没有。跨仓前置：core 的 5 条旧读面（`/ohlcv/{symbol}`、`/api/v1/ohlcv/bulk`、`/screen`、`/market/index`、`/factors/{name}`）与本仓 4 条**不对齐**（材料 §2.6 ① / §5.2 K1），本单不擅自补齐它们。
+- **③ 要求**：① `api-schema.md` 给每条端点写明版本与兼容策略（加字段 = MINOR、改语义 = MAJOR，按 C5 保留一个版本周期）；② 错误码闭合表：每个哨兵 → HTTP 码 + 报文形状逐条列出，**未列出的码视为缺陷**（今天只有零散映射）；③ 读端点要么加分页（`limit`/`cursor`），要么显式声明「整段返回」并给条数上界 + 超限行为；④ `POST /ingest/points` 的幂等语义成文（以 `dataprotocol.DeduplicateKey` 为键，重复投的返回码与首次一致）；⑤ 限流只需「不把自己打挂」的量级，但 **429 语义必须与 401 可区分**——core 侧 AUD-57 的教训：探针被限流读成「未登录」会把整站弹到登录页，故 `/health`、`/readyz` 必须豁免且有用例；⑥ 健康/就绪分离：`/health` = 进程活着，`/readyz` = PG 池可连 + 本仓 DDL 已执行。
+- **④ 约束与非目标**：不实现 core 那 5 条旧面（K1 未裁）；不引入 API 网关/新框架；不做多租户配额；不改 contracts pin（`v0.6.0`）；不在本单做物理 schema 搬迁。
+- **⑤ 验收**：① `api-schema.md` 每条端点有版本行、错误码表逐条齐全（抽 2 条比对实现）；② 四条用例真跑：分页上界、429 与 401 可区分、探针豁免、幂等重投返回同码；③ `GET /readyz` 在 `DATABASE_URL` 为空 / PG 不可达时 **503**、正常时 **200**（各一条用例）；④ `go build/vet/test ./...` 单仓三条绿（贴真实退出码）。
+- **⑥ 边界**：本仓接口面；core 改指本仓的切读归 `SVC-DATA-G3`，K1 的接口面对齐由协调者裁。
+
+### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] ⬜
+
+- **① 目标**：`market` / `ingest` 的 DDL 归属在本仓**自证**——迁移可重复执行、不跨 schema 写、每张表「谁写」有答案。
+- **② 上下文**：`internal/schema` 持 23 张 DDL（`market` 19 + `ingest` 4，`TableNames()` 可对账），`cmd/dataservice` 在 `DATABASE_URL` 有值时启动执行；**今天仍是双 owner**——core 侧写点未归零（本仓台账 X1d 行自证「其余同步腿仍在 core 写」；core 侧删除单 = `tellurion:SVC-CORE-DATA-RETIRE`）；`deploy/compose.yaml:32` 出厂 `DATA_MARKET_SCHEMA: market`，而 core 用**裸表名**写 `public.*`（core 仓内无 `search_path`）⇒ 两种读法指向的不是同一批表，这条口径必须钉死；`visible_at` 回填只在测试库跑过（`-tags backfill` + `DATA_TEST_DSN`，库名须以 `_test` 结尾）；材料 §5.2 K3 列出 **10 张「有表无写者」**（market 侧 7 + ingest 侧 3）。
+- **③ 要求**：① 迁移重放自证：同一库连跑两次全部 DDL，断言行数 / `pg_indexes` / 列集指纹**逐位不变**，这条腿做成默认可跑（无库时 skip，不是假绿）；② 禁跨 schema 写护栏：新增 repoguard 静态扫本仓 SQL，出现 `quant.` / `public.` / 其他仓 schema 的写语句即红；③ K3 那 10 张逐张给处置（补写者 / 显式声明「只由 core 写，本仓不拥有」 / 弃表），处置写进 `docs/db-schema.md`；④ 把 `DATA_MARKET_SCHEMA` 取值口径与「物理 `SET SCHEMA` 搬迁的前置 = core 停写」成文。
+- **④ 约束与非目标**：不执行物理搬迁；不 `DROP` 任何表或索引；不改 core 的写点（那是 `SVC-CORE-DATA-RETIRE` ③ 的串行序）；不碰生产库（护栏与重放腿只连 `_test` 库）；`market.index_daily` 按裁决 ⑰ 属 core，不许顺手接管。
+- **⑤ 验收**：① 重放腿两次指纹逐位相同（贴两次输出）；② 破坏验证：往本仓任一 SQL 常量加一行 `INSERT INTO quant.foo` ⇒ 护栏红，逐字节还原复绿；③ K3 的 10 行每行有出处与处置，`db-schema.md` 与之一致；④ 三条命令单仓绿。
+- **⑥ 边界**：本仓 schema 自证；「旧写者归零 + 旧代码删除」= core 侧退役单 + 本仓 `SVC-DATA-G3` 两件事，不在本单。
+
+### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] ⬜
+
+- **① 目标**：本仓作为服务**可运维**——依赖失败时说什么、超时多久、怎么重启与排查，全部成文并被真跑过一次。
+- **② 上下文**：ADR-036 §3 的 G4 判据 = 「超时/重试/熔断、失败语义、日志/指标/追踪、回滚」+「故障演练 + runbook + 健康/就绪分离」；**全 workspace 实测 `runbook` 只出现在 ADR-036 自己的正文里**，六个服务仓一份都没有 ⇒ G4 此前无人认领（本组六仓的 `SVC-*-G4` 是同一件事的六个实例，各自只写自己仓的依赖面）；本仓今天只有 `/health`，`DATABASE_URL` 为空时数据端点 503（fail-closed 已写进 `api-schema.md`），出站传输由 core 注入（`Transports` 窄接口），本仓侧没有超时上界的文档。
+- **③ 要求**：① 失败语义表：PG 不可达 / 数据源配额耗尽 / connector 超时 / 内容冲突（`ErrContentConflict`）四类，各写明「HTTP 码、是否重试、是否落痕、调用方该做什么」；② 超时与重试边界（**包括「本仓不重试、由作业侧重试」这类不做的理由**也要成文）；③ 可观测最小面：每端点错误率与延迟，或显式声明「单人自托管不接 Prometheus」并写明故障时用什么定位（日志 + 一条命令）；④ 新建 `docs/runbook.md`：起停、看日志、重放迁移、`visible_at` 回填操作、503 与投递失败的排查路径；⑤ 一次故障演练记录：拔掉 PG ⇒ 端点 503 且不 panic、不静默成功，恢复后自愈。
+- **④ 约束与非目标**：不引 APM / SaaS / OTel collector；不做高可用与多副本；不在本单接真数据源传输（仍在 core）；不改 `/health` 既有语义（`/readyz` 属 `SVC-DATA-G1` ⑥）。
+- **⑤ 验收**：① runbook 每条命令可复制、当场执行过并贴真实输出；② 演练记录有真退出码（拔 PG 前后各一次）；③ 失败语义表四类齐全，每条有对应用例或写明「无用例的原因」；④ 三条命令绿。
+- **⑥ 边界**：本仓运维面；core 的聚合 compose 与 `cmd/worker` / `cmd/dualrun` 部署形态归 `tellurion:QT-79`。
 
 ## 施工序（候选单，开工前必须展开成六字段）
 
