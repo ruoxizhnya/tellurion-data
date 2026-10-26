@@ -27,6 +27,19 @@ go test ./...
 
 本仓**单独 checkout 就能跑通**上面三条。需要别的仓源码才过 → 边界错了，不是加 `replace` 能解决的问题。
 
+### 容器方式（单仓可起）
+
+```bash
+docker compose -f deploy/compose.yaml config -q
+docker compose -f deploy/compose.yaml up --build -d
+curl -fsS http://127.0.0.1:8081/health
+docker compose -f deploy/compose.yaml down
+```
+
+- `deploy/compose.yaml` 自带 `postgres`（`pg_isready` 健康检查）；`data` 用 `depends_on.condition=service_healthy` 等它就绪后再起。
+- 宿主端口 `8081`；`DATABASE_URL` / `DATA_MARKET_SCHEMA=market` / `JWT_SECRET` 已在 compose 内配好。连外部库时用 `DATA_DATABASE_URL=...` 覆盖。
+- 镜像多阶段构建（`golang:1.25-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/health`。
+
 > 起服务：默认 `:8081`（全网卡）且无 `JWT_SECRET` 会被启动闸**拒绝**（不允许无鉴权数据面暴露）。
 > 本地开发用 `-addr 127.0.0.1:8081`；容器形态必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published` 或配 `JWT_SECRET`。
 

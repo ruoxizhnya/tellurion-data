@@ -19,6 +19,24 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 
 > **约定变更（2026-10-21）**：原「占位仓不写正式六字段任务单」作废——X 线任务单已展开为本仓正式任务（见下）。M5/M8 开工前置不变；实现仍未开工，开工前仍须过前置两条。（2026-10-23：实现已开工，见本单下的进度块。）
 
+### SVC-DATA-G0 · 服务就绪门 G0：自有部署与本地启动（ADR-036）[P0] 🔶
+
+- **① 目标**：本仓作为数据面服务，能在没有 core 源码的情况下独立构建、启动、被健康检查。
+- **② 上下文**：ADR-036 定六仓为服务；今天本仓有 `cmd/dataservice` + 23 张 `market.*`/`ingest.*` schema，但无 `Dockerfile` / `deploy/`；生产 `:8081` 仍由 core `cmd/data` 提供。
+- **③ 要求**：新增 `Dockerfile`（多阶段构建、非 root、`curl`、`HEALTHCHECK /health`）；新增 `deploy/compose.yaml`（本仓 build context；`DATABASE_URL` / `DATA_MARKET_SCHEMA` / `JWT_SECRET`；端口 `:8081`）；补 `config/` 或 env 说明；README 写单仓启动命令。
+- **④ 约束与非目标**：不改业务逻辑与 schema；不接 core 写切读（归 G3）；不引入 K8s；不把 core `cmd/data` 复制进本仓。
+- **⑤ 验收**：`docker compose -f deploy/compose.yaml config` 通过；单仓启动后 `GET /health` 200；有 Go 环境时 `go build ./...` 单仓绿；无 `replace` / `go.work`。
+- **⑥ 边界**：只改本仓 deployment；core 侧 compose 由 `SVC-DEPLOY-01` 处理。
+
+### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ⬜
+
+- **① 目标**：`market.*` / `ingest.*` 的唯一 writer 变成本仓；core 不再写行情/同步表，旧 `pkg/data` / `cmd/data` 删除。
+- **② 上下文**：`X1d`（QT-40）已规划「消灭第二写者」，但今天 core 仍持约 20 张裸表与生产写入；本仓 `POST /ingest/points` 只覆盖 `capital_flow` / `top_list` 两条作业。
+- **③ 要求**：先出逐表 writer/reader 清单；按四步（第二写者 → 对拍 → 切读 → 停写）推进；core 读路径改 `data_service.url`；停写后删 core `pkg/data` 写入与 `cmd/data` 同步面；`market.index_daily` 保持 core owner（裁决 ⑰）。
+- **④ 约束与非目标**：不在 core 写者未停前做物理 `SET SCHEMA`；不搬 `quant.*` 运行态表；不接逐 bar / 逐笔。
+- **⑤ 验收**：core 侧 `market.*` / `ingest.*` 写点 = 0；`X1d` 关闭；core `cmd/data` 删除或只剩只读代理；新旧行数/校验和对拍报告归档。
+- **⑥ 边界**：本仓只负责自己的 schema 与 API；core 代码删除由 `SVC-CORE-DATA-RETIRE` 跟踪。
+
 ### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶
 
 > **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
