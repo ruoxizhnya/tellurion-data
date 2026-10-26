@@ -186,6 +186,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > `go test ./... -count=1` **EXIT=0**（`-v` 下 **4 条 SKIP**，全是 `TestPG_BulkInsert_*` —— 本机 `127.0.0.1:5432` 无监听，
 > `netstat` 0 行；skip 不是 pass，PG 腿仍要在有库环境补）。两条本机硬限制照旧：`-race` 跑不了
 > （`go env CGO_ENABLED` = 0，`go build -race` 直接 EXIT=2「requires cgo」），故 race 腿仍归 CI。
+> **全组统一环境表**：`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-26.md` §三 —— 环境口径以后者为唯一出处，别再各仓各写一份（本行此前与 orchestration 那行就是两套相反结论并存）。
 
 > **裁决（2026-10-25，主任口径）· ⑨：`visible_at` 生产库回填 —— 暂不授权**
 > 裁决全文见 `tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑨。
