@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 4 条路由与
+// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 5 条路由与
 // servedPolicy 必须双向一一对应。漏登策略 / 表里写了不存在的路由都会红。
 func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	srv := New(nil)
@@ -23,7 +23,7 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 
 	// 逐条点名，不是只数条数：加一条没登记策略的路由要红，删一条路由也要红，
 	// 而「条数刚好对上但内容换了」这种漂移只有清单能拦住。
-	want := []string{"GET /datasets/resolve", "GET /datasets/{hash}", "GET /health", "POST /ingest/points"}
+	want := []string{"GET /datasets/resolve", "GET /datasets/{hash}", "GET /health", "GET /readyz", "POST /ingest/points"}
 	got := append([]string(nil), routes...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(want, got) {

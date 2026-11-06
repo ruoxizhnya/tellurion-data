@@ -81,7 +81,7 @@ const resolveQuery = "/datasets/resolve?symbols=600519.SH&from=2026-01-05T00:00:
 // 用真 kit TokenService 覆盖。
 type allowAllAuthorizer struct{}
 
-func (allowAllAuthorizer) Authorize(*http.Request) error { return nil }
+func (allowAllAuthorizer) Authorize(*http.Request) (string, error) { return "test-user", nil }
 
 func newServer(agg *serving.Aggregator) *Server {
 	return New(agg, WithAuthorizer(allowAllAuthorizer{}))

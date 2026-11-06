@@ -6,9 +6,11 @@
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
-**状态**：X1 施工中（2026-10-25，QT-40 H4 ②）——`internal/ingest`（注册门 + 12 connector 声明 + ETL 编排与 `GatePoints` 闸门）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）、`internal/store`（四个取数 port + 写面 `BulkInsert`）、`internal/schema`（`market` / `ingest` 的 DDL 归属 + `visible_at` 三集合）、`internal/assembly`（投影与写侧链的唯一装配层，ADR-0006）已落地；HTTP 面 **4 条路由**（`/health` + `/datasets/resolve` + `/datasets/{hash}` + **`POST /ingest/points`**，全部过鉴权闸）；**12 connector 的传输实现与同步作业调度（`sync_jobs` → worker → executor）仍在 core**。
+**状态**：X1 施工中（2026-10-25，QT-40 H4 ②）——`internal/ingest`（注册门 + 12 connector 声明 + ETL 编排与 `GatePoints` 闸门）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）、`internal/store`（四个取数 port + 写面 `BulkInsert`）、`internal/schema`（`market` / `ingest` 的 DDL 归属 + `visible_at` 三集合）、`internal/assembly`（投影与写侧链的唯一装配层，ADR-0006）已落地；HTTP 面 **5 条路由**（`/health` + **`/readyz`** + `/datasets/resolve` + `/datasets/{hash}` + **`POST /ingest/points`**），其中两条探针公开、其余过鉴权闸；**12 connector 的传输实现与同步作业调度（`sync_jobs` → worker → executor）仍在 core**。
 
-**今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 4 路由；`auth.go` = kit 适配，`policy.go` = 策略表，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
+**服务就绪门 G1（2026-11-07）**：`/readyz` = PG 池可连 + 本仓 DDL 已执行（`to_regclass('market.ohlcv_daily_qfq')`），三态见 `docs/api-schema.md` §1.1；业务端点按身份令牌桶限流（50 rps / 突发 200），429 与 401 可区分、探针豁免。**真实 PG 断开/恢复腿未执行**（本机 Docker 引擎未起），`docs/TASKS.md` 的 SVC-DATA-G1 记 🔶。
+
+**今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 5 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
 
 ## 2. 构建 / 测试（必须单仓可跑）
 

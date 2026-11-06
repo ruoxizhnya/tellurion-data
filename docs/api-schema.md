@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-25
-verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly` 装配层）；W4 鉴权接线；裁-14 撤 `/factors/{name}@{hash}`
+last-verified: 2026-11-07
+verified-by: SVC-DATA-G1 —— 新增公开 `/readyz`（PG 可连 + 本仓 DDL 已执行）、按身份令牌桶限流（429 与 401 可区分、探针豁免）、错误码闭合表与版本/分页策略；真实 PG 断开/恢复腿未执行
 ---
 
 # API Schema — tellurion-data
@@ -14,7 +14,7 @@ verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
-> `internal/httpapi/policy.go`。`/health` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
+> `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
 > `viewer` 及以上（any-of 写全，不是层级）；**写端点只接受 `service` / `admin`**（见 §1 策略表注）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；
 > 无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配 `JWT_SECRET` 或声明容器只在回环发布）。
@@ -46,10 +46,49 @@ verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
 > **鉴权策略表（2026-10-25，裁-15 + H4 ②）**：
-> - **本仓实际路由**（`servedPolicy`）：`GET /health` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。
+> - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。
 > - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓，**但对应端点尚未迁入**（仍在 core）。保留这张表是为了端点迁移时「同一路由、同一角色」不再重新拍板；守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论。
-> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 4 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）。
+> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 5 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）。
 > - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点的调用方凭证**由 core 侧 env 注入（`INGEST_WRITE_*`），不在本仓签发。
+
+### 1.1 服务探针与请求治理（G1，2026-11-07）—— ✅ 代码已落，真实 PG 腿未跑
+
+| 方法 | 路径 | 用途 | 鉴权 |
+|---|---|---|---|
+| GET | `/health` | 进程存活（**不读库**，库挂了也 200） | 无（公开） |
+| GET | `/readyz` | 就绪：PG 池可连 + 本仓 DDL 已执行（`SELECT to_regclass('market.ohlcv_daily_qfq')`） | 无（公开） |
+
+`/readyz` 三态（`readyBody = {status, store, error?}`）：
+
+| 情形 | HTTP | `status` | `store` |
+|---|---|---|---|
+| `DATABASE_URL` 为空 / readiness 未注入 | 503 | `not_ready` | `unwired` |
+| PG 不可达或 DDL 未执行 | 503 | `not_ready` | `postgres`（`error` 带原因） |
+| 正常 | 200 | `ready` | `postgres` |
+
+> **探针必须公开且豁免限流**：否则「鉴权配置坏了」会被读成「进程死了」，或把探针限流读成未登录
+> （core 侧 AUD-57 的同型坑：探针 401 会把整站弹到登录页）。实现上公开路由直接注册，不经过
+> `requireAuth`，因此也不经过限流。
+
+**限流**：按调用方身份（`username` → `sub` → `open-access` 共用一桶）的进程内令牌桶，默认 **50 rps / 突发 200**
+（`internal/httpapi/limit.go`，不引新依赖）。超限 = `429` + `code:"rate_limited"` + `Retry-After: 1`；
+**鉴权先于限流**，因此 `401` / `403` 永远不会被 429 顶替。守卫 `TestRateLimitDistinctFromAuthAndProbesExempt`。
+
+**错误码闭合表**：§2 那张表就是**完整清单**——表里没有的码视为缺陷。代码侧唯一分诊点是
+`internal/httpapi/server.go` 的 `sentinelCodes`（读面）与 `internal/assembly.WireError`（写面），
+未登记错误一律 500 `internal`。读面 9 个哨兵逐条在表里（含 `ErrEmptyDataVersion → 409
+empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其中一条的码字与状态码，
+防止有人把冲突类错误顺手改成 500。
+
+**分页（统一策略：整段返回 + 声明上界，本轮不引 cursor）**：本仓**没有集合类读端点**——
+`/datasets/resolve` 与 `/datasets/{hash}` 各自只返回**一个**数据集（`{dataset_hash, metadata}` / 一个
+`Dataset`），不存在「翻页」。声明上界：`POST /ingest/points` ≤ 10000 点 / ≤ 8 MiB（超限 413）。
+将来新增任何列表端点，必须**要么**给 `limit` / `cursor`，**要么**在本文写明整段返回的条数上界与超限行为；
+不允许「返回全部且不声明」。（`GET /rules` 式整段返回的判据可参照 `tellurion-risk:docs/api-schema.md` §1。）
+
+**幂等（写面重投）**：`POST /ingest/points` 以行主键 + 全列内容比对判定，**重复投的返回码与首次一致**
+（200，`persisted` 计入已就位的点，`skipped` 计入重复/非法点）；`source` 参与比对，换源 = 409
+`content_conflict`。详见 §3。
 
 ## 2. 错误码与 fail-closed 语义
 
@@ -63,6 +102,7 @@ verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly
 | 无凭证 / token 过期 | ✅ 2026-10-25 | 数据面端点未带 / 带了坏 `Bearer` | 401 `unauthenticated`；不重试，补齐凭证 |
 | 角色不足 | ✅ 2026-10-25 | 角色不在策略表（数据面接受 `service` / `viewer` / `trader` / `admin`） | 403 `forbidden`；不重试 |
 | 鉴权闸未装配 | ✅ 2026-10-25 | 进程未装 `Authorizer` | 503 `auth_unavailable`；**拒绝而非放行** |
+| 请求超限 | ✅ 2026-11-07（G1） | 同一身份令牌桶耗尽（默认 50 rps / 突发 200；探针豁免） | 429 `rate_limited` + `Retry-After`；不重试到成功为止，按退避重试 |
 | `ErrDeclarationMissing` | ✅（`tellurion:pkg/data/source/contract.go:66`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
 | `ErrDeclarationInvalid` / `ErrDeclarationMismatch` | ✅（`:67` / `:68`） | 声明非法（枚举 / 缺 `VisibleExpr` / 重复）／声明与数据形态矛盾 | 注册期拒收 |
 | `ErrUnsupported` | ✅（`tellurion:pkg/data/source/adapter.go:73`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
@@ -93,6 +133,10 @@ verified-by: QT-40 H4 ②（写端点 `POST /ingest/points` + `internal/assembly
 
 ## 4. 版本与兼容
 
+- **版本策略（G1，2026-11-07）**：当前路径即 **v1**（`/datasets/*`、`/ingest/*` 不写 `/v1`）。
+  **MINOR**（加可选字段 / 加端点 / 加错误码）= 不改路径、旧客户端不感知；**MAJOR**（删字段、改字段语义、
+  改已有错误码含义）= 新路径段 `/v2` + 一个版本周期的双写窗口，**禁止同路径改语义**。
+  本仓今天没有 openapi 文件（正式 schema 的真相源在 core，QT-50 ③-③），版本纪律以本节 + §2 表为准。
 - 协议类型（`UnifiedDataPoint` 等）住在 contracts，版本随契约走。**包名与迁入时机**见对表 A 组注 ①/②：定名 `contracts/dataprotocol`，那一笔挂在 X1b 第一 commit。判据的**条款号是订正过的**（2026-10-22，QT-40 对表 T2 核对上游时逮到）：不许提前迁的那条是 contracts `docs/adr/0001` **①**「本仓只放被 ≥2 个仓使用的类型」（`tellurion-contracts:AGENTS.md` §3 写作「只有单个仓使用的类型属泄漏」），**不是 ③**——③ 管的是 `Config`/`Options`/`Impl` 命名。⚠️ 同一份 ADR 的「代价」节又接受 S1 整包迁时带进 core-only 类型、事后按清单回收，于是「新建包要不要走同一条容忍」成一个真岔路：**两个选项都自洽，登记在 `tellurion-contracts:docs/API.md` §8 待裁 #4，X1a 前挑定并写回本节**，不要 core / data 两侧各按一条施工。
 - 端点只增不删；废弃走 `deprecated` 头 + 一个 MINOR 周期。
 - 字段语义变更（尤其 `visible_at`）算 breaking，必须走 ADR。

@@ -94,7 +94,8 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 		"store.NewWriter(store.PoolWriteDB(pool), opts)",
 		"assembly.DeclarationsRegistry()",
 		"assembly.New(declarations, writer, nil)",
-		"httpapi.New(agg, authorizer, httpapi.WithPoints(points))",
+		"httpapi.WithPoints(points)",
+		"httpapi.WithReadiness(readinessCheck(pool))",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("build() 的写面装配链少了这一段：%q\n（漏了它，投点端点会在运行时 503，而 internal/* 的套件全绿）", want)

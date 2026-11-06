@@ -60,6 +60,18 @@ func postPoints(srv *Server, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// 幂等重投（G1 ⑤②）：同一批投两次，返回码与报文逐字节一致。
+// 落库层的去重（已存在的行计 `skipped`）在 store 的真实 PG 腿上，
+// 这里钉的是「重放不会被改成 409 / 500」。
+func TestIngestPointsReplayReturnsSameCodeAndBody(t *testing.T) {
+	srv := newPointsServer(t, &capturedSink{})
+	first := postPoints(srv, pointsBody)
+	second := postPoints(srv, pointsBody)
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, first.Code, second.Code)
+	assert.Equal(t, first.Body.String(), second.Body.String())
+}
+
 // 路由在位且能走通：200 + 计数 + 批次真的到达写面（不是 404，也不是空转）。
 func TestIngestPointsIsPublishedAndReachesStore(t *testing.T) {
 	sink := &capturedSink{}

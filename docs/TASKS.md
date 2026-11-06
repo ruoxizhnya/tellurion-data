@@ -274,7 +274,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **③-② 的 `ErrVisibleAtMissing` 有一条工单没写的代价**：现有已落库数据**没有承载 `visible_at` 的列**，这道门一上线历史行不可回填 ⇒ 必须与 X1d 的 schema 迁移同批设计（加列 + 按 `TimeSemantics` 规则重算，重算不了的处理要成文）。登记为对表 T5 —— **方案已于 2026-10-22 成文** = `docs/db-schema.md` §6（含一条工单没预见的覆盖面限制：`market_activity` / `quant.macro_series` 两个已声明语义的源**不走 BulkInsert**，门挂在 `ValidatePoints` 上拦不到它们）。
 - **⑤ 三条验收的覆盖面要按对表收窄一条**：「改日历/复权口径 → hash 变」这条**已由 QT-03 的向量测试钉住**（`provenance_vector_test.go:194-228`，`DatasetSnapshotHash_UniqueDefinition` 逐分量 mutate），本仓 X1b 新增的判据是**生产者侧**的——六个入参（`universe` / `window` / `frequency` / `data_version` / `calendar` / `adjustment`）逐个 mutate 必须变 hash，测试已落。⚠️ **`as_of` 不在冻结六分量里**（2026-10-23 实现时确认，不是笔误），处置见本单「已登记的取舍与风险」第一条：缓存对同 hash 不同 `as_of` fail-closed。
 
-### SVC-DATA-G1 · 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036）[P0] ⬜
+### SVC-DATA-G1 · 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036）[P0] 🔶
 
 - **① 目标**：本仓对外接口满足 ADR-036 §3 的 G1 五件——版本化 API、错误模型、鉴权/授权、幂等、分页/限流——并各自有可执行判据。
 - **② 上下文**：今天 4 条路由（`/health` + `/datasets/resolve` + `/datasets/{hash}` + `POST /ingest/points`），鉴权已落（`internal/httpapi/auth.go` = kit 适配、`policy.go` = 策略表，写端点档位只 `service` + `admin`）；**实测本仓无 openapi / swagger 文件**（版本化只剩 `docs/api-schema.md` 人读）；`/readyz` 全 workspace 代码 0 命中；分页与限流今天没有。跨仓前置：core 的 5 条旧读面（`/ohlcv/{symbol}`、`/api/v1/ohlcv/bulk`、`/screen`、`/market/index`、`/factors/{name}`）与本仓 4 条**不对齐**（材料 §2.6 ① / §5.2 K1），本单不擅自补齐它们。
@@ -282,6 +282,60 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **④ 约束与非目标**：不实现 core 那 5 条旧面（K1 未裁）；不引入 API 网关/新框架；不做多租户配额；不改 contracts pin（`v0.6.0`）；不在本单做物理 schema 搬迁。
 - **⑤ 验收**：① `api-schema.md` 每条端点有版本行、错误码表逐条齐全（抽 2 条比对实现）；② 四条用例真跑：分页上界、429 与 401 可区分、探针豁免、幂等重投返回同码；③ `GET /readyz` 在 `DATABASE_URL` 为空 / PG 不可达时 **503**、正常时 **200**（各一条用例）；④ `go build/vet/test ./...` 单仓三条绿（贴真实退出码）。
 - **⑥ 边界**：本仓接口面；core 改指本仓的切读归 `SVC-DATA-G3`，K1 的接口面对齐由协调者裁。
+
+> **施工记录（2026-11-07 · SVC-DATA-G1 落账，状态 🔶）**
+>
+> 已交付（本仓）：
+>
+> - **`GET /readyz`**（`internal/httpapi/server.go`）：三态 `{status, store, error?}`——未注入 readiness
+>   → 503 `not_ready/unwired`；检查失败 → 503 `not_ready/postgres` + 原因；通过 → 200 `ready/postgres`。
+>   超时上界 3s。`cmd/dataservice/main.go` 的 `readinessCheck(pool)` = `pool.Ping` + `SELECT
+>   to_regclass('market.ohlcv_daily_qfq') IS NOT NULL`（池连得上但建表没跑也不算就绪）。
+> - **探针公开且豁免**：`/health`、`/readyz` 在 `servedPolicy` 标 `Public`，`Routes()` 直接注册，
+>   不经过 `requireAuth` ⇒ 不鉴权、不限流。守卫测试覆盖「闸未装配时探针仍 200」与「真 kit 下无 token 探针不被 401」。
+> - **限流**（`internal/httpapi/limit.go`）：按 `username` → `sub` → `open-access` 共用桶的令牌桶，
+>   默认 50 rps / 突发 200；超限 429 `rate_limited` + `Retry-After: 1`；**鉴权先于限流**（`Authorizer`
+>   改为返回 `principal`，限流只用它分桶，不参与鉴权结论）。`WithRateLimit` 可覆盖/关闭（测试用）。
+> - **版本 / 错误 / 分页 / 幂等成文**：`api-schema.md` 新增 §1.1（探针表、三态表、限流参数、错误码闭合表口径、
+>   分页声明、幂等重投语义）；§2 增 `rate_limited` 行；§4 写版本策略（v1 路径、MINOR/MAJOR 判据、双写窗口）；
+>   头部实现状态与 frontmatter 同笔更新。
+> - **用例**：`health_test.go` 三条（探针公开 + 就绪翻转 + 无闸可用；429 与 401 可区分 + 探针不占桶；
+>   `empty_data_version` 409 钉码）；`points_test.go` 新增 `TestIngestPointsReplayReturnsSameCodeAndBody`；
+>   路由守卫清单由 4 条改 5 条（点名 `GET /readyz`）；`cmd/dataservice/main_test.go` 的源码钉由
+>   `httpapi.New(agg, authorizer, httpapi.WithPoints(points))` 改为分别钉 `WithPoints` 与 `WithReadiness`。
+>
+> 验收对照（⑤）：
+>
+> - ① 每条端点有版本与兼容策略 = ✅（§4）；错误码表逐条齐全 = ✅（§2 + `sentinelCodes` 9 条 + 写面
+>   `assembly.WireError`，抽 `ErrEmptyDataVersion` 与实现比对）。
+> - ② 四条用例：**分页上界** = ⚠️ 本仓无集合类读端点，按 ③ 的「显式声明整段返回 + 上界」兑现
+>   （`/datasets/*` 单词数据集；`POST /ingest/points` ≤ 10000 点 / 8 MiB，超限用例
+>   `TestIngestPointsRejectsBatchOverTheLimitOnTheWire` + `TestIngestPointsRejectsOversizedBody`）；
+>   **429 与 401 可区分** = ✅；**探针豁免** = ✅；**幂等重投同码** = ✅（wire 级；
+>   真实 PG 的「已存在行计 skipped」腿未执行，见下）。
+> - ③ `/readyz` 三态各有用例 = ✅（handler 级）；**真 PG 不可达 → 503、恢复 → 200 未执行**（本机 Docker
+>   引擎未起，`DATABASE_URL` 无从指向真实库），记 🔶 而不是 ✅。
+> - ④ `gofmt -l .` 空、`go build ./...` 退出 0、`go vet ./...` 退出 0、`go test ./... -count=1` 退出 0
+>   （8 个包 ok：cmd/dataservice、assembly、httpapi、ingest、normalize、schema、serving、store）。
+>
+> 破坏验证（真做真还原，逐条贴红）：
+>
+> 1. 关掉限流（`requireAuth` 的 429 分支加 `&& false`）⇒ `TestRateLimitDistinctFromAuthAndProbesExempt`
+>    红（expected 429 / actual 503），还原复绿。
+> 2. 去掉「探针直接注册」（`Routes()` 的 `rule.Public` 分支加 `&& false`）⇒ 同一用例「probe 0」红
+>    （expected 200 / actual 429）、`TestProbesArePublicAndReadinessFlips` 的无闸场景红
+>    （/health 503、/readyz 503），逐字节还原复绿。
+> 3. 把 `ErrEmptyDataVersion` 的映射从 409 改成 500 ⇒ `TestEmptyDataVersionMapsToConflict` 红
+>    （expected 409 / actual 500），还原复绿。
+>
+> 未执行 / 订正口径（如实登记）：
+>
+> 1. **真 PG 两级腿未跑**：① PG 断开 → `/readyz` 503、恢复 → 200；② 真实重放（同批第二次 `skipped` 全部命中）。
+>    本机 Docker 引擎不可用，`_test` 库起不来。补齐条件：能起库后按 `docs/runbook`（G4 交付）跑一次并贴输出。
+> 2. **幂等键口径与票面不同**：③④ 写「以 `dataprotocol.DeduplicateKey` 为键」，而本仓写面实际是
+>    **行主键 + 全列内容比对**（§3；`DeduplicateKey` 是 core 传输侧对单批点的去重键，不是库级冲突判定）。
+>    两者目的相同（重放不产生新行、不报错），但**不是同一个键**；不另造第二套去重，按 §3 既有语义成文。
+> 3. 未做多租户配额、未引 API 网关、未改 contracts pin —— 按 ④ 约束本来就是非目标。
 
 ### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] ⬜
 

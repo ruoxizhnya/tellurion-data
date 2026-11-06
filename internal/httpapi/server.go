@@ -8,6 +8,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,24 +30,45 @@ const maxIngestBodyBytes = 8 << 20
 
 // Server 持读面 aggregator 与写面装配。两者为 nil 都表示端口未接线
 // （本仓唯一合法的两态：接了 PG 就可用，没接就 503）。
-// 所有端点都过鉴权闸（裁-15）。
+// 所有业务端点都过鉴权闸（裁-15）；`/health` 与 `/readyz` 是公开探针（G1），
+// 不鉴权、不限流。
 type Server struct {
 	agg        *serving.Aggregator
 	points     *assembly.Writer
 	authorizer Authorizer
+	readiness  func(context.Context) error
+	limiter    *rateLimiter
 }
 
-// Option 按需装配可选面（鉴权闸、写面装配）。
+// Option 按需装配可选面（鉴权闸、写面装配、就绪检查、限流）。
 type Option func(*Server)
 
 // New 构造 HTTP Server。写面装配用 `WithPoints` 注入（不塞进位置参数：
 // 读面与写面的接线是两件事，一个进程可以只有其中一半）。
 func New(agg *serving.Aggregator, opts ...Option) *Server {
-	s := &Server{agg: agg}
+	s := &Server{agg: agg, limiter: newRateLimiter(defaultRatePerSecond, defaultRateBurst)}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// WithReadiness 注入就绪检查（G1）：`/readyz` = PG 池可连 + 本仓 DDL 已执行。
+// 不注入 ⇒ 503（`DATABASE_URL` 为空的进程就是没接线，不应被读成就绪）。
+func WithReadiness(check func(context.Context) error) Option {
+	return func(s *Server) { s.readiness = check }
+}
+
+// WithRateLimit 覆盖默认限流（每秒 perSecond 个令牌、突发 burst）。
+// perSecond <= 0 或 burst <= 0 ⇒ 关闭限流（仅测试用）。
+func WithRateLimit(perSecond float64, burst int) Option {
+	return func(s *Server) {
+		if perSecond <= 0 || burst <= 0 {
+			s.limiter = nil
+			return
+		}
+		s.limiter = newRateLimiter(perSecond, float64(burst))
+	}
 }
 
 // WithPoints 装配写面（`POST /ingest/points`）。nil = 未接线 ⇒ 该端点 503。
@@ -69,6 +91,7 @@ type routeSpec struct {
 func (s *Server) routes() []routeSpec {
 	return []routeSpec{
 		{"GET /health", s.handleHealth},
+		{"GET /readyz", s.handleReadyz},
 		// `/datasets/resolve` 与 `/datasets/{hash}`：Go 1.22 ServeMux 里字面段优先
 		// 于通配段，"resolve" 不会被当成 hash。
 		{"GET /datasets/resolve", s.handleResolve},
@@ -89,10 +112,15 @@ func (s *Server) routePatterns() []string {
 	return out
 }
 
-// Routes 返回路由表。每个路由都挂 requireAuth（未装配 Authorizer → 503）。
+// Routes 返回路由表。业务路由挂 requireAuth（未装配 Authorizer → 503）；
+// 策略表标 `Public` 的探针直接注册，不鉴权、不限流。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	for _, spec := range s.routes() {
+		if rule, ok := servedPolicy.Rule(spec.pattern); ok && rule.Public {
+			mux.Handle(spec.pattern, spec.handler)
+			continue
+		}
 		mux.Handle(spec.pattern, s.requireAuth(spec.handler))
 	}
 	// `/factors/{name}@{hash}` 已于裁-14（2026-10-25）撤掉：因子读面只由 core
@@ -104,6 +132,45 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// readyBody 是 `/readyz` 的报文。`store` 说明检查的是哪一档
+// （`postgres` = 真库检查已注入；`unwired` = 没接库）。
+type readyBody struct {
+	Status string `json:"status"`
+	Store  string `json:"store"`
+	Error  string `json:"error,omitempty"`
+}
+
+// handleReadyz 是就绪探针（G1）：PG 池可连 + 本仓 DDL 已执行。
+//
+// 与 `/health` 的分工：`/health` 只回答「进程活着」，不读库——库挂了它也 200；
+// `/readyz` 回答「能不能接业务」，没接库或库不可达一律 503。两者都不鉴权、
+// 不限流（探针被限流会被读成未登录，core AUD-57 的坑）。
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if s.readiness == nil {
+		writeJSON(w, http.StatusServiceUnavailable, readyBody{
+			Status: "not_ready",
+			Store:  "unwired",
+			Error:  "DATABASE_URL is empty: data ports are not wired",
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
+	defer cancel()
+	if err := s.readiness(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, readyBody{
+			Status: "not_ready",
+			Store:  "postgres",
+			Error:  err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, readyBody{Status: "ready", Store: "postgres"})
+}
+
+// readinessTimeout 是就绪检查的上界：探针是 1s 级的东西，库卡住必须
+// 明确报 not_ready，而不是把调用方挂在这里。
+const readinessTimeout = 3 * time.Second
 
 // handleIngestPoints 是写面唯一的入口（QT-40 H4 ②）。
 //

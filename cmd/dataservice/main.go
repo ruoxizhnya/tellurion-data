@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ruoxizhnya/tellurion-kit/auth"
 	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
@@ -155,7 +157,30 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		return nil, nil, err
 	}
 
-	return httpapi.New(agg, authorizer, httpapi.WithPoints(points)), pool.Close, nil
+	return httpapi.New(agg, authorizer,
+		httpapi.WithPoints(points),
+		httpapi.WithReadiness(readinessCheck(pool)),
+	), pool.Close, nil
+}
+
+// readinessCheck 是 `/readyz` 的检查（G1 ⑥）：PG 池可连 + 本仓 DDL 已执行。
+//
+// 用 `to_regclass` 探一张 A 集表而不是只 Ping：池连得上但建表没跑（例如迁移
+// 半途失败后进程被拉起），接单必然全 500 —— 那就不是就绪。
+func readinessCheck(pool *pgxpool.Pool) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := pool.Ping(ctx); err != nil {
+			return fmt.Errorf("postgres unreachable: %w", err)
+		}
+		var present bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass('market.ohlcv_daily_qfq') IS NOT NULL`).Scan(&present); err != nil {
+			return fmt.Errorf("schema probe failed: %w", err)
+		}
+		if !present {
+			return errors.New("schema not applied: market.ohlcv_daily_qfq is missing")
+		}
+		return nil
+	}
 }
 
 // execer 是执行 DDL 的最小面（`*pgxpool.Pool` 满足它）。

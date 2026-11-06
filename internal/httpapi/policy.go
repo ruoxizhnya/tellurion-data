@@ -19,6 +19,7 @@ import kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 //     收紧就说不清谁在什么时候为什么放开的。
 var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /health":           {Public: true},
+	"GET /readyz":           {Public: true},
 	"GET /datasets/resolve": {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /datasets/{hash}":  {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"POST /ingest/points":   {Roles: []string{"service", "admin"}},
