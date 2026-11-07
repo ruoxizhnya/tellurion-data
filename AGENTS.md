@@ -12,6 +12,8 @@
 
 **服务就绪门 G2（2026-11-07）**：`market` / `ingest` 的自证补两条腿——① 迁移重放 `internal/schema/replay_pg_test.go`（同一测试库连跑两遍全部 DDL，断言行数 / 列集 sha256 / `pg_indexes` sha256 不变；无 `DATA_TEST_DSN` 自动 skip）；② 跨 schema 写护栏 `internal/repoguard`（AST 扫生产 Go 的 SQL 常量，写语句只许 `market.` / `ingest.` / `pg_catalog` / `information_schema` / 临时表，读上游不拦）。K3 十张表的处置与 `DATA_MARKET_SCHEMA` 口径见 `docs/db-schema.md` §7/§8。**真 PG 重放腿未执行**（本机无 PG、Docker 不可用），`docs/TASKS.md` 的 SVC-DATA-G2 记 🔶。
 
+**服务就绪门 G4（2026-11-07）**：失败语义四类（PG 不可达 → **503 `dependency_unavailable`**、配额耗尽/connector 超时 → 无 HTTP 面、内容冲突 → 409 `content_conflict`）、超时与「本仓不重试、作业侧重试」的边界成文，见 `docs/api-schema.md` §2.1/§3.1；降级启动（`store.Open` 不拨号 + DDL 失败后台 10s 重试 + `WithAvailability` 门）让拔 PG 时端点 503、不 panic、同进程自愈；观测面是单行访问日志 `route/status/dur_ms`，**不接 Prometheus**；起停、聚合、迁移/回填、503 与投递失败排查、演练记录见 `docs/runbook.md`。**真 PG 恢复自愈、真库重放/回填/409 未执行**（本机无 PG、Docker 引擎不可用），`docs/TASKS.md` 的 SVC-DATA-G4 记 🔶。
+
 **今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 5 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
 
 ## 2. 构建 / 测试（必须单仓可跑）

@@ -357,7 +357,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **未执行项（如实登记）**：① **真 PG 重放两次指纹未执行** —— 本机 `127.0.0.1:5432` 无监听、Docker 引擎不可用，`DATA_TEST_DSN` 未设置；实测输出为 `--- SKIP: TestSchemaReplay_TwoRunsLeaveShapeUnchanged ... DATA_TEST_DSN 未设置；重放腿只在测试库执行`（exit 0），**没有两次指纹输出，不贴编造结果**；② 真库夹具（完整 DDL 首跑/二跑、`ingest.data_migrations` 哨兵行）同因未执行；③ K3 各写点在运行期是否仍被调用（如 executor 是否已被 feature flag 关掉）= **未取证**，只取证「core 有字面写点」与「本仓无写者」。
 - **K3 处置一览**（9 补写者 + 1 core-only + 0 弃表）：`stocks` → 补写者；`dividends` → 补写者；`splits` → 补写者；`trading_calendar` → 补写者；`index_constituents` → 补写者；`market.index_daily` → **显式声明只由 core 写、本仓不拥有**（裁决 ⑰）；`market_activity` → 补写者；`ingest.raw` → 补写者；`sync_jobs` → 补写者；`sync_schedules` → 补写者。逐行 core 写点见 `docs/db-schema.md` §7。
 
-### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] ⬜
+### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] 🔶
 
 - **① 目标**：本仓作为服务**可运维**——依赖失败时说什么、超时多久、怎么重启与排查，全部成文并被真跑过一次。
 - **② 上下文**：ADR-036 §3 的 G4 判据 = 「超时/重试/熔断、失败语义、日志/指标/追踪、回滚」+「故障演练 + runbook + 健康/就绪分离」；**全 workspace 实测 `runbook` 只出现在 ADR-036 自己的正文里**，六个服务仓一份都没有 ⇒ G4 此前无人认领（本组六仓的 `SVC-*-G4` 是同一件事的六个实例，各自只写自己仓的依赖面）；本仓今天只有 `/health`，`DATABASE_URL` 为空时数据端点 503（fail-closed 已写进 `api-schema.md`），出站传输由 core 注入（`Transports` 窄接口），本仓侧没有超时上界的文档。
@@ -365,6 +365,68 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **④ 约束与非目标**：不引 APM / SaaS / OTel collector；不做高可用与多副本；不在本单接真数据源传输（仍在 core）；不改 `/health` 既有语义（`/readyz` 属 `SVC-DATA-G1` ⑥）。
 - **⑤ 验收**：① runbook 每条命令可复制、当场执行过并贴真实输出；② 演练记录有真退出码（拔 PG 前后各一次）；③ 失败语义表四类齐全，每条有对应用例或写明「无用例的原因」；④ 三条命令绿。
 - **⑥ 边界**：本仓运维面；core 的聚合 compose 与 `cmd/worker` / `cmd/dualrun` 部署形态归 `tellurion:QT-79`。
+
+> **施工记录（2026-11-07 · SVC-DATA-G4 落账，状态 🔶）**
+>
+> 已交付（本仓）：
+>
+> - **PG 不可达 → 503**：新增 `internal/store/availability.go` 的哨兵 `ErrDependencyUnavailable` 与
+>   `classifyDependency`——只把连接层失败（`08` 类、`57P*`、`57014`、`*pgconn.ConnectError`、超时、
+>   `net.Error`、`io.EOF`）折成哨兵；SQL 语义错误仍走 500。读面经 `pgxQuerier.Query`/`rows.Err()`，
+>   写面经 `pgxWriteDB.BeginTx`/`Exec`/`Compare Scan`/`Commit` 分诊；HTTP 映射在
+>   `httpapi.sentinelCodes`（读）与 `assembly.WireError`（写），码 `503 dependency_unavailable`。
+> - **降级启动 + 自愈**：`store.Open` 改为**建池不拨号**（拨号 5s、语句 30s 由
+>   `connect_timeout` / `statement_timeout` 兜住）；`cmd/dataservice` 的 DDL 失败不再 `Fatal`，
+>   数据端点由 `httpapi.WithAvailability(atomic.Bool)` 立即 503，后台每 10s 重放 `schema.Statements()`，
+>   成功后同进程翻正。
+> - **超时边界**：`http.Server` 5s/30s/120s/120s（ReadHeader/Read/Write/Idle）；探针 3s；
+>   启动 DDL 30s；PG 拨号 5s、语句 30s。出站 connector 不在本仓（core），已在文档写明。
+> - **可观测最小面**：`httpapi.withAccessLog` 一行一请求，固定
+>   `route=<模式> status=<int> dur_ms=<float>`；显式声明**不引 APM/OTel/Prometheus、无 `/metrics`**，
+>   聚合命令与真实输出见 `docs/runbook.md` §2。守卫：`TestAccessLogLineCarriesRouteStatusAndDuration`、
+>   `TestAccessLogDurationMeasuresSlowHandler`。
+> - **文档**：`docs/api-schema.md` 新增 §1.2（可观测）、§2 哨兵行、§2.1（四类失败语义表）、§3.1（超时与
+>   重试边界 + 「本仓不重试、由作业侧重试」的三条理由）；新建 `docs/runbook.md`（起停、看日志/聚合、
+>   重放迁移、`visible_at` 回填、503 与投递失败排查、演练记录、未执行清单）。
+>
+> 验收对照（⑤）：
+>
+> - ① runbook 每条可复制、当场执行并贴真实输出 = ✅（可执行腿全跑；需真 PG / Docker 的腿在 §3/§4/§8
+>   明确标「未执行」，没有伪造输出）。
+> - ② 演练记录真退出码 = ✅ 部分：拔 PG 形态 4 次 `curl` 均 `exit=0`、HTTP 码 200/503/503/503，进程
+>   存活且 `panic_lines=0`；基线配置重起同样 4 次 `exit=0`。**进程本身由 `Stop-Process` 强杀，
+>   Windows 不返回退出码（`[]`），已如实记录**；优雅停机未实现。
+> - ③ 四类失败语义齐全 = ✅：PG 不可达/内容冲突有 HTTP 用例，配额耗尽/connector 超时有单测且写明
+>   「HTTP 面无用例及原因：没有路由触发取数」。
+> - ④ 门禁：`gofmt -l .` 输出空、退出 0；`go build ./...` 退出 0；`go vet ./...` 退出 0；
+>   `go test ./... -count=1` 退出 0（9 包 ok：cmd/dataservice、assembly、httpapi、ingest、normalize、
+>   repoguard、schema、serving、store）。
+>
+> 真实演练（2026-11-07 05:37，`DATABASE_URL` → `127.0.0.1:5999`，无监听）：
+>
+> - `/health` 200；`/readyz` 503 `postgres unreachable ... connection refused`；
+>   `GET /datasets/resolve` 与 `POST /ingest/points` 均 503 `dependency_unavailable`；
+> - 进程 11s 后仍存活，`panic_lines=0`；05:37:29 打出
+>   `schema retry failed (data endpoints stay 503): ... connection refused`；
+> - 回指基线（`DATABASE_URL` 为空）重起：`/health` 200、`/readyz` 503 `unwired`、数据端点 503，未 panic。
+>
+> 破坏验证（真做真还原）：
+>
+> 1. 改坏 `dependencyReady` 的判据（`if false && s.available != nil && !s.available()`）⇒
+>    `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 红：
+>    `expected: 503 / actual: 200`（正是「静默成功」事故形态），退出码 1。
+> 2. `Copy-Item` 逐字节还原 `internal/httpapi/server.go`：还原前/后 sha256 均为
+>    `C9DB9BA4DC8BF6BF82C0D9F6DC79D7CD20C57767A62F6603B06B3E37C4B7FDB5`；复跑同用例绿（退出 0）。
+>
+> 未执行 / 订正口径（如实登记）：
+>
+> 1. **真 PG 恢复后同一进程自愈**未执行（本机无 PG、Docker 引擎不可用）；HTTP 层自愈由
+>    `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 覆盖，进程内重试日志已真观察到。
+> 2. **真库 DDL 重放两次、`visible_at` 回填、409 真主键复现**均未执行（套件在本机 SKIP，见
+>    `docs/runbook.md` §3/§4/§8）。
+> 3. **进程真实退出码**未取得：`Stop-Process` 强杀在 Windows 不返回 ExitCode；优雅停机不在本单。
+> 4. **`dur_ms` 分辨率**：本机单调时钟最小非零间隔约 0.5ms，快请求记 `0.000000`（= <0.5ms），
+>    已在 `api-schema.md` §1.2 与 runbook §2 写明，未把 0 当异常。
 
 ## 施工序（候选单，开工前必须展开成六字段）
 

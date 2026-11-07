@@ -83,18 +83,37 @@ func New(db Querier, opts Options) (*Store, error) {
 	return &Store{db: db, prefix: prefix}, nil
 }
 
-// Open 用 DSN 建连接池并 ping 一次（misconfig 在启动时暴露，而不是首个请求）。
+// 连接与语句的硬边界（G4 ②）。拨号 5s：PG 被拔掉时请求要在秒级回 503，
+// 而不是挂在 OS 的 TCP 超时上；语句 30s：单请求最坏工作量有上限，超过就
+// 由客户端重试，不在这里排队等死。
+const (
+	connectTimeout   = 5 * time.Second
+	statementTimeout = 30 * time.Second
+)
+
+// Open 建连接池但**不在启动时 ping**（G4：PG 不可达也要起得来）。
+//
+// 语义变化（2026-11-07）：旧实现启动即 Ping，库没起来进程就退出，结果是
+// 「PG 被拔 ⇒ 连 503 都拿不到，只有 connection refused」。现在启动只做
+// DSN 语法校验；数据端点由 `httpapi.WithAvailability` 回 503，后台迁移
+// 重试成功后同进程自愈（`cmd/dataservice`）。真库连不上时由 `/readyz`
+// 与首个业务请求继续暴露，不再吞掉。
 func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("store: empty dsn")
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: parse dsn: %w", err)
+	}
+	cfg.ConnConfig.ConnectTimeout = connectTimeout
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string, 1)
+	}
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "30000"
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("store: open pool: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("store: ping: %w", err)
 	}
 	return pool, nil
 }
@@ -115,7 +134,9 @@ func (s *Store) scanAll(ctx context.Context, sql string, args []any, fn func(Row
 			return err
 		}
 	}
-	return rows.Err()
+	// 连接在流式读取中途断掉时，错误只出现在 rows.Err() 上；这里补一次
+	// 分诊，否则「库挂了」会以裸错误冒到 HTTP 层被读成 500。
+	return classifyDependency(rows.Err())
 }
 
 // 编译期自证：`pgx.Rows` 的方法集满足本包的 `Rows`（PoolQuerier 靠这一条）。
@@ -133,7 +154,7 @@ type pgxQuerier struct{ pool *pgxpool.Pool }
 func (q pgxQuerier) Query(ctx context.Context, sql string, args ...any) (Rows, error) {
 	rows, err := q.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, err
+		return nil, classifyDependency(err)
 	}
 	return rows, nil
 }

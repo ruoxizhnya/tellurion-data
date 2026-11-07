@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-07
-verified-by: SVC-DATA-G1 —— 新增公开 `/readyz`（PG 可连 + 本仓 DDL 已执行）、按身份令牌桶限流（429 与 401 可区分、探针豁免）、错误码闭合表与版本/分页策略；真实 PG 断开/恢复腿未执行
+verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单行访问日志（不接 Prometheus）、降级启动与 503 自愈；真实 PG 恢复腿未执行
 ---
 
 # API Schema — tellurion-data
@@ -90,6 +90,33 @@ empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其�
 （200，`persisted` 计入已就位的点，`skipped` 计入重复/非法点）；`source` 参与比对，换源 = 409
 `content_conflict`。详见 §3。
 
+### 1.2 可观测最小面（G4 ③）—— 不接 Prometheus，只有一行访问日志
+
+**显式声明**：本服务是单人自托管、单进程，**不引 APM / OpenTelemetry / Prometheus 客户端，
+不暴露 `/metrics`**。引入指标栈的运维成本高于它今天能回答的问题；要回答的只有两件：
+**每端点错误率**与**延迟**。
+
+实现是一条固定格式的访问日志（`internal/httpapi/server.go` 的 `withAccessLog`，无新依赖）：
+
+```
+httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
+```
+
+| 字段 | 含义 | 用途 |
+|---|---|---|
+| `route` | **注册的模式**（如 `/datasets/{hash}`），不是原始路径 | 避免每个 hash 变成一条独立序列 |
+| `status` | 最终状态码（含 401/403/429/503） | 错误率 = `status>=500` / 总数；4xx 单看 |
+| `dur_ms` | 处理耗时（毫秒，六位小数；微秒级请求也能看出差别） | 平均 / 最大值 |
+
+- 只有进入路由的请求会打日志；**404 / 405 由 ServeMux 直接返回，不在这行里**——排查「调用方
+  打错路径」要看调用方日志，不要在本服务日志里找。
+- `dur_ms` 受宿主时钟分辨率限制：本机（Windows）实测最小非零间隔约 0.5ms，所以很快的请求会记成
+  `0.000000`（含义是「<0.5ms」，不是「零耗时」）。判断量级用慢请求（`/readyz`）与
+  `TestAccessLogDurationMeasuresSlowHandler` 的守卫，不要拿 0 当异常。
+- 日志里**不写报文内容、不写 token、不写 DSN**。
+- 聚合命令（PowerShell 5）与真实输出见 `docs/runbook.md` §2。
+- 故障时先看 `/readyz` 的 `error`，再按 §5 的排查顺序定位；**没有指标面板可看，这是有意的**。
+
 ## 2. 错误码与 fail-closed 语义
 
 > **本表是目标契约，不是现状**（2026-10-21 实测订正）。逐个哨兵的**真实定义处、执法函数与 HTTP 映射**在
@@ -117,8 +144,28 @@ empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其�
 | `ingest.ErrAnchorInvalid` | ✅（`internal/ingest/gate.go`） | 锚点列有值但解析不出日期 | 400 `anchor_invalid`；与「缺锚点」必须是两个码（一个修数据、一个修采集） |
 | `store.ErrWriteTableNotInASet` / `store.ErrUnmappedDataType` | ✅（`internal/store/write.go`） | 目标表在 B/C 集 / 该 data_type 没有写面映射 | 400 `write_table_not_in_a_set` / `data_type_unmapped`；处置不同（换一个不该投的 vs 补一份 spec），所以两个码 |
 | `store.ErrContentConflict` | ✅（`internal/store/write.go`） | 同主键已存在且内容不同（含**换源**） | 409 `content_conflict` + **整批回滚**；不许重试成覆盖，走受控修正流程（ADR-0004/0006） |
+| `store.ErrDependencyUnavailable` | ✅ 2026-11-07（G4，`internal/store/availability.go`） | PG 拨号失败 / SQLSTATE `08` 连接异常 / 连接或语句超时 / 查询中途断开 | 503 `dependency_unavailable`；**可退避重试**，恢复后同一进程自愈。只包连接层，坏 SQL 仍是 500 |
 | `store.ErrInvalidPoint` | ✅（`internal/store/write.go`） | 载荷字段类型不对（如数值列给了字符串） | 400 `invalid_point`；单行折跳计入 `skipped`，与整批拒收分得开 |
 | 未登记的失败 | —— | 上面都没命中 | 500 `internal`：**不把未知失败伪装成 4xx**（分诊表在 `assembly.WireError`，新增哨兵必须同批登记，否则红在 `TestWireErrorCoversEveryWriteFailure`） |
+
+### 2.1 失败语义四类（G4 ①）
+
+> 只列**今天真的会发生的四类**。每行回答四个问题：HTTP 码、是否重试、是否落痕、调用方该做什么。
+> 「落痕」指本仓**留下的证据**；不在本仓的腿必须写明「不在本仓」，不许写成「有日志」。
+
+| 类别 | 触发与判据 | HTTP 码 | 是否重试 | 是否落痕 | 调用方该做什么 | 真实用例 / 为什么没有 |
+|---|---|---|---|---|---|---|
+| **PG 不可达** | 拨号失败、SQLSTATE `08`、连接/语句超时、查询中途断开；`internal/store.classifyDependency` 统一折成 `store.ErrDependencyUnavailable` | **503** `dependency_unavailable`（读面与写面同码） | **调用方重试**：指数退避（1s 起，封顶 30s），依赖恢复后同一进程自愈。本仓**不在请求内重试** | 是。访问日志 `status=503`；`/readyz` 的 `error`；降级启动时 `data-service: schema not applied yet ...`，恢复时 `schema applied after retry` | 不要当成 404「没数据」，也不要换源/兜底数据；退避重试，连续失败超过 3 分钟告警。503 **不带** `Retry-After`（恢复时间不可知），与 429 区分 | ✅ 真跑：DSN 指向 `127.0.0.1:5999`（无监听）→ `/datasets/resolve`、`/ingest/points` 均 503 且进程不退出（`docs/runbook.md` §7）；单测 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal`、`TestResolveMapsDependencyUnavailableTo503`、`TestClassifyDependency`、`TestIngestPointsMapsWriteFailuresToCodes/pg_unavailable` |
+| **数据源配额耗尽** | `ingest.ErrRateLimited`（`internal/ingest/adapter.go`）；由传输/connector 在源侧配额用尽时返回 | **无 HTTP 码**：本仓没有任何路由触发取数，`POST /ingest/points` 只收**已归一**的点 | 不在同一源上重试；`Registry.Fetch` **换下一个源一次**（`IsRetryable`）。无备源则原样返回作业层 | **不在本仓**：本仓没有生产取数调用方（传输在 core），故没有请求日志可看；落痕在作业层 | 作业层决定：等配额窗口重置或换源；**不要高频重打**（配额错误重试不会成功，只会把窗口耗得更久） | ✅ 单测 `TestRegistryFetch_QuotaExhaustedFallsBackToNextSource`、`TestRegistryFetch_QuotaExhaustedWithNoFallbackReturnsRateLimited`。**HTTP 面无用例及原因**：没有 HTTP 端点调用 `Registry.Fetch`，造不出这个响应 |
+| **connector 超时** | 出站 HTTP 客户端超时 / 上游 5xx ⇒ `ingest.ErrUpstreamUnavailable`（`internal/ingest/adapter.go`） | **无 HTTP 码**，同上：取数不在本仓 HTTP 面 | 不在同一源上重试；`Registry.Fetch` 换源一次；无备源则返回作业层 | **不在本仓**：超时发生在 core 的传输/作业进程，日志在那边 | 作业层按自己的超时预算重排任务；区分「源慢」与「本仓慢」——本仓的慢看访问日志 `dur_ms` | ✅ 单测 `TestRegistryFetch_FallsBackOnRetryableError`（同一条可重试分诊路径）。**HTTP 面无用例及原因**：同「配额耗尽」，没有路由触发 connector |
+| **内容冲突** | 同主键已存在且全列内容不同（含换源）⇒ `store.ErrContentConflict` | **409** `content_conflict` | **不重试**：同一批重放仍是 409，重试不会消解 | 是。访问日志 `status=409`；错误报文带主键（`600519.SH ohlcv_daily`） | **人工判定**：上游改了历史 vs 口径混了；走受控修正，不许改成自动覆盖（ADR-0004/0006）。修好后重投同一批 | ✅ 单测 `TestIngestPointsMapsWriteFailuresToCodes/content_conflict`；落库层 `TestWriter_DifferentContentFailsLoudAndRollsBack`（整批回滚，不写半批）。真库腿未执行（见 §7） |
+
+**两个跨类的硬规矩**：
+
+1. **503 不重试到成功为止**：本仓不在请求内 sleep/重试；HTTP 层只有一次尝试。重试属于**作业侧**
+   的调度语义（有退避、有上限、有告警），塞进请求会把「库挂了」变成「请求排队把连接池拖死」。
+2. **409 与 503 永不互换**：409 是「数据真的冲突」，503 是「现在读不到」。把 409 读成 503 会让调用方
+   无限重试；把 503 读成 409 会让调用方以为历史被改了。
 
 ## 3. 幂等性与重试
 
@@ -130,6 +177,38 @@ empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其�
   1. `ingest_time` **不参与比对**（每次重放都不同，比它必然假冲突）——这是有意的排除，代价是「仅入库时刻变化」不算内容变化；
   2. `source` **参与比对**：同一主键换一个源 = 行内容真的变了 ⇒ 409 `content_conflict` 整批回滚，不静默覆盖；
   3. 409 **不可靠重试消解**（同一批重放还是 409），必须人工判定是「上游改了历史」还是「口径混了」，走一次受控修正（本仓还没有那条流程，见 ADR-0004 代价 ④）。
+
+### 3.1 超时与重试边界（G4 ②）
+
+**超时（全部是硬上限，不是「建议」）**：
+
+| 边界 | 值 | 落点 | 到点后的表现 |
+|---|---|---|---|
+| HTTP 读请求头 | 5s | `cmd/dataservice` `http.Server.ReadHeaderTimeout` | 连接关闭（不是 5xx） |
+| HTTP 读请求体 | 30s | `ReadTimeout` | 连接关闭；8 MiB 上限另由 handler 的 `MaxBytesReader` 拦成 413 |
+| HTTP 写响应 | 120s | `WriteTimeout`（**声明值**，未在真实负载下定标） | 连接中断；调用方看到的是网络错误，不是 5xx |
+| HTTP 空闲连接 | 120s | `IdleTimeout` | 回收 |
+| `/readyz` 探针 | 3s | `internal/httpapi` `readinessTimeout` | 503 `not_ready`，`error` 写原因 |
+| 启动/重放 DDL 单次 | 30s | `schemaStartupTimeout` | 记为失败；数据端点保持 503，10s 后重试 |
+| PG 拨号 | 5s | `internal/store` `connectTimeout` | 503 `dependency_unavailable`（`*pgconn.ConnectError`） |
+| PG 单条语句 | 30s | `internal/store` `statementTimeout`（`statement_timeout=30000`） | SQLSTATE `57014` ⇒ 503 `dependency_unavailable` |
+| 出站 connector | **不在本仓** | 传输在 core；本仓没有出站 HTTP 调用 | —— |
+
+**重试（本仓的答案几乎都是「不重试」）**：
+
+| 场景 | 本仓重试次数 | 谁重试 | 理由 |
+|---|---|---|---|
+| 读端点（resolve / snapshot） | 0 | 调用方可任意重试 | 纯读、无副作用；本仓重试只会放大故障时的连接占用 |
+| 写端点（ingest/points） | 0 | **调用方/作业侧** | 写入是内容比对幂等，重放安全；请求内重试会在库挂时把连接池拖死 |
+| PG 不可达（503） | 0（请求内） | 调用方，指数退避 | 「库什么时候回来」不应由每个请求各自猜；恢复后同一进程自愈 |
+| 启动 DDL | 每 10s 一次，**不设上限**，直到成功或进程退出 | 本仓后台 | 单人自托管只看「最终起来」；10s 间隔不构成对库的压测。真实 PG 恢复腿未执行 |
+| connector 配额/超时 | 同一源 0 次，换源 1 次 | 作业侧 | 换源是 ETL 语义，不是 HTTP 语义；同源重打只会更糟 |
+
+> **为什么本仓不重试、由作业侧重试**：重试需要三样本仓没有的东西——**任务状态**（同一作业重跑
+> 到哪一步）、**退避与上限**（谁来决定第几次放弃）、**告警归属**（失败该通知谁）。三者都在作业层
+> （今天的 core `cmd/data`，迁入后仍是作业进程）。本仓是**无状态数据面**，只负责一次判定的结果；
+> 在请求里重试会把「依赖故障」翻译成「请求堆积」，把 503 的可观测性也一起毁掉。
+> 反过来，**启动迁移重试是本仓自己的事**：它没有上游作业可依赖，且必须让进程活到库恢复。
 
 ## 4. 版本与兼容
 

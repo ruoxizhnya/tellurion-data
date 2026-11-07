@@ -112,7 +112,7 @@ type pgxWriteDB struct{ pool *pgxpool.Pool }
 func (d pgxWriteDB) BeginTx(ctx context.Context) (WriteTx, error) {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, classifyDependency(err)
 	}
 	return pgxWriteTx{tx: tx}, nil
 }
@@ -120,15 +120,18 @@ func (d pgxWriteDB) BeginTx(ctx context.Context) (WriteTx, error) {
 type pgxWriteTx struct{ tx pgx.Tx }
 
 func (t pgxWriteTx) Exec(ctx context.Context, sql string, args ...any) (CommandTag, error) {
-	return t.tx.Exec(ctx, sql, args...)
+	tag, err := t.tx.Exec(ctx, sql, args...)
+	return tag, classifyDependency(err)
 }
 
 func (t pgxWriteTx) QueryRow(ctx context.Context, sql string, args ...any) Row {
 	return t.tx.QueryRow(ctx, sql, args...)
 }
 
-func (t pgxWriteTx) Commit(ctx context.Context) error   { return t.tx.Commit(ctx) }
-func (t pgxWriteTx) Rollback(ctx context.Context) error { return t.tx.Rollback(ctx) }
+func (t pgxWriteTx) Commit(ctx context.Context) error { return classifyDependency(t.tx.Commit(ctx)) }
+func (t pgxWriteTx) Rollback(ctx context.Context) error {
+	return classifyDependency(t.tx.Rollback(ctx))
+}
 
 // writeSpec 是 data_type → 表的写面形状。
 type writeSpec struct {
@@ -330,7 +333,7 @@ func (w *Writer) BulkInsert(ctx context.Context, dataType string, points []Point
 		compareArgs := compareArgsFor(spec, r.args)
 		var same bool
 		if err := tx.QueryRow(ctx, compareSQL, compareArgs...).Scan(&same); err != nil {
-			return 0, skipped, fmt.Errorf("store: bulk insert compare row %d: %w", i, err)
+			return 0, skipped, fmt.Errorf("store: bulk insert compare row %d: %w", i, classifyDependency(err))
 		}
 		if !same {
 			return 0, skipped, fmt.Errorf("%w: point[%d] %s %s", ErrContentConflict, i, r.symbol, dataType)

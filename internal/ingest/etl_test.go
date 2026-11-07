@@ -217,6 +217,37 @@ func TestRegistryFetch_FallsBackOnRetryableError(t *testing.T) {
 	assert.Equal(t, 1, secondary.calls)
 }
 
+func TestRegistryFetch_QuotaExhaustedFallsBackToNextSource(t *testing.T) {
+	decl := validDecl(DataTypeOHLCDaily)
+	quotaExhausted := newFakeAdapter("primary", DataTypeOHLCDaily, decl)
+	quotaExhausted.err = ErrRateLimited
+	secondary := newFakeAdapter("secondary", DataTypeOHLCDaily, decl,
+		tradeTimePoint("600519.SH", map[string]interface{}{"close": 1.0}))
+
+	reg := NewRegistry()
+	require.NoError(t, reg.Register(quotaExhausted))
+	require.NoError(t, reg.Register(secondary))
+
+	resp, err := reg.Fetch(context.Background(), FetchRequest{DataType: DataTypeOHLCDaily})
+	require.NoError(t, err)
+	assert.Equal(t, "secondary", resp.Source, "配额耗尽必须换源，不许在同一个连接器上重试")
+	assert.Equal(t, 1, quotaExhausted.calls, "本门只尝试一次：重试是作业侧的事")
+}
+
+// 配额耗尽且无备源 ⇒ 原样返回 ErrRateLimited（不在这里 sleep/重试）。
+func TestRegistryFetch_QuotaExhaustedWithNoFallbackReturnsRateLimited(t *testing.T) {
+	decl := validDecl(DataTypeOHLCDaily)
+	only := newFakeAdapter("only", DataTypeOHLCDaily, decl)
+	only.err = ErrRateLimited
+
+	reg := NewRegistry()
+	require.NoError(t, reg.Register(only))
+
+	_, err := reg.Fetch(context.Background(), FetchRequest{DataType: DataTypeOHLCDaily})
+	require.ErrorIs(t, err, ErrRateLimited)
+	assert.Equal(t, 1, only.calls)
+}
+
 func TestRegistryFetch_DoesNotFallBackOnPermanentError(t *testing.T) {
 	decl := validDecl(DataTypeOHLCDaily)
 	primary := newFakeAdapter("primary", DataTypeOHLCDaily, decl)

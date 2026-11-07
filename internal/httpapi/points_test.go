@@ -145,6 +145,8 @@ func TestIngestPointsMapsWriteFailuresToCodes(t *testing.T) {
 			http.StatusBadRequest, "invalid_batch"},
 		{"content conflict", pointsBody, fmt.Errorf("%w: 600519.SH ohlcv_daily", store.ErrContentConflict),
 			http.StatusConflict, "content_conflict"},
+		{"pg unavailable", pointsBody, fmt.Errorf("%w: dial tcp 127.0.0.1:5999: connect: connection refused", store.ErrDependencyUnavailable),
+			http.StatusServiceUnavailable, "dependency_unavailable"},
 		{"b set table", pointsBody, fmt.Errorf("%w: ohlcv_daily maps to market_activity (gate class \"B\")", store.ErrWriteTableNotInASet),
 			http.StatusBadRequest, "write_table_not_in_a_set"},
 	}

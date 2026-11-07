@@ -269,6 +269,10 @@ func WireError(err error) (status int, code string, ok bool) {
 		return http.StatusBadRequest, "invalid_point", true
 	case errors.Is(err, store.ErrContentConflict):
 		return http.StatusConflict, "content_conflict", true
+	case errors.Is(err, store.ErrDependencyUnavailable):
+		// G4：PG 不可达是 503（可等待恢复），与「内容冲突」这类业务拒收分开。
+		// 它只由 `store` 的连接层分诊产生，未登记的 SQL 错误仍是 500。
+		return http.StatusServiceUnavailable, "dependency_unavailable", true
 	default:
 		return 0, "", false
 	}

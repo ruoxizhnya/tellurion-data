@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"tellurion-data/internal/assembly"
 	"tellurion-data/internal/serving"
+	"tellurion-data/internal/store"
 )
 
 // maxIngestBodyBytes 是投点请求体的字节上限。它与
@@ -37,6 +39,7 @@ type Server struct {
 	points     *assembly.Writer
 	authorizer Authorizer
 	readiness  func(context.Context) error
+	available  func() bool
 	limiter    *rateLimiter
 }
 
@@ -57,6 +60,26 @@ func New(agg *serving.Aggregator, opts ...Option) *Server {
 // 不注入 ⇒ 503（`DATABASE_URL` 为空的进程就是没接线，不应被读成就绪）。
 func WithReadiness(check func(context.Context) error) Option {
 	return func(s *Server) { s.readiness = check }
+}
+
+// WithAvailability 注入数据面的「依赖可用」判据（G4）。nil = 不设门
+// （测试与纯内存装配）。
+//
+// 与 `/readyz` 的分工：`/readyz` 是**探针**（会真的 Ping），本门是**每个
+// 业务请求的快速判据**（一个原子布尔），不额外打一次库。进程降级启动
+// （PG 不可达）时它是 false：数据端点立即 503 而不是逐个等连接超时；
+// 后台迁移重试成功后被翻成 true，同一个进程自愈。
+func WithAvailability(available func() bool) Option {
+	return func(s *Server) { s.available = available }
+}
+
+// dependencyReady 在依赖不可用时写 503 并返回 false。
+func (s *Server) dependencyReady(w http.ResponseWriter) bool {
+	if s.available != nil && !s.available() {
+		writeDependency(w, "postgres is not ready (schema not applied or pool unreachable); check GET /readyz")
+		return false
+	}
+	return true
 }
 
 // WithRateLimit 覆盖默认限流（每秒 perSecond 个令牌、突发 burst）。
@@ -114,19 +137,61 @@ func (s *Server) routePatterns() []string {
 
 // Routes 返回路由表。业务路由挂 requireAuth（未装配 Authorizer → 503）；
 // 策略表标 `Public` 的探针直接注册，不鉴权、不限流。
+//
+// 每条路由外层再包一层访问日志（G4 ③ 的可观测最小面）：一行一个请求，
+// 带路由模式、状态码与耗时。它是「不接 Prometheus」时的唯一错误率/延迟来源，
+// 字段格式被 `docs/runbook.md` 的统计命令依赖，改动要同步改命令。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	for _, spec := range s.routes() {
-		if rule, ok := servedPolicy.Rule(spec.pattern); ok && rule.Public {
-			mux.Handle(spec.pattern, spec.handler)
-			continue
+		var handler http.Handler = spec.handler
+		if rule, ok := servedPolicy.Rule(spec.pattern); !ok || !rule.Public {
+			handler = s.requireAuth(spec.handler)
 		}
-		mux.Handle(spec.pattern, s.requireAuth(spec.handler))
+		mux.Handle(spec.pattern, withAccessLog(spec.pattern, handler))
 	}
 	// `/factors/{name}@{hash}` 已于裁-14（2026-10-25）撤掉：因子读面只由 core
 	// 提供，本仓没有该端点。不要重新引入——常驻 404 会被调用方读成
 	// 「该数据集没有该因子」；路由不存在才是明确边界。
 	return mux
+}
+
+// accessLog 是 G4 的唯一观测出口：一行一个请求，不引指标客户端。
+//
+// 形态固定为 `httpapi: route="<pattern>" status=<int> dur_ms=<float>`；
+// route 用注册模式而不是原始路径（`/datasets/{hash}` 才不会把每个 hash
+// 变成一条独立时间序列）。
+func withAccessLog(pattern string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		status := sw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		log.Printf("httpapi: route=%q status=%d dur_ms=%.6f", pattern, status, time.Since(start).Seconds()*1000)
+	})
+}
+
+// statusWriter 只记第一个 WriteHeader 的状态码（net/http 的语义）。
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -186,6 +251,9 @@ const readinessTimeout = 3 * time.Second
 // 判定本身一条都不在这里：闸门、去重、A 集门、内容比对全在
 // `internal/assembly` → `internal/store`，本 handler 只做编码与分诊。
 func (s *Server) handleIngestPoints(w http.ResponseWriter, r *http.Request) {
+	if !s.dependencyReady(w) {
+		return
+	}
 	if s.points == nil {
 		writeDependency(w, "write面 is not wired (no PG store or declaration registry)")
 		return
@@ -207,6 +275,9 @@ func (s *Server) handleIngestPoints(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
+	if !s.dependencyReady(w) {
+		return
+	}
 	if s.agg == nil {
 		writeDependencyUnavailable(w)
 		return
@@ -252,6 +323,9 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !s.dependencyReady(w) {
+		return
+	}
 	if s.agg == nil {
 		writeDependencyUnavailable(w)
 		return
@@ -289,6 +363,9 @@ var sentinelCodes = []struct {
 	{serving.ErrEmptyDataVersion, http.StatusConflict, "empty_data_version"},
 	{serving.ErrSnapshotNotFound, http.StatusNotFound, "snapshot_not_found"},
 	{serving.ErrSnapshotMismatch, http.StatusInternalServerError, "snapshot_mismatch"},
+	// G4：PG 不可达是 503（可等待恢复），不是 500。哨兵来自 `internal/store`
+	// 的连接层分诊（`classifyDependency`），只包连接失败，不包 SQL 语义错误。
+	{store.ErrDependencyUnavailable, http.StatusServiceUnavailable, "dependency_unavailable"},
 }
 
 func writeError(w http.ResponseWriter, err error) {
