@@ -337,7 +337,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 >    两者目的相同（重放不产生新行、不报错），但**不是同一个键**；不另造第二套去重，按 §3 既有语义成文。
 > 3. 未做多租户配额、未引 API 网关、未改 contracts pin —— 按 ④ 约束本来就是非目标。
 
-### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] ⬜
+### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] 🔶（2026-11-07 施工；真 PG 重放腿未执行）
 
 - **① 目标**：`market` / `ingest` 的 DDL 归属在本仓**自证**——迁移可重复执行、不跨 schema 写、每张表「谁写」有答案。
 - **② 上下文**：`internal/schema` 持 23 张 DDL（`market` 19 + `ingest` 4，`TableNames()` 可对账），`cmd/dataservice` 在 `DATABASE_URL` 有值时启动执行；**今天仍是双 owner**——core 侧写点未归零（本仓台账 X1d 行自证「其余同步腿仍在 core 写」；core 侧删除单 = `tellurion:SVC-CORE-DATA-RETIRE`）；`deploy/compose.yaml:32` 出厂 `DATA_MARKET_SCHEMA: market`，而 core 用**裸表名**写 `public.*`（core 仓内无 `search_path`）⇒ 两种读法指向的不是同一批表，这条口径必须钉死；`visible_at` 回填只在测试库跑过（`-tags backfill` + `DATA_TEST_DSN`，库名须以 `_test` 结尾）；材料 §5.2 K3 列出 **10 张「有表无写者」**（market 侧 7 + ingest 侧 3）。
@@ -345,6 +345,17 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **④ 约束与非目标**：不执行物理搬迁；不 `DROP` 任何表或索引；不改 core 的写点（那是 `SVC-CORE-DATA-RETIRE` ③ 的串行序）；不碰生产库（护栏与重放腿只连 `_test` 库）；`market.index_daily` 按裁决 ⑰ 属 core，不许顺手接管。
 - **⑤ 验收**：① 重放腿两次指纹逐位相同（贴两次输出）；② 破坏验证：往本仓任一 SQL 常量加一行 `INSERT INTO quant.foo` ⇒ 护栏红，逐字节还原复绿；③ K3 的 10 行每行有出处与处置，`db-schema.md` 与之一致；④ 三条命令单仓绿。
 - **⑥ 边界**：本仓 schema 自证；「旧写者归零 + 旧代码删除」= core 侧退役单 + 本仓 `SVC-DATA-G3` 两件事，不在本单。
+
+**施工记录（2026-11-07）**
+
+- **产物**：
+  - ③① 重放腿：`internal/schema/replay_pg_test.go`（`TestSchemaReplay_TwoRunsLeaveShapeUnchanged`；临时 schema 全量跑两遍，比 `rows` / `information_schema.columns` 列集 sha256 / `pg_indexes` sha256；无 `DATA_TEST_DSN` 即 `t.Skip`，设置了但连不上 fail-loud）。
+  - ③② 护栏：`internal/repoguard/guard.go` + `guard_test.go`（AST 扫生产 `.go` 的 SQL 字符串常量；写语句只许 `market.` / `ingest.` / `pg_catalog` / `information_schema` / 临时表，`SELECT` 读上游不拦；唯一登记过渡 = `visible_at` D1 的 `ALTER TABLE IF EXISTS public.` 动态前缀）。
+  - ③③/③④ 文档：`docs/db-schema.md` §7（K3 十张逐张处置）、§8（`DATA_MARKET_SCHEMA` 口径与物理搬迁前置）。
+- **门禁（真实退出码）**：`go build ./...` = **0**；`go vet ./...` = **0**；`go test ./... -count=1` = **0**（9 个包 `ok`）；`gofmt -l` 三个改动/新增 Go 文件 = **空**（退出 0）。DDL 表数复核 = **23**（`TableNames()`：market 19 + ingest 4），与票面一致。
+- **破坏验证（真做真还原）**：往 `internal/schema/schema.go` 临时追加 `var guardProbeSQL = "INSERT INTO quant.foo (a) VALUES (1)"` ⇒ `go test ./internal/repoguard -run TestNoCrossSchemaWritesInProductionSQL -v` **FAIL（exit 1）**，报 `internal\schema\schema.go:63: INSERT INTO quant.foo（写语句指向仓外 schema quant）`；用备份逐字节还原后 `sha256` 前后一致 —— before/after 均 `a339a588f4457da393bd0237d78e22c3338803e99885159572734a017ff8527d`（破坏态 `587e0105778839ef7a3ebfa23f79938c4cf0d8f36aec6be4a196b15e43b6be65`），复跑 **PASS（exit 0）**。
+- **未执行项（如实登记）**：① **真 PG 重放两次指纹未执行** —— 本机 `127.0.0.1:5432` 无监听、Docker 引擎不可用，`DATA_TEST_DSN` 未设置；实测输出为 `--- SKIP: TestSchemaReplay_TwoRunsLeaveShapeUnchanged ... DATA_TEST_DSN 未设置；重放腿只在测试库执行`（exit 0），**没有两次指纹输出，不贴编造结果**；② 真库夹具（完整 DDL 首跑/二跑、`ingest.data_migrations` 哨兵行）同因未执行；③ K3 各写点在运行期是否仍被调用（如 executor 是否已被 feature flag 关掉）= **未取证**，只取证「core 有字面写点」与「本仓无写者」。
+- **K3 处置一览**（9 补写者 + 1 core-only + 0 弃表）：`stocks` → 补写者；`dividends` → 补写者；`splits` → 补写者；`trading_calendar` → 补写者；`index_constituents` → 补写者；`market.index_daily` → **显式声明只由 core 写、本仓不拥有**（裁决 ⑰）；`market_activity` → 补写者；`ingest.raw` → 补写者；`sync_jobs` → 补写者；`sync_schedules` → 补写者。逐行 core 写点见 `docs/db-schema.md` §7。
 
 ### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] ⬜
 

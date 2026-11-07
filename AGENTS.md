@@ -10,6 +10,8 @@
 
 **服务就绪门 G1（2026-11-07）**：`/readyz` = PG 池可连 + 本仓 DDL 已执行（`to_regclass('market.ohlcv_daily_qfq')`），三态见 `docs/api-schema.md` §1.1；业务端点按身份令牌桶限流（50 rps / 突发 200），429 与 401 可区分、探针豁免。**真实 PG 断开/恢复腿未执行**（本机 Docker 引擎未起），`docs/TASKS.md` 的 SVC-DATA-G1 记 🔶。
 
+**服务就绪门 G2（2026-11-07）**：`market` / `ingest` 的自证补两条腿——① 迁移重放 `internal/schema/replay_pg_test.go`（同一测试库连跑两遍全部 DDL，断言行数 / 列集 sha256 / `pg_indexes` sha256 不变；无 `DATA_TEST_DSN` 自动 skip）；② 跨 schema 写护栏 `internal/repoguard`（AST 扫生产 Go 的 SQL 常量，写语句只许 `market.` / `ingest.` / `pg_catalog` / `information_schema` / 临时表，读上游不拦）。K3 十张表的处置与 `DATA_MARKET_SCHEMA` 口径见 `docs/db-schema.md` §7/§8。**真 PG 重放腿未执行**（本机无 PG、Docker 不可用），`docs/TASKS.md` 的 SVC-DATA-G2 记 🔶。
+
 **今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 5 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
 
 ## 2. 构建 / 测试（必须单仓可跑）

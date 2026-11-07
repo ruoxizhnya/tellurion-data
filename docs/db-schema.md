@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-24
-verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正。P6 —— D2 回填仅测试库经 tagged 套件真跑（生产未执行），§6.5/§6.6 同步
+last-verified: 2026-11-07
+verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正。P6 —— D2 回填仅测试库经 tagged 套件真跑（生产未执行），§6.5/§6.6 同步。SVC-DATA-G2（2026-11-07）—— §7 K3 十张表处置、§8 `DATA_MARKET_SCHEMA` 口径；真 PG 重放腿本机未执行
 ---
 
 # DB Schema — tellurion-data
@@ -197,4 +197,40 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 4. **已落的测试证据（2026-10-24，G4）**：整批拒收 —— `TestWriter_RejectsWholeBatchWithoutVisibleAt`、`TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting`、PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`；B 集拒写 —— `TestWriter_RejectsTablesOutsideASet`、PG 腿 `TestPG_BulkInsert_RejectsBSetType`；同 hash 重写 —— `TestWriter_SameContentRewriteIsNoOp` / `TestPG_BulkInsert_IsIdempotentOnSameContent`，异内容 —— `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`。**破坏验证**：把 `store.BulkInsert` 的 `VisibleAt` 判空短路（`if false && …`）⇒ 整批拒收用例红；逐字节还原后绿（SHA256 一致）。
 5. **回填测试证据（2026-10-24，P6，仅测试库）**：`TestBackfillSuite_TestDatabaseOnly`（`-tags backfill`）PASS —— A 集 12 张回填后无 NULL 且逐档取值符合 §6.3/§6.4（after_close 显式 15:00 北京、锚点列、`ingest_time`、`created_at`），哨兵逐条对账且二次执行不改值，B 集 `as_of` 不改写、C 集无 `visible_at`；临时 schema 跑完即删。**生产 DSN 自动 skip**由 `TestBackfillTestDSN_ProductionDatabaseIsSkippedNotRun` 钉住（只读 `DATA_TEST_DSN`，库名须 `_test`）。**破坏验证**：`057a` 改成 `SET visible_at = trade_date` ⇒ 禁止第四档用例 + 测试库取值/零点两条断言红；逐字节还原后绿（SHA256 一致）。
 6. **写面经 HTTP 的覆盖面（2026-10-25，H4 ②）**：`POST /ingest/points` 的 A 集门与 `ON CONFLICT DO NOTHING` 语句形状由 `internal/httpapi/points_test.go:TestIngestPointsThroughRealWriter` 在**真 `store.Writer`** 上钉住（B 集 `daily_basic` / C 集 `fundamentals` 过闸门后仍被写面拒收，且一条 INSERT 都没发出；A 集 `ohlcv_daily` 发出的 SQL 含 `visible_at` 列）。「缺 `visible_at` 整批不落」在装配层另有一条独立腿（`internal/assembly`：`TestWriteRejectsWholeBatchWithoutAnchorAndNeverCallsStore`）。⚠️ **诚实边界**：这两条都不连库 —— 真 SQL 作用在真表上的腿仍只有 `internal/store` 的 `DATABASE_URL`-gated PG 套件；写端点**没有被端到端真跑过一次**。
+
+## 7. K3 十张「有表无写者」的处置（SVC-DATA-G2 ③③，2026-11-07）
+
+> **问题来源**：材料 `tellurion:docs/design/qt-decoupling/core-governance-decision-materials-2026-10-26.md` §5.2 K3 列出本仓 DDL 里 **10 张表在今天没有任何本仓写者**（market 侧 7 + ingest 侧 3）。
+> **取证方法**：在 core 仓 `pkg/storage/*.go` 逐文件 `git grep` 字面写点（`INSERT INTO` / `UPDATE` / `DELETE FROM`），并单独核对 `BulkInsert` 的动态拼表名路径——`tellurion:pkg/storage/bulk_insert.go:44-58` 的 `NewTableMapper()` 只映射 13 个 `data_type`，`:331` 用映射结果拼 `INSERT INTO %s`；**这 10 张均不在映射里**，所以不是「BulkInsert 漏传」，而是「本仓今天确实没有写者」。
+> **结论分布**：9 张「补写者」+ 1 张显式声明「只由 core 写，本仓不拥有」+ 0 张弃表。**今天本仓对这 10 张的写者数 = 0**（本仓 `.go` 里只有 DDL，没有指向它们的 `INSERT` / `UPDATE` / `DELETE`）；补写者落地前，core 的写点仍是已登记的过渡写者，归零在 `tellurion:SVC-CORE-DATA-RETIRE`。
+
+| 表 | 今天的写者（core 取证） | 处置 | 说明 |
+|---|---|---|---|
+| `stocks` | `tellurion:pkg/storage/stocks.go:29`（`SaveStock`）、`:61`（`SaveStockBatch`） | **补写者** | 标的基础数据，随 stock 同步腿收编进本仓；core 写点是过渡，不新开第二套语义 |
+| `dividends` | `tellurion:pkg/storage/cache.go:280`（`SaveDividendBatch`） | **补写者** | 公司行为，属行情参考数据；同 `stock` 同步腿 |
+| `splits` | `tellurion:pkg/storage/cache.go:499`（`SaveSplitBatch`） | **补写者** | 同上 |
+| `trading_calendar` | `tellurion:pkg/storage/calendar.go:21`（`SaveTradingCalendarEntry`）、`:43`（`SaveTradingCalendarBatch`） | **补写者** | 按 §6.2 属 C 集：它是 `calendar_hash` 的输入、不是观测流，**不补 `visible_at`**；补写者不等于加列 |
+| `index_constituents` | `tellurion:pkg/storage/cache.go:383`（`SaveIndexConstituentBatch`） | **补写者** | 前视风险在成分变更时点，归 resolve 的 `as_of`（§6.2 对表 D 组）；本仓补写者按同一语义 |
+| `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。本仓 DDL 只承接建表、**不认领写权**，也不把该表算进「本仓唯一 writer」的自证范围 |
+| `market_activity` | `tellurion:pkg/storage/market_activity.go:35`（`saveMarketActivitySQL`） | **补写者** | B 集：写者是 core 的 `daily_basic` 同步腿（不经 `BulkInsert`）；收编那条腿时由本仓补写者接管 |
+| `ingest.raw` | `tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`） | **补写者** | 本仓的摄取归档入口落地时接管；此前 core 的 `POST /api/ingest/raw` 是过渡写者 |
+| `sync_jobs` | `tellurion:pkg/storage/sync_jobs.go:15`（`CreateSyncJob`）、`:107`（`UpdateSyncJobIfStatus`）、`:173`（`DeleteSyncJob`） | **补写者** | 同步编排状态归本仓；调度收编（worker/executor）时接管 |
+| `sync_schedules` | `tellurion:pkg/storage/sync_jobs.go:230`（`CreateSyncSchedule`）、`:326`（`UpdateSyncSchedule`）、`:346`（`DeleteSyncSchedule`） | **补写者** | 同上 |
+
+> **未取证项**：本表只钉「core 有字面写点」与「本仓无写者」两件事；**各写点在运行期是否仍被调用**（例如某个 executor 已被 feature flag 关掉）不在本单取证范围，写「未取证」，不把「有字面 SQL」冒充「线上仍在写」。
+> **护栏关系**：`internal/repoguard` 只约束**写语句的 schema**（本仓只许 `market.` / `ingest.` / `pg_catalog` / `information_schema` / 临时表），**不约束表覆盖**——K3 的 10 张属于「写者缺口」，不是「越界写」，两者不能互相冒名。
+
+## 8. `DATA_MARKET_SCHEMA` 口径与物理搬迁前置（SVC-DATA-G2 ③④，2026-11-07）
+
+**三句话钉死口径**：
+
+1. **出厂值是 `market`**：`tellurion-data:deploy/compose.yaml:32`（`DATA_MARKET_SCHEMA: market`），`cmd/dataservice/main.go:124` 只把它交给 `store.Options.MarketSchema`。
+2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`（`cmd/dataservice/main.go:194-204`），`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store/store.go:76-83` 与 `internal/store/write.go:97-104` 回落为 `public`（注释写明是「D4 物理搬迁完成前的过渡值」，`internal/store/store.go:60-62`）。
+3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只有两张**——core 已显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`），这两张与目标 schema 是同一张表。
+
+**物理 `SET SCHEMA` 搬迁的前置 = core 停写**（不是「本仓 DDL 先建好」）：
+
+- 只要 core 还在用裸表名写，把 `public.x` 搬进 `market.x` 之后，core 的下一次启动迁移/写入会再次解析到 `public.x`（或再次 `CREATE TABLE IF NOT EXISTS x`），结果不是报错就是**悄悄长出第二份同名表**——两种都与「单一 writer」相反。
+- 因此搬迁顺序只能是：**core 写点归零/删除 → 确认无裸名写 → 再 `SET SCHEMA`**。core 侧那一半是 `tellurion:SVC-CORE-DATA-RETIRE`（本仓不改 core 写点，见 G2 ④）。
+- `DATA_MARKET_SCHEMA` 在代码里保留「空 = public」只是为了让过渡期能指向今天的位置；**它不是搬迁开关**：切这个变量不搬任何一行数据，也不改变 DDL 落点。出厂 compose 始终写 `market`（目标态），运维不要用改环境变量来代替 `SET SCHEMA`。
 
