@@ -30,6 +30,8 @@ services:
     environment:
       DATABASE_URL: ${DATA_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/tellurion?sslmode=disable}
       DATA_MARKET_SCHEMA: market
+      # 凭证来源（QT-77）：data 是**验签方**，只需要共享 JWT_SECRET，不持有任何
+      # *_TOKEN；签发/轮换口径见 tellurion:docs/SPEC.md 的「服务间凭证」节。
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
     extra_hosts:
       - "host.docker.internal:host-gateway"
