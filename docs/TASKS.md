@@ -26,7 +26,7 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 
 > **约定变更（2026-10-21）**：原「占位仓不写正式六字段任务单」作废——X 线任务单已展开为本仓正式任务（见下）。M5/M8 开工前置不变；实现仍未开工，开工前仍须过前置两条。（2026-10-23：实现已开工，见本单下的进度块。）
 
-### SVC-DATA-G0 · 服务就绪门 G0：自有部署与本地启动（ADR-036）[P0] 🔶
+### SVC-DATA-G0 · 服务就绪门 G0：自有部署与本地启动（ADR-036）[P0] ✅（2026-11-07）
 
 - **① 目标**：本仓作为数据面服务，能在没有 core 源码的情况下独立构建、启动、被健康检查。
 - **② 上下文**：ADR-036 定六仓为服务；今天本仓有 `cmd/dataservice` + 23 张 `market.*`/`ingest.*` schema，但无 `Dockerfile` / `deploy/`；生产 `:8081` 仍由 core `cmd/data` 提供。
@@ -34,6 +34,11 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 - **④ 约束与非目标**：不改业务逻辑与 schema；不接 core 写切读（归 G3）；不引入 K8s；不把 core `cmd/data` 复制进本仓。
 - **⑤ 验收**：`docker compose -f deploy/compose.yaml config` 通过；单仓启动后 `GET /health` 200；有 Go 环境时 `go build ./...` 单仓绿；无 `replace` / `go.work`。
 - **⑥ 边界**：只改本仓 deployment；core 侧 compose 由 `SVC-DEPLOY-01` 处理。
+
+> **施工记录（2026-11-07，补齐验收并翻 ✅）**：
+> - **落点核查**：`Dockerfile`（多阶段 `golang:1.25-alpine` → `alpine:3.19`、`USER nobody`、装 `curl`、`HEALTHCHECK … curl -fsS http://127.0.0.1:8081/health`）、`deploy/compose.yaml`（`name: tellurion-data`；服务 `postgres` + `data`；`DATABASE_URL` / `DATA_MARKET_SCHEMA: market` / `JWT_SECRET` 三键齐；端口 `127.0.0.1:8081:8081`；`depends_on: service_healthy`）、`README.md` 含单仓启动命令。
+> - **验收（真实输出，2026-11-07）**：`docker compose -f deploy/compose.yaml config -q` → **EXIT=0**；`go build ./...` → **EXIT=0**；`go.mod` 无 `replace`（0 行）、无 `go.work`；真实二进制 + 真库（便携 PG 16.2 `127.0.0.1:55432`、库 `tellurion_data_test`、`DATA_MARKET_SCHEMA=market`，监听 `127.0.0.1:18092`）→ `GET /health` `200 {"status":"ok"}`、`GET /readyz` `200 {"status":"ready","store":"postgres"}`。
+> - **未执行（如实）**：`docker compose up --build`（本机 Docker 引擎未起，`docker version` 客户端 27.4.1-rd / daemon 不可达）；容器内跑通属容器腿，不影响本单 ⑤ 的三条书面判据。
 
 ### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ⬜
 
