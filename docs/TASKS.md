@@ -337,7 +337,13 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 >    两者目的相同（重放不产生新行、不报错），但**不是同一个键**；不另造第二套去重，按 §3 既有语义成文。
 > 3. 未做多租户配额、未引 API 网关、未改 contracts pin —— 按 ④ 约束本来就是非目标。
 
-### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] 🔶（2026-11-07 施工；真 PG 重放腿未执行）
+### SVC-DATA-G2 · 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036）[P0] ✅（2026-11-07 真库重放腿补跑通过）
+
+> **2026-11-07 真库腿补跑（✅）**：起便携 PostgreSQL 16.2（`127.0.0.1:55432`，不占默认 5432），
+> `DATA_TEST_DSN='postgres://postgres@127.0.0.1:55432/tellurion_data_test?sslmode=disable' go test ./internal/schema -run TestSchemaReplay_TwoRunsLeaveShapeUnchanged -v -count=1`
+> → `--- PASS: TestSchemaReplay_TwoRunsLeaveShapeUnchanged (0.31s)`、退出码 0（两次指纹比对在用例内断言，**不是 skip**）；
+> 同一 DSN 下 `go test ./... -count=1` 退出码 0。⑤① 的两次指纹输出已取得；②③④ 沿用本节原施工记录。
+> 环境口径：代码零改动，端口由 `DATA_TEST_DSN` 注入，端口约定里的 5432 未变。
 
 - **① 目标**：`market` / `ingest` 的 DDL 归属在本仓**自证**——迁移可重复执行、不跨 schema 写、每张表「谁写」有答案。
 - **② 上下文**：`internal/schema` 持 23 张 DDL（`market` 19 + `ingest` 4，`TableNames()` 可对账），`cmd/dataservice` 在 `DATABASE_URL` 有值时启动执行；**今天仍是双 owner**——core 侧写点未归零（本仓台账 X1d 行自证「其余同步腿仍在 core 写」；core 侧删除单 = `tellurion:SVC-CORE-DATA-RETIRE`）；`deploy/compose.yaml:32` 出厂 `DATA_MARKET_SCHEMA: market`，而 core 用**裸表名**写 `public.*`（core 仓内无 `search_path`）⇒ 两种读法指向的不是同一批表，这条口径必须钉死；`visible_at` 回填只在测试库跑过（`-tags backfill` + `DATA_TEST_DSN`，库名须以 `_test` 结尾）；材料 §5.2 K3 列出 **10 张「有表无写者」**（market 侧 7 + ingest 侧 3）。
