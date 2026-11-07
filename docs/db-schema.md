@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-07
-verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正。P6 —— D2 回填仅测试库经 tagged 套件真跑（生产未执行），§6.5/§6.6 同步。SVC-DATA-G2（2026-11-07）—— §7 K3 十张表处置、§8 `DATA_MARKET_SCHEMA` 口径；真 PG 重放腿本机未执行
+verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正。P6 —— D2 回填仅测试库经 tagged 套件真跑（生产未执行），§6.5/§6.6 同步。SVC-DATA-G2（2026-11-07）—— §7 K3 十张表处置、§8 `DATA_MARKET_SCHEMA` 口径；真 PG 重放腿当晚已补跑（便携 PG 16.2 @ 55432，`TestSchemaReplay_TwoRunsLeaveShapeUnchanged` PASS）
 ---
 
 # DB Schema — tellurion-data

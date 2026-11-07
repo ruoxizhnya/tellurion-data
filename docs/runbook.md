@@ -4,8 +4,9 @@
 > SRE」，而是**故障时能在三分钟内判断该重启、该修库、还是该改调用方**。
 > 可观测面只有一行访问日志（`docs/api-schema.md` §1.2），**没有 Prometheus / 面板**。
 >
-> 本文中**能跑的命令都实际跑过并贴了真实输出**；必须真 PG / Docker 才能验证的腿（§1.1/§1.4/
-> §3 末/§4 末），在对应小节与 §8 明写「未执行」。没有把未跑的输出写成已跑。
+> 本文中**能跑的命令都实际跑过并贴了真实输出**；必须真 PG / Docker 才能验证的腿，2026-11-07 晚已用便携
+> PostgreSQL 16.2 补跑（§3/§4/§5/§7.3），剩余仅 Docker 容器腿与优雅停机，在对应小节与 §8 明写「未执行」。
+> 没有把未跑的输出写成已跑。
 
 > 本文命令里的端口以你实际 `-addr` 为准；G4 演练用了 `18081`（拔 PG）/ `18082`（基线）/
 > `18083`（§6 的 curl 复核），避免和日常 `8081` 冲突。
@@ -18,12 +19,12 @@ $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';'
 
 ## 1. 起停
 
-### 1.1 有真 PG（正常形态，**未执行**：本机无 PG）
+### 1.1 有真 PG（正常形态；2026-11-07 晚已用便携 PG 16.2 @ 55432 真跑，见 §7.3）
 
 ```powershell
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); $env:CGO_ENABLED='0'
-$env:DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:5432/tellurion?sslmode=disable'
-$env:JWT_SECRET  = '<与 core 共享的 secret>'
+$env:DATABASE_URL = 'postgres://postgres@127.0.0.1:55432/tellurion_data_test?sslmode=disable'
+$env:DATA_MARKET_SCHEMA = 'market'
 go run ./cmd/dataservice -addr 127.0.0.1:8081
 ```
 
@@ -134,7 +135,7 @@ $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';'
 go test ./internal/schema -run 'TestSchemaReplay_TwoRunsLeaveShapeUnchanged' -count=1 -v
 ```
 
-真输出：
+无库时的真输出（历史记录，证明 skip 不是假绿）：
 
 ```
 === RUN   TestSchemaReplay_TwoRunsLeaveShapeUnchanged
@@ -144,12 +145,21 @@ PASS
 ok  	tellurion-data/internal/schema	0.052s
 ```
 
-对测试库**真重放**（未执行：本机无 PG）：
+对测试库**真重放**（2026-11-07 已执行，便携 PostgreSQL 16.2 @ `127.0.0.1:55432`）：
 
 ```powershell
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); $env:CGO_ENABLED='0'
-$env:DATA_TEST_DSN = 'postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable'
+$env:DATA_TEST_DSN = 'postgres://postgres@127.0.0.1:55432/tellurion_data_test?sslmode=disable'
 go test ./internal/schema -run 'TestSchemaReplay_TwoRunsLeaveShapeUnchanged' -count=1 -v
+```
+
+真输出（`REPLAY_EXIT=0`）：
+
+```
+=== RUN   TestSchemaReplay_TwoRunsLeaveShapeUnchanged
+--- PASS: TestSchemaReplay_TwoRunsLeaveShapeUnchanged (0.45s)
+PASS
+ok  	tellurion-data/internal/schema	0.499s
 ```
 
 约束：库名**必须**以 `_test` 结尾，否则套件自动 skip（生产 DSN 误设也连不上去）。
@@ -161,11 +171,11 @@ go test ./internal/schema -run 'TestSchemaReplay_TwoRunsLeaveShapeUnchanged' -co
 
 ```powershell
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); $env:CGO_ENABLED='0'
-$env:DATA_TEST_DSN = 'postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable'
+$env:DATA_TEST_DSN = 'postgres://postgres@127.0.0.1:55432/tellurion_data_test?sslmode=disable'
 go test -tags backfill ./internal/schema -run 'TestBackfillSuite_TestDatabaseOnly' -count=1 -v
 ```
 
-本机无库时的真输出（SKIP）：
+无库时的真输出（SKIP，历史记录）：
 
 ```
 === RUN   TestBackfillSuite_TestDatabaseOnly
@@ -175,7 +185,17 @@ PASS
 ok  	tellurion-data/internal/schema	0.053s
 ```
 
-**未执行**：真实 `_test` 库上的回填（本机无 PG / Docker）。回填口径见 `docs/db-schema.md` §6.5。
+**真库回填（2026-11-07 已执行，`BACKFILL_EXIT=0`）**：
+
+```
+=== RUN   TestBackfillSuite_TestDatabaseOnly
+    backfill_pg_test.go:366: C 集 stock_fundamentals 无本仓 DDL，运行时跳过（静态分类测试覆盖）
+--- PASS: TestBackfillSuite_TestDatabaseOnly (0.48s)
+PASS
+ok  	tellurion-data/internal/schema	0.525s
+```
+
+回填口径见 `docs/db-schema.md` §6.5。
 
 ## 5. 503 排查路径（按顺序，别跳）
 
@@ -207,7 +227,8 @@ ok  	tellurion-data/internal/schema	0.053s
    "tcp5432_listening=$(Test-NetConnection -ComputerName 127.0.0.1 -Port 5432 -InformationLevel Quiet)"
    ```
 
-   本机真输出：`tcp5432_listening=False`（没有真 PG）。
+   本机真输出：`tcp5432_listening=False`（没有系统 PG）。**2026-11-07 真库演练用的是便携 PG 的 55432**
+   （`tcp55432_listening=True`），把上面命令的端口换成实际 DSN 端口即可。
 5. **DDL 是否执行**：日志里找这两行之一：
 
    ```powershell
@@ -245,17 +266,32 @@ curl.exe -s -i -X POST -H "Content-Type: application/json" --data-binary '{"data
 
 真 body：`{"error":{"code":"dependency_unavailable","message":"postgres is not ready (schema not applied or pool unreachable); check GET /readyz"}}`
 
-409 的库侧核对（**未执行**，需真库）：
+409 的核对（**HTTP 级 2026-11-07 已执行**；库侧 SQL 本机无 `psql`，未执行）：
+
+```powershell
+# 已真跑：同内容两次都 200；只改 close 再投 → 409
+$body = '{"data_type":"ohlcv_daily","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"open":1680.0,"high":1690.0,"low":1675.0,"close":1685.5,"volume":123456.0}}]}'
+```
+
+真结果（`DATA_MARKET_SCHEMA=market`，真库）：
+
+```
+FIRST=200    {"data_type":"ohlcv_daily","received":1,"persisted":1,"skipped":0}
+REPLAY=200   {"data_type":"ohlcv_daily","received":1,"persisted":1,"skipped":0}
+CONFLICT=409 {"error":{"code":"content_conflict","message":"store: row exists with different content for the same primary key: point[0] 600519.SH ohlcv_daily"}}
+```
+
+库侧可选核对（列名以本仓 DDL 为准：`trade_date` / `created_at`，没有 `trade_time` / `updated_at`）：
 
 ```sql
-SELECT symbol, trade_time, source, visible_at, updated_at
+SELECT symbol, trade_date, source, close, visible_at, created_at
 FROM market.ohlcv_daily_qfq
 WHERE symbol = '600519.SH'
-ORDER BY trade_time DESC
+ORDER BY trade_date DESC
 LIMIT 5;
 ```
 
-判据：同 `(symbol, trade_time)` 的 `source` 或任一内容列与请求不同 ⇒ 409 是正确拒收；
+判据：同 `(symbol, trade_date)` 的 `source` 或任一内容列与请求不同 ⇒ 409 是正确拒收；
 **不要**用 `UPDATE` 把它改成请求值来「消除 409」，那等于绕过 ADR-0004/0006 的受控修正。
 
 ## 7. 故障演练记录（G4 ⑤）
@@ -306,7 +342,8 @@ panic_lines=0
 - **退出码**：4 次 `curl` 均为 `exit=0`，HTTP 码如上；进程由 `Stop-Process` 强杀，
   Windows 不返回进程退出码（`[]`，未取得）。演练命令整体退出码 `0`。
 - **自愈证据（进程内，真跑）**：`schema not applied yet` → 10s 后 `schema retry failed`，
-  说明重试循环在工作；库真恢复后的翻正**未执行**（本机无 PG）。
+  说明重试循环在工作；库真恢复后的翻正**未在本形态执行**（当时本机无 PG），
+  已由 §7.3 的真库拔插补齐（200 → 503 → 200，同一进程）。
 
 ### 7.2 回指基线配置：启动路径可用
 
@@ -328,9 +365,36 @@ phase=BASELINE stopped process_exit_code=[]
 panic_lines=0
 ```
 
+### 7.3 真库拔插：200 → 503 → 200（2026-11-07 晚补跑）
+
+- 库：便携 PostgreSQL 16.2 @ `127.0.0.1:55432`，库 `tellurion_data_test`
+- 服务：`$env:DATA_MARKET_SCHEMA='market'; $env:DATABASE_URL='postgres://postgres@127.0.0.1:55432/tellurion_data_test?sslmode=disable'; .\data-svc.exe -addr 127.0.0.1:18081`
+- 手法：先 `GET /readyz`，再 `pg_ctl stop -m fast` 拔库，再 `pg_ctl start` 恢复（同一进程，不重启服务）
+
+真输出：
+
+```
+READY_UP=200   {"status":"ready","store":"postgres"}
+HEALTH_UP=200
+PG_STOP=0
+READY_DOWN=503 {"status":"not_ready","store":"postgres","error":"analysis: ping postgres: write failed: write tcp 127.0.0.1:…->127.0.0.1:55432: wsasend: An existing connection was forcibly closed by the remote host."}
+HEALTH_DOWN=200
+PG_RESTART=0
+READY_BACK=200 {"status":"ready","store":"postgres"}
+```
+
+服务日志（同一 PID，逐秒）：
+
+```
+08:21:00 httpapi: route="GET /readyz" status=200
+08:21:15 … 08:21:23 httpapi: route="GET /readyz" status=503   （拔库区间，同时 /health 一直 200）
+08:21:24 httpapi: route="GET /readyz" status=200              （库回来后自愈）
+```
+
+**结论**：真库断开 ⇒ 就绪 503 且 `health≠ready`；恢复后同一进程自愈 200，无需重启。
+
 **结论**：拔 PG 形态满足「503 / 不 panic / 不静默成功 / 进程存活」，基线配置可正常启动。
-**未执行**：真 PG 恢复后同一进程自愈的端到端腿（需要真库）；HTTP 层自愈由
-`TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 覆盖：
+HTTP 层自愈另由 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 覆盖：
 
 ```
 === RUN   TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal
@@ -339,13 +403,13 @@ panic_lines=0
 --- PASS: TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal (0.04s)
 ```
 
-## 8. 未执行项（必须真 PG / 容器）
+## 8. 真库 / 容器腿清单
 
 | 腿 | 状态 | 原因 |
 |---|---|---|
-| DDL 对真库重放两次形状不变 | **未执行** | 本机无 PG，`DATA_TEST_DSN` 未设置（套件 SKIP） |
-| `visible_at` 回填（`_test` 库） | **未执行** | 同上（`-tags backfill` SKIP） |
-| 409 `content_conflict` 真主键复现 | **未执行** | 需要真库已有行；只有单测覆盖 |
-| PG 恢复后同一进程自愈（真库） | **未执行** | 无真 PG；HTTP 层由单测覆盖，进程内重试日志已观察 |
-| `docker compose` 起 PG + 服务 | **未执行** | Docker 引擎不可用 |
-| 优雅停机 / 进程真实退出码 | **未执行** | 当前只有 `Stop-Process` 强杀 |
+| DDL 对真库重放两次形状不变 | **已执行（2026-11-07）** | `TestSchemaReplay_TwoRunsLeaveShapeUnchanged` PASS |
+| `visible_at` 回填（`_test` 库） | **已执行（2026-11-07）** | `TestBackfillSuite_TestDatabaseOnly` PASS |
+| 409 `content_conflict` 真主键复现 | **已执行（2026-11-07）** | 真服务 `POST /ingest/points`：同内容 200、改内容 409 `content_conflict` |
+| PG 恢复后同一进程自愈（真库） | **已执行（2026-11-07）** | §7.3：200 → 503 → 200，进程未重启 |
+| `docker compose` 起 PG + 服务 | **未执行** | Docker 引擎不可用（不属 G4 ⑤ 验收） |
+| 优雅停机 / 进程真实退出码 | **未执行** | 当前只有 `Stop-Process` 强杀；优雅停机不在 G4 非目标内 |

@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-25
-verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 逐条移植）；D4-1 裁-14 撤因子读面
+last-verified: 2026-11-07
+verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -274,7 +274,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **③-② 的 `ErrVisibleAtMissing` 有一条工单没写的代价**：现有已落库数据**没有承载 `visible_at` 的列**，这道门一上线历史行不可回填 ⇒ 必须与 X1d 的 schema 迁移同批设计（加列 + 按 `TimeSemantics` 规则重算，重算不了的处理要成文）。登记为对表 T5 —— **方案已于 2026-10-22 成文** = `docs/db-schema.md` §6（含一条工单没预见的覆盖面限制：`market_activity` / `quant.macro_series` 两个已声明语义的源**不走 BulkInsert**，门挂在 `ValidatePoints` 上拦不到它们）。
 - **⑤ 三条验收的覆盖面要按对表收窄一条**：「改日历/复权口径 → hash 变」这条**已由 QT-03 的向量测试钉住**（`provenance_vector_test.go:194-228`，`DatasetSnapshotHash_UniqueDefinition` 逐分量 mutate），本仓 X1b 新增的判据是**生产者侧**的——六个入参（`universe` / `window` / `frequency` / `data_version` / `calendar` / `adjustment`）逐个 mutate 必须变 hash，测试已落。⚠️ **`as_of` 不在冻结六分量里**（2026-10-23 实现时确认，不是笔误），处置见本单「已登记的取舍与风险」第一条：缓存对同 hash 不同 `as_of` fail-closed。
 
-### SVC-DATA-G1 · 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036）[P0] 🔶
+### SVC-DATA-G1 · 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036）[P0] ✅（2026-11-07 真库腿补齐）
 
 - **① 目标**：本仓对外接口满足 ADR-036 §3 的 G1 五件——版本化 API、错误模型、鉴权/授权、幂等、分页/限流——并各自有可执行判据。
 - **② 上下文**：今天 4 条路由（`/health` + `/datasets/resolve` + `/datasets/{hash}` + `POST /ingest/points`），鉴权已落（`internal/httpapi/auth.go` = kit 适配、`policy.go` = 策略表，写端点档位只 `service` + `admin`）；**实测本仓无 openapi / swagger 文件**（版本化只剩 `docs/api-schema.md` 人读）；`/readyz` 全 workspace 代码 0 命中；分页与限流今天没有。跨仓前置：core 的 5 条旧读面（`/ohlcv/{symbol}`、`/api/v1/ohlcv/bulk`、`/screen`、`/market/index`、`/factors/{name}`）与本仓 4 条**不对齐**（材料 §2.6 ① / §5.2 K1），本单不擅自补齐它们。
@@ -283,7 +283,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **⑤ 验收**：① `api-schema.md` 每条端点有版本行、错误码表逐条齐全（抽 2 条比对实现）；② 四条用例真跑：分页上界、429 与 401 可区分、探针豁免、幂等重投返回同码；③ `GET /readyz` 在 `DATABASE_URL` 为空 / PG 不可达时 **503**、正常时 **200**（各一条用例）；④ `go build/vet/test ./...` 单仓三条绿（贴真实退出码）。
 - **⑥ 边界**：本仓接口面；core 改指本仓的切读归 `SVC-DATA-G3`，K1 的接口面对齐由协调者裁。
 
-> **施工记录（2026-11-07 · SVC-DATA-G1 落账，状态 🔶）**
+> **施工记录（2026-11-07 · SVC-DATA-G1 落账；真库腿当晚补齐后状态 ✅）**
 >
 > 已交付（本仓）：
 >
@@ -311,10 +311,8 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 > - ② 四条用例：**分页上界** = ⚠️ 本仓无集合类读端点，按 ③ 的「显式声明整段返回 + 上界」兑现
 >   （`/datasets/*` 单词数据集；`POST /ingest/points` ≤ 10000 点 / 8 MiB，超限用例
 >   `TestIngestPointsRejectsBatchOverTheLimitOnTheWire` + `TestIngestPointsRejectsOversizedBody`）；
->   **429 与 401 可区分** = ✅；**探针豁免** = ✅；**幂等重投同码** = ✅（wire 级；
->   真实 PG 的「已存在行计 skipped」腿未执行，见下）。
-> - ③ `/readyz` 三态各有用例 = ✅（handler 级）；**真 PG 不可达 → 503、恢复 → 200 未执行**（本机 Docker
->   引擎未起，`DATABASE_URL` 无从指向真实库），记 🔶 而不是 ✅。
+>   **429 与 401 可区分** = ✅；**探针豁免** = ✅；**幂等重投同码** = ✅（wire 级 + 2026-11-07 真库级，见下方真库腿）。
+> - ③ `/readyz` 三态各有用例 = ✅（handler 级）；**真 PG 不可达 → 503、恢复 → 200** = ✅（2026-11-07 真库腿，见下）。
 > - ④ `gofmt -l .` 空、`go build ./...` 退出 0、`go vet ./...` 退出 0、`go test ./... -count=1` 退出 0
 >   （8 个包 ok：cmd/dataservice、assembly、httpapi、ingest、normalize、schema、serving、store）。
 >
@@ -330,8 +328,12 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 >
 > 未执行 / 订正口径（如实登记）：
 >
-> 1. **真 PG 两级腿未跑**：① PG 断开 → `/readyz` 503、恢复 → 200；② 真实重放（同批第二次 `skipped` 全部命中）。
->    本机 Docker 引擎不可用，`_test` 库起不来。补齐条件：能起库后按 `docs/runbook`（G4 交付）跑一次并贴输出。
+> 1. **真 PG 两级腿（2026-11-07 晚已补齐，本单翻 ✅）**：便携 PostgreSQL 16.2 @ `127.0.0.1:55432`、库 `tellurion_data_test`，真二进制 `cmd/dataservice`（`DATA_MARKET_SCHEMA=market`）：
+>    - **200**：`GET /readyz` → `200`，body `{"status":"ready","store":"postgres"}`（`pool.Ping` + `to_regclass('market.ohlcv_daily_qfq')` 均通过）；`GET /health` → `200`。
+>    - **停库 ⇒ 503**：`pg_ctl -D ... stop -m fast`（`STOP_EXIT=0`）后 `GET /readyz` → `503`，body `{"status":"not_ready","store":"postgres","error":"analysis: ping postgres: write failed: write tcp 127.0.0.1:…->127.0.0.1:55432: wsasend: An existing connection was forcibly closed by the remote host."}`；同刻 `GET /health` 仍 `200`（健康/就绪分离）。
+>    - **恢复 ⇒ 200（同一进程自愈）**：`pg_ctl start`（`START_EXIT=0`）后 `GET /readyz` → `200`；服务日志逐秒可查：`08:21:00 status=200` → `08:21:15…08:21:23 status=503` → `08:21:24 status=200`，进程未重启。
+>    - **幂等/冲突（真库）**：`POST /ingest/points` 同内容两次均 `200 {"received":1,"persisted":1,"skipped":0}`；改 `close` 后同主键 → `409 {"error":{"code":"content_conflict","message":"store: row exists with different content for the same primary key: point[0] 600519.SH ohlcv_daily"}}`。
+>    - **口径订正（实测推翻本单原先的「skipped」期待）**：`persisted` 的语义是「请求点已就位」（新插入 + 同内容 no-op），`skipped` 只数**载荷不合法**被跳过的行（`internal/store/write.go:266-268`）。所以真实重放的返回是 `persisted=1/skipped=0`，**不是** `skipped=1`；⑤② 只承诺「重投返回码与首次一致」，该承诺成立（200 vs 200）。
 > 2. **幂等键口径与票面不同**：③④ 写「以 `dataprotocol.DeduplicateKey` 为键」，而本仓写面实际是
 >    **行主键 + 全列内容比对**（§3；`DeduplicateKey` 是 core 传输侧对单批点的去重键，不是库级冲突判定）。
 >    两者目的相同（重放不产生新行、不报错），但**不是同一个键**；不另造第二套去重，按 §3 既有语义成文。
@@ -360,10 +362,10 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
   - ③③/③④ 文档：`docs/db-schema.md` §7（K3 十张逐张处置）、§8（`DATA_MARKET_SCHEMA` 口径与物理搬迁前置）。
 - **门禁（真实退出码）**：`go build ./...` = **0**；`go vet ./...` = **0**；`go test ./... -count=1` = **0**（9 个包 `ok`）；`gofmt -l` 三个改动/新增 Go 文件 = **空**（退出 0）。DDL 表数复核 = **23**（`TableNames()`：market 19 + ingest 4），与票面一致。
 - **破坏验证（真做真还原）**：往 `internal/schema/schema.go` 临时追加 `var guardProbeSQL = "INSERT INTO quant.foo (a) VALUES (1)"` ⇒ `go test ./internal/repoguard -run TestNoCrossSchemaWritesInProductionSQL -v` **FAIL（exit 1）**，报 `internal\schema\schema.go:63: INSERT INTO quant.foo（写语句指向仓外 schema quant）`；用备份逐字节还原后 `sha256` 前后一致 —— before/after 均 `a339a588f4457da393bd0237d78e22c3338803e99885159572734a017ff8527d`（破坏态 `587e0105778839ef7a3ebfa23f79938c4cf0d8f36aec6be4a196b15e43b6be65`），复跑 **PASS（exit 0）**。
-- **未执行项（如实登记）**：① **真 PG 重放两次指纹未执行** —— 本机 `127.0.0.1:5432` 无监听、Docker 引擎不可用，`DATA_TEST_DSN` 未设置；实测输出为 `--- SKIP: TestSchemaReplay_TwoRunsLeaveShapeUnchanged ... DATA_TEST_DSN 未设置；重放腿只在测试库执行`（exit 0），**没有两次指纹输出，不贴编造结果**；② 真库夹具（完整 DDL 首跑/二跑、`ingest.data_migrations` 哨兵行）同因未执行；③ K3 各写点在运行期是否仍被调用（如 executor 是否已被 feature flag 关掉）= **未取证**，只取证「core 有字面写点」与「本仓无写者」。
+- **未执行项（当日早先状态；① 已于 2026-11-07 晚补齐，见本节顶部记录）**：① ~~真 PG 重放两次指纹未执行~~ → **已执行**（`--- PASS: TestSchemaReplay_TwoRunsLeaveShapeUnchanged (0.45s)`，两次指纹在用例内逐位比对，退出码 0）；② 真库夹具（完整 DDL 首跑/二跑、`ingest.data_migrations` 哨兵行）已随 ① 一并真跑；③ K3 各写点在运行期是否仍被调用（如 executor 是否已被 feature flag 关掉）= **未取证**，只取证「core 有字面写点」与「本仓无写者」（跨仓取证，不属本单验收）。
 - **K3 处置一览**（9 补写者 + 1 core-only + 0 弃表）：`stocks` → 补写者；`dividends` → 补写者；`splits` → 补写者；`trading_calendar` → 补写者；`index_constituents` → 补写者；`market.index_daily` → **显式声明只由 core 写、本仓不拥有**（裁决 ⑰）；`market_activity` → 补写者；`ingest.raw` → 补写者；`sync_jobs` → 补写者；`sync_schedules` → 补写者。逐行 core 写点见 `docs/db-schema.md` §7。
 
-### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] 🔶
+### SVC-DATA-G4 · 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036）[P1] ✅（2026-11-07 真库腿补齐）
 
 - **① 目标**：本仓作为服务**可运维**——依赖失败时说什么、超时多久、怎么重启与排查，全部成文并被真跑过一次。
 - **② 上下文**：ADR-036 §3 的 G4 判据 = 「超时/重试/熔断、失败语义、日志/指标/追踪、回滚」+「故障演练 + runbook + 健康/就绪分离」；**全 workspace 实测 `runbook` 只出现在 ADR-036 自己的正文里**，六个服务仓一份都没有 ⇒ G4 此前无人认领（本组六仓的 `SVC-*-G4` 是同一件事的六个实例，各自只写自己仓的依赖面）；本仓今天只有 `/health`，`DATABASE_URL` 为空时数据端点 503（fail-closed 已写进 `api-schema.md`），出站传输由 core 注入（`Transports` 窄接口），本仓侧没有超时上界的文档。
@@ -372,7 +374,7 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 - **⑤ 验收**：① runbook 每条命令可复制、当场执行过并贴真实输出；② 演练记录有真退出码（拔 PG 前后各一次）；③ 失败语义表四类齐全，每条有对应用例或写明「无用例的原因」；④ 三条命令绿。
 - **⑥ 边界**：本仓运维面；core 的聚合 compose 与 `cmd/worker` / `cmd/dualrun` 部署形态归 `tellurion:QT-79`。
 
-> **施工记录（2026-11-07 · SVC-DATA-G4 落账，状态 🔶）**
+> **施工记录（2026-11-07 · SVC-DATA-G4 落账；真库腿当晚补齐后状态 ✅）**
 >
 > 已交付（本仓）：
 >
@@ -397,11 +399,12 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 >
 > 验收对照（⑤）：
 >
-> - ① runbook 每条可复制、当场执行并贴真实输出 = ✅（可执行腿全跑；需真 PG / Docker 的腿在 §3/§4/§8
->   明确标「未执行」，没有伪造输出）。
-> - ② 演练记录真退出码 = ✅ 部分：拔 PG 形态 4 次 `curl` 均 `exit=0`、HTTP 码 200/503/503/503，进程
->   存活且 `panic_lines=0`；基线配置重起同样 4 次 `exit=0`。**进程本身由 `Stop-Process` 强杀，
->   Windows 不返回退出码（`[]`），已如实记录**；优雅停机未实现。
+> - ① runbook 每条可复制、当场执行并贴真实输出 = ✅（可执行腿全跑；**2026-11-07 晚补跑 §3 重放、§4 回填、§5 真库 409**，
+>   输出已贴回 runbook；Docker 容器腿仍标「未执行」）。
+> - ② 演练记录真退出码 = ✅：拔 PG 形态 4 次 `curl` 均 `exit=0`、HTTP 码 200/503/503/503，进程存活且 `panic_lines=0`；
+>   基线配置重起同样 4 次 `exit=0`。**2026-11-07 晚真 PG 演练**：`/readyz` 200 →（`pg_ctl stop`，`STOP_EXIT=0`）503
+>   →（`pg_ctl start`，`START_EXIT=0`）200，**同一进程自愈**，日志 `08:21:00 200 → 08:21:15…23 503 → 08:21:24 200`。
+>   **进程本身由 `Stop-Process` 强杀，Windows 不返回退出码（`[]`），已如实记录**；优雅停机未实现（不在本单）。
 > - ③ 四类失败语义齐全 = ✅：PG 不可达/内容冲突有 HTTP 用例，配额耗尽/connector 超时有单测且写明
 >   「HTTP 面无用例及原因：没有路由触发取数」。
 > - ④ 门禁：`gofmt -l .` 输出空、退出 0；`go build ./...` 退出 0；`go vet ./...` 退出 0；
@@ -426,11 +429,13 @@ verified-by: W4 鉴权接线（kit net/http 适配 + 3 路由策略表 + REV-17 
 >
 > 未执行 / 订正口径（如实登记）：
 >
-> 1. **真 PG 恢复后同一进程自愈**未执行（本机无 PG、Docker 引擎不可用）；HTTP 层自愈由
->    `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 覆盖，进程内重试日志已真观察到。
-> 2. **真库 DDL 重放两次、`visible_at` 回填、409 真主键复现**均未执行（套件在本机 SKIP，见
->    `docs/runbook.md` §3/§4/§8）。
-> 3. **进程真实退出码**未取得：`Stop-Process` 强杀在 Windows 不返回 ExitCode；优雅停机不在本单。
+> 1. **真 PG 恢复后同一进程自愈** = ✅（2026-11-07 晚真库演练：200 → 503 → 200，进程未重启；日志三段时间戳见上）。
+>    HTTP 层自愈仍由 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal` 覆盖。
+> 2. **真库 DDL 重放两次、`visible_at` 回填、409 真主键复现** = ✅（2026-11-07 晚）：
+>    - 重放：`DATA_TEST_DSN=…/tellurion_data_test go test ./internal/schema -run TestSchemaReplay_TwoRunsLeaveShapeUnchanged -count=1` → `PASS`（两次指纹一致，详见 SVC-DATA-G2 记录）。
+>    - 回填：`DATA_TEST_DSN=… go test -tags backfill ./internal/schema -run TestBackfillSuite_TestDatabaseOnly -v -count=1` → `PASS`（A 集 12 张逐档取值、哨兵防重放、B/C 集不动）。
+>    - 409：真服务 `DATA_MARKET_SCHEMA=market` 下 `POST /ingest/points` 同内容两次 → 均 `200 {"received":1,"persisted":1,"skipped":0}`；同主键改 `close` → `409 {"error":{"code":"content_conflict",…}}`。
+> 3. **进程真实退出码**未取得：`Stop-Process` 强杀在 Windows 不返回 ExitCode；优雅停机不在本单（非目标）。
 > 4. **`dur_ms` 分辨率**：本机单调时钟最小非零间隔约 0.5ms，快请求记 `0.000000`（= <0.5ms），
 >    已在 `api-schema.md` §1.2 与 runbook §2 写明，未把 0 当异常。
 
