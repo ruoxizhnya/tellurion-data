@@ -284,9 +284,9 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 - **① 目标**：本仓对外接口满足 ADR-036 §3 的 G1 五件——版本化 API、错误模型、鉴权/授权、幂等、分页/限流——并各自有可执行判据。
 - **② 上下文**：今天 4 条路由（`/health` + `/datasets/resolve` + `/datasets/{hash}` + `POST /ingest/points`），鉴权已落（`internal/httpapi/auth.go` = kit 适配、`policy.go` = 策略表，写端点档位只 `service` + `admin`）；**实测本仓无 openapi / swagger 文件**（版本化只剩 `docs/api-schema.md` 人读）；`/readyz` 全 workspace 代码 0 命中；分页与限流今天没有。跨仓前置：core 的 5 条旧读面（`/ohlcv/{symbol}`、`/api/v1/ohlcv/bulk`、`/screen`、`/market/index`、`/factors/{name}`）与本仓 4 条**不对齐**（材料 §2.6 ① / §5.2 K1），本单不擅自补齐它们。
 - **③ 要求**：① `api-schema.md` 给每条端点写明版本与兼容策略（加字段 = MINOR、改语义 = MAJOR，按 C5 保留一个版本周期）；② 错误码闭合表：每个哨兵 → HTTP 码 + 报文形状逐条列出，**未列出的码视为缺陷**（今天只有零散映射）；③ 读端点要么加分页（`limit`/`cursor`），要么显式声明「整段返回」并给条数上界 + 超限行为；④ `POST /ingest/points` 的幂等语义成文（以 `dataprotocol.DeduplicateKey` 为键，重复投的返回码与首次一致）；⑤ 限流只需「不把自己打挂」的量级，但 **429 语义必须与 401 可区分**——core 侧 AUD-57 的教训：探针被限流读成「未登录」会把整站弹到登录页，故 `/health`、`/readyz` 必须豁免且有用例；⑥ 健康/就绪分离：`/health` = 进程活着，`/readyz` = PG 池可连 + 本仓 DDL 已执行。
-- **④ 约束与非目标**：不实现 core 那 5 条旧面（K1 未裁）；不引入 API 网关/新框架；不做多租户配额；不改 contracts pin（`v0.6.0`）；不在本单做物理 schema 搬迁。
+- **④ 约束与非目标**：不实现 core 那 5 条旧面（**K1 已裁**，2026-11-08 补裁 #11：以本仓已登记路由为唯一数据服务面，core 的 5 条旧读面由 core 在 `SVC-DATA-G3` 逐条处置、本仓不补齐）；不引入 API 网关/新框架；不做多租户配额；不改 contracts pin（`v0.6.0`）；不在本单做物理 schema 搬迁。
 - **⑤ 验收**：① `api-schema.md` 每条端点有版本行、错误码表逐条齐全（抽 2 条比对实现）；② 四条用例真跑：分页上界、429 与 401 可区分、探针豁免、幂等重投返回同码；③ `GET /readyz` 在 `DATABASE_URL` 为空 / PG 不可达时 **503**、正常时 **200**（各一条用例）；④ `go build/vet/test ./...` 单仓三条绿（贴真实退出码）。
-- **⑥ 边界**：本仓接口面；core 改指本仓的切读归 `SVC-DATA-G3`，K1 的接口面对齐由协调者裁。
+- **⑥ 边界**：本仓接口面；core 改指本仓的切读归 `SVC-DATA-G3`，K1 的接口面对齐**已裁**（2026-11-08 补裁 #11：本仓路由是唯一数据服务面，5 条旧读面由 core 侧逐条反代或删除；**待主任追认**）。
 
 > **施工记录（2026-11-07 · SVC-DATA-G1 落账；真库腿当晚补齐后状态 ✅）**
 >
