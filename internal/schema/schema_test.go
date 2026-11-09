@@ -66,7 +66,10 @@ func TestCSet_EveryExemptionCarriesAReason(t *testing.T) {
 
 	exempt := CSetExemptTables()
 	assert.Contains(t, exempt, "stock_fundamentals")
-	assert.Contains(t, exempt, "market.index_daily")
+	// ⑰（2026-11-10 施工）：`market.index_daily` 归 core，本仓已撤认领
+	//（DDL / TableNames / C 集三处同批删除）⇒ 它连「在门外」都不该登记，
+	// 否则等于宣称本仓仍对它有可见性口径。
+	assert.NotContains(t, exempt, "market.index_daily")
 	assert.Contains(t, exempt, "ingest.raw")
 
 	// 三个集合互不重叠：同一张表既在门外又要加列，说明口径自相矛盾。
@@ -156,6 +159,25 @@ func TestTableNames_MatchCreateStatements(t *testing.T) {
 		_, ok := created[name]
 		assert.True(t, ok, "TableNames() 声明了 %s 但 DDL 没建", name)
 	}
+}
+
+// ⑰ 守卫：`market.index_daily` 的 DDL owner 是 core，本仓不建表、不登记。
+//
+// 这不是「口径偏好」——core 与 data 两套 DDL 形状不同，**先建表者定形**：本仓的
+// `CREATE TABLE IF NOT EXISTS market.index_daily` 若在新库先跑，core 的建表会被
+// `IF NOT EXISTS` 静默跳过，之后 core 按自己的列集写就会失败。所以这里逐条扫本仓
+// statements，任何一条提到该表即红。
+func TestIndexDaily_IsNotOwnedByThisRepo(t *testing.T) {
+	const table = "market.index_daily"
+
+	for _, n := range TableNames() {
+		assert.NotEqual(t, table, n, "⑰：TableNames() 不许登记 %s（owner = core）", table)
+	}
+	for _, s := range Statements() {
+		assert.NotContains(t, s, table, "⑰：本仓 DDL 不许建 %s（先建表者定形，owner = core）", table)
+	}
+	// 正向对照：本仓仍持有 schema 所有权，防「什么都没扫到」的假绿。
+	assert.Contains(t, TableNames(), "market.ohlcv_daily_qfq")
 }
 
 // 建表语句必须幂等：空库一次跑完的前提是每条都能重入。

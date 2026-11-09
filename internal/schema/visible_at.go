@@ -51,7 +51,6 @@ var cSetExemptions = []struct {
 	Reason string
 }{
 	{"stock_fundamentals", "已有生成列 available_date = COALESCE(ann_date, trade_date)，判据走 ann_date（见 §6.3 单列条）；再建 visible_at 会让同表两个锚点漂移"},
-	{"market.index_daily", "实测漏项：不在 NewTableMapper() 的 13 个映射值里，由另一条路径写；它与 B 集同一个「门拦不到」问题，本次不冒认已覆盖"},
 	{"trading_calendar", "是 calendar_hash 的输入，不是观测数据流"},
 	{"stocks", "参考数据，无「何时可见」语义"},
 	{"index_constituents", "前视风险在成分变更时点，归 resolve 的 as_of 语义"},

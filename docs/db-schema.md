@@ -1,12 +1,13 @@
 ---
 status: active
-last-verified: 2026-11-07
-verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（statements 数组 + 三集合登记 + 回填腿），写面 `store.BulkInsert` 落地并接上 visible_at 门；§4 执行机制、§6.1/§6.5/§6.6 同步订正。P6 —— D2 回填仅测试库经 tagged 套件真跑（生产未执行），§6.5/§6.6 同步。SVC-DATA-G2（2026-11-07）—— §7 K3 十张表处置、§8 `DATA_MARKET_SCHEMA` 口径；真 PG 重放腿当晚已补跑（便携 PG 16.2 @ 55432，`TestSchemaReplay_TwoRunsLeaveShapeUnchanged` PASS）
+last-verified: 2026-11-10
+verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `internal/schema` 的 DDL / `TableNames()` 条目 / C 集豁免三处删除，`TableNames()` 23 → 22 张，新增守卫 `TestIndexDaily_IsNotOwnedByThisRepo`；§1.1 / §6.2 / §7 / §8 同步订正。真 PG 重放腿复跑（`TestSchemaReplay_TwoRunsLeaveShapeUnchanged` PASS）
 ---
 
 # DB Schema — tellurion-data
 
 > **所有权声明**：本仓**拥有 `market` 与 `ingest` 两个 schema 的 DDL**，是这两组表的唯一写者。其他仓（core / agent / analytics / strategy）只经 API 读。
+> **唯一例外（裁决 ⑰，2026-11-10 已施工）**：`market.index_daily` 的 DDL 与写权都在 core（`tellurion:pkg/storage/index_daily.go`），本仓**不建表、不登记、不认领**（两套 DDL 形状不同，先建表者定形）。
 > 上级依据：`tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §1 —— **DDL 只有一个 owner**，同一个 PG 实例、每服务一个 schema，将来拆库是"按 schema 搬走"而不是重写。
 > 本文件是本仓表结构的**唯一真相源**：代码里的建表语句与它不一致时，**改代码**；要改表结构，先改本文件（结构级变更还要立 ADR）。
 
@@ -22,7 +23,7 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 | `global_ohlcv` | 日线行情主表（含复权口径） |
 | `ohlcv_minute` | 分钟线 |
 | `ohlcv_daily_qfq` | 前复权日线（派生表） |
-| `market.index_daily` | 指数日线（**已是 `market.` 前缀**） |
+| `market.index_daily` | 指数日线（**已是 `market.` 前缀**；**owner = core，本仓不认领**，见 §7） |
 | `dividends` / `splits` | 分红 / 拆股（公司行为） |
 | `trading_calendar` | 交易日历 |
 | `stocks` | 标的（内外部代码映射） |
@@ -148,7 +149,7 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 |---|---|---|---|
 | **A · 加列**（12 张） | `ohlcv_daily_qfq`、`ohlcv_minute`、`realtime_quote`、`capital_flow`、`sectors`、`stock_sector_map`、`top_list`、`limit_up_pool`、`announcements`、`news`、`hot_search`、`global_ohlcv` | `ADD COLUMN IF NOT EXISTS visible_at TIMESTAMPTZ`（可空，先不 NOT NULL） | 经 connector→`Normalizer`→`BulkInsert` 落库，且表里**没有**语义等价的现成列 |
 | **B · 不加列，承认现成列**（2 张） | `market_activity`（`daily_basic`）、`quant.macro_series`（`macro_series`） | 两表都已有 `as_of` 列，而 `as_of` **就是这两条声明给的可见锚点**（`declarations.go:83` 的 `VisibleField: "as_of"`，2026-10-16 用户裁决 A 的保守代理）⇒ 目标契约里它们的 `visible_at` **等于 `as_of`**，再建一列 = 同表两个锚点，读方各挑一个 | ⚠️ 但这两张表**不走 `BulkInsert`**（写者各是 `tellurion:pkg/data/tushare_daily_basic.go`（Migration 056）与 `pkg/data/macro.go`（Migration 050），两条都不在 `NewTableMapper()` 的 13 个映射值里）⇒ 挂在 `ValidatePoints` 上的门**拦不到它们**。要么把它们纳入 mapper 面，要么给这两条路径各写一次执法点——**不许默认"门已覆盖全部声明源"**，这是本节最大的覆盖面限制 |
-| **C · 明确在门外** | `stock_fundamentals`（见 6.3 单列）、`market.index_daily`、`trading_calendar`、`stocks`、`index_constituents`、`dividends`、`splits`、因子族全部、`ingest.raw`、`sync_jobs`/`sync_schedules`/`data_migrations`、其余 `quant.*` / `research.*` | 本次不加列 | 逐个理由不同：`trading_calendar` 是 `calendar_hash` 的输入不是观测数据流；`index_constituents` 的前视风险在**成分变更时点**，归 resolve 的 `as_of` 语义（对表 D 组）；`market.index_daily` 是**实测漏项**——`NewTableMapper()` 的 13 个映射值里没有它，它由另一条路径写 ⇒ 与 B 集同一个"门拦不到"问题；因子族的值来自计算而非 connector 声明，可见性由 `dataset_snapshot_hash` 承担 |
+| **C · 明确在门外** | `stock_fundamentals`（见 6.3 单列）、`trading_calendar`、`stocks`、`index_constituents`、`dividends`、`splits`、因子族全部、`ingest.raw`、`sync_jobs`/`sync_schedules`/`data_migrations`、其余 `quant.*` / `research.*` | 本次不加列 | 逐个理由不同：`trading_calendar` 是 `calendar_hash` 的输入不是观测数据流；`index_constituents` 的前视风险在**成分变更时点**，归 resolve 的 `as_of` 语义（对表 D 组）；因子族的值来自计算而非 connector 声明，可见性由 `dataset_snapshot_hash` 承担。**`market.index_daily` 已不在本集合（2026-11-10）**：裁决 ⑰ 把 owner 判给 core，本仓连 DDL 与写权都不认领，登记「在门外」等于仍宣称对它有一份可见性口径 ⇒ C 集条目、DDL、`TableNames()` 条目三处同批删除 |
 
 ### 6.3 重算规则（输入 = 15 个在册 `data_type` 的 `TimeSemantics` + `VisibleField`）
 
@@ -211,7 +212,7 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 | `splits` | `tellurion:pkg/storage/cache.go:499`（`SaveSplitBatch`） | **补写者** | 同上 |
 | `trading_calendar` | `tellurion:pkg/storage/calendar.go:21`（`SaveTradingCalendarEntry`）、`:43`（`SaveTradingCalendarBatch`） | **补写者** | 按 §6.2 属 C 集：它是 `calendar_hash` 的输入、不是观测流，**不补 `visible_at`**；补写者不等于加列 |
 | `index_constituents` | `tellurion:pkg/storage/cache.go:383`（`SaveIndexConstituentBatch`） | **补写者** | 前视风险在成分变更时点，归 resolve 的 `as_of`（§6.2 对表 D 组）；本仓补写者按同一语义 |
-| `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。本仓 DDL 只承接建表、**不认领写权**，也不把该表算进「本仓唯一 writer」的自证范围 |
+| `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。**2026-11-10 已施工**：本仓 DDL、`TableNames()` 条目、C 集豁免三处删除，并加守卫 `TestIndexDaily_IsNotOwnedByThisRepo`（本仓 statements 出现该表即红）——从「建表但不认领写权」收紧为「连表都不建」，因为两套 DDL 形状不同、先建表者定形 |
 | `market_activity` | `tellurion:pkg/storage/market_activity.go:35`（`saveMarketActivitySQL`） | **补写者** | B 集：写者是 core 的 `daily_basic` 同步腿（不经 `BulkInsert`）；收编那条腿时由本仓补写者接管 |
 | `ingest.raw` | `tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`） | **补写者** | 本仓的摄取归档入口落地时接管；此前 core 的 `POST /api/ingest/raw` 是过渡写者 |
 | `sync_jobs` | `tellurion:pkg/storage/sync_jobs.go:15`（`CreateSyncJob`）、`:107`（`UpdateSyncJobIfStatus`）、`:173`（`DeleteSyncJob`） | **补写者** | 同步编排状态归本仓；调度收编（worker/executor）时接管 |
@@ -226,7 +227,7 @@ verified-by: QT-40 X1d G4 —— DDL 归属落到本仓 `internal/schema`（stat
 
 1. **出厂值是 `market`**：`tellurion-data:deploy/compose.yaml:32`（`DATA_MARKET_SCHEMA: market`），`cmd/dataservice/main.go:124` 只把它交给 `store.Options.MarketSchema`。
 2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`（`cmd/dataservice/main.go:194-204`），`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store/store.go:76-83` 与 `internal/store/write.go:97-104` 回落为 `public`（注释写明是「D4 物理搬迁完成前的过渡值」，`internal/store/store.go:60-62`）。
-3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只有两张**——core 已显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`），这两张与目标 schema 是同一张表。
+3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只有两张**——core 已显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`，**该表连 DDL 都由 core 持有**，本仓不建，见裁决 ⑰）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`），这两张与目标 schema 是同一张表。
 
 **物理 `SET SCHEMA` 搬迁的前置 = core 停写**（不是「本仓 DDL 先建好」）：
 

@@ -44,7 +44,6 @@ func TableNames() []string {
 		"market.global_ohlcv",
 		"market.hot_search",
 		"market.index_constituents",
-		"market.index_daily",
 		"market.limit_up_pool",
 		"market.market_activity",
 		"market.news",

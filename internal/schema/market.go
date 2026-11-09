@@ -296,24 +296,5 @@ func MarketStatements() []string {
 			UNIQUE (symbol, trade_date, source)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_market_activity_trade_date ON market.market_activity (trade_date)`,
-
-		// 指数日线（实测漏项：不在 core 的 TableMapper 13 个映射里）
-		`CREATE TABLE IF NOT EXISTS market.index_daily (
-			code        VARCHAR(20)  NOT NULL,
-			trade_date  DATE         NOT NULL,
-			open        DOUBLE PRECISION,
-			high        DOUBLE PRECISION,
-			low         DOUBLE PRECISION,
-			close       DOUBLE PRECISION NOT NULL,
-			pre_close   DOUBLE PRECISION,
-			change      DOUBLE PRECISION,
-			pct_chg     DOUBLE PRECISION,
-			volume      DOUBLE PRECISION NOT NULL DEFAULT 0,
-			turnover    DOUBLE PRECISION,
-			source      VARCHAR(32)  NOT NULL,
-			as_of       TIMESTAMPTZ  NOT NULL,
-			PRIMARY KEY (code, trade_date)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_market_index_daily_date ON market.index_daily (trade_date DESC)`,
 	}
 }
