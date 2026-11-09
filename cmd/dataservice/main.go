@@ -192,6 +192,8 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 
 	server := httpapi.New(agg, authorizer,
 		httpapi.WithPoints(points),
+		// G3 只读兼容面：core 旧读链的 7 条路由，读同一批表（只读）。
+		httpapi.WithLegacyReader(st),
 		httpapi.WithReadiness(readinessCheck(pool)),
 		httpapi.WithAvailability(schemaReady.Load),
 	)

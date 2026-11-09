@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 5 条路由与
+// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 12 条路由与
 // servedPolicy 必须双向一一对应。漏登策略 / 表里写了不存在的路由都会红。
 func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	srv := New(nil)
@@ -23,7 +23,20 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 
 	// 逐条点名，不是只数条数：加一条没登记策略的路由要红，删一条路由也要红，
 	// 而「条数刚好对上但内容换了」这种漂移只有清单能拦住。
-	want := []string{"GET /datasets/resolve", "GET /datasets/{hash}", "GET /health", "GET /readyz", "POST /ingest/points"}
+	want := []string{
+		"GET /api/v1/stocks/{symbol}",
+		"GET /api/v1/trading/calendar",
+		"GET /datasets/resolve",
+		"GET /datasets/{hash}",
+		"GET /fundamental/{symbol}",
+		"GET /health",
+		"GET /index/{code}/constituents",
+		"GET /ohlcv/{symbol}",
+		"GET /readyz",
+		"GET /stocks",
+		"POST /api/v1/ohlcv/bulk",
+		"POST /ingest/points",
+	}
 	got := append([]string(nil), routes...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(want, got) {
@@ -57,6 +70,39 @@ func TestServedPolicyWriteRouteRolesAreNarrow(t *testing.T) {
 	assert.False(t, rule.AnyAuthenticated, "写面不许 any-authenticated：viewer 也是 authenticated")
 }
 
+// TestServedPolicyLegacyReadRoutes 钉住 G3 只读兼容面的档位：
+// 6 条 GET 认 service/viewer/trader/admin；`POST /api/v1/ohlcv/bulk` 是只读
+// POST，沿用 REV-17 的 any-authenticated（匿名仍拒）。
+func TestServedPolicyLegacyReadRoutes(t *testing.T) {
+	entries := ServedPolicyEntries()
+	for _, key := range []string{
+		"GET /ohlcv/{symbol}",
+		"GET /fundamental/{symbol}",
+		"GET /stocks",
+		"GET /index/{code}/constituents",
+		"GET /api/v1/trading/calendar",
+		"GET /api/v1/stocks/{symbol}",
+	} {
+		rule, ok := entries[key]
+		require.True(t, ok, "G3 读端点必须有策略条目: %s", key)
+		for _, role := range []string{"service", "viewer", "trader", "admin"} {
+			assert.True(t, allowedByRule(rule, role), "%s must admit role %q", key, role)
+		}
+		assert.False(t, rule.Public, "%s 不公开", key)
+	}
+
+	bulk, ok := entries["POST /api/v1/ohlcv/bulk"]
+	require.True(t, ok, "bulk 落地后必须有 servedPolicy 条目")
+	assert.True(t, bulk.AnyAuthenticated, "bulk 是只读 POST：保持 any-authenticated")
+	assert.False(t, bulk.Public, "bulk 不公开")
+	assert.True(t, allowedByRule(bulk, "viewer"), "bulk 允许 viewer（REV-17 口径）")
+	assert.False(t, allowedByRule(bulk, ""), "bulk 拒绝匿名")
+
+	// 落地后不得再与 legacy 表重叠（反之 legacy 守卫也会红）。
+	_, stillLegacy := LegacyREV17Entries()["POST /api/v1/ohlcv/bulk"]
+	assert.False(t, stillLegacy, "bulk 已落地，必须从 legacyREV17 移出")
+}
+
 // TestLegacyREV17PolicyIsVerbatim 钉住「逐条移植」：条目与档位必须与旧
 // `cmd/data/route_policy.go`（REV-17）一致。端点迁进本仓时按这张表挂闸，
 // 不再重新拍一次角色。
@@ -68,8 +114,7 @@ func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 		"DELETE /api/sync/schedules/:id":      "admin",
 		"POST /api/sync/schedules/:id/toggle": "admin",
 		// ReadOnlyPOST
-		"POST /screen":            "any",
-		"POST /api/v1/ohlcv/bulk": "any",
+		"POST /screen": "any",
 		// Trader
 		"POST /api/ingest/raw":                           "trader",
 		"POST /api/ingest/equitydeep":                    "trader",
@@ -147,7 +192,6 @@ func TestLegacyREV17DecisionsMatchOldService(t *testing.T) {
 		{"排程新增 admin", "POST /api/sync/schedules", "admin", true},
 		{"排程删除 admin", "DELETE /api/sync/schedules/:id", "admin", true},
 		{"选股 viewer（只读 POST）", "POST /screen", "viewer", true},
-		{"批量行情 viewer（只读 POST）", "POST /api/v1/ohlcv/bulk", "viewer", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

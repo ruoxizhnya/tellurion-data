@@ -85,7 +85,7 @@ contracts（协议类型） + kit（logging/http/db）
 ## 5.1 鉴权（2026-10-25）
 
 - 机制：kit `v0.1.4` 的 `auth/httpadapter`（Bearer → `Parse` → `kind=access` → 角色 any-of + 启动闸）；本仓只写策略表（`internal/httpapi/policy.go`）。`v0.1.4`（kit `KT-11`）起，`role=service` 的 token 不再要求 subject 可解析为 `int64`——这是 `sub=service:core` 能真走到本仓策略表的前置。
-- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）逐条移植为 `legacyREV17`，等端点迁入时直接挂闸。
+- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）已逐条移植为 `legacyREV17`，等端点迁入时直接挂闸；**G3（2026-11-10）已把 `POST /api/v1/ohlcv/bulk` 落地并移入 `servedPolicy`，`legacyREV17` 余 27 条**。
 - 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。无 secret + 回环 = 开放；无 secret + 非回环 = **拒绝启动**。
 - 裁决落 [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)。
 
@@ -121,3 +121,4 @@ contracts（协议类型） + kit（logging/http/db）
 - **X1c 🔶 connector 已搬入，传输留在 core**：`internal/ingest` 有 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 **12 connector 的取数/归一化实现**；声明真源 = 每个 connector 的 `Declarations()`，过渡期 `Catalog()` 双真相**已删除**。**未落**：传输实现（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端）仍在 core，经 `ingest.Transports` 注入；core 侧的旧 `pkg/data/source` 尚未删（跨仓切换）。
 - **X1d 🔶 DDL 归属 + 写面已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿；`store.BulkInsert` 走 `schema.GateClassFor` 三集合门（B/C 集拒写，缺 `visible_at` 整批拒收），见 `db-schema.md` §6。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、生产库 `visible_at` 回填（D2 只在测试库经 tagged 套件执行，见 `docs/TASKS.md`）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
 - **X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。
+- **G3 只读兼容面 🔶（2026-11-10）**：core `pkg/marketdata/http_provider.go` 的 7 条旧读路由由本仓补齐（`internal/serving/legacy.go` 端口 → `internal/store/reference.go` 实现 → `internal/httpapi/legacy_read.go` handler），core 零改；只读、不参与快照哈希。**推翻 K1 字面口径（本仓不补齐旧读面），待主任追认**。切读/停写与 core 旧实现退役仍未完成（见 `docs/TASKS.md` SVC-DATA-G3 的「未执行」）。

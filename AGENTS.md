@@ -6,7 +6,7 @@
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
-**状态**：X1 施工中（2026-10-25，QT-40 H4 ②）——`internal/ingest`（注册门 + 12 connector 声明 + ETL 编排与 `GatePoints` 闸门）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）、`internal/store`（四个取数 port + 写面 `BulkInsert`）、`internal/schema`（`market` / `ingest` 的 DDL 归属 + `visible_at` 三集合）、`internal/assembly`（投影与写侧链的唯一装配层，ADR-0006）已落地；HTTP 面 **5 条路由**（`/health` + **`/readyz`** + `/datasets/resolve` + `/datasets/{hash}` + **`POST /ingest/points`**），其中两条探针公开、其余过鉴权闸；**12 connector 的传输实现与同步作业调度（`sync_jobs` → worker → executor）仍在 core**。
+**状态**：X1 施工中（2026-10-25，QT-40 H4 ②）——`internal/ingest`（注册门 + 12 connector 声明 + ETL 编排与 `GatePoints` 闸门）、`internal/normalize`（频率聚合 + PIT 闸门）、`internal/serving`（aggregator + 快照缓存）、`internal/store`（四个取数 port + 写面 `BulkInsert`）、`internal/schema`（`market` / `ingest` 的 DDL 归属 + `visible_at` 三集合）、`internal/assembly`（投影与写侧链的唯一装配层，ADR-0006）已落地；HTTP 面 **12 条路由**（`/health` + **`/readyz`** + `/datasets/resolve` + `/datasets/{hash}` + **`POST /ingest/points`** + **7 条 G3 只读兼容端点**，见下条），其中两条探针公开、其余过鉴权闸；**12 connector 的传输实现与同步作业调度（`sync_jobs` → worker → executor）仍在 core**。
 
 **服务就绪门 G1（2026-11-07）**：`/readyz` = PG 池可连 + 本仓 DDL 已执行（`to_regclass('market.ohlcv_daily_qfq')`），三态见 `docs/api-schema.md` §1.1；业务端点按身份令牌桶限流（50 rps / 突发 200），429 与 401 可区分、探针豁免。**真实 PG 断开/恢复腿未执行**（本机 Docker 引擎未起），`docs/TASKS.md` 的 SVC-DATA-G1 记 🔶。
 
@@ -14,7 +14,9 @@
 
 **服务就绪门 G4（2026-11-07）**：失败语义四类（PG 不可达 → **503 `dependency_unavailable`**、配额耗尽/connector 超时 → 无 HTTP 面、内容冲突 → 409 `content_conflict`）、超时与「本仓不重试、作业侧重试」的边界成文，见 `docs/api-schema.md` §2.1/§3.1；降级启动（`store.Open` 不拨号 + DDL 失败后台 10s 重试 + `WithAvailability` 门）让拔 PG 时端点 503、不 panic、同进程自愈；观测面是单行访问日志 `route/status/dur_ms`，**不接 Prometheus**；起停、聚合、迁移/回填、503 与投递失败排查、演练记录见 `docs/runbook.md`。**真 PG 恢复自愈、真库重放/回填/409 未执行**（本机无 PG、Docker 引擎不可用），`docs/TASKS.md` 的 SVC-DATA-G4 记 🔶。
 
-**今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 5 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
+**G3 只读兼容面（2026-11-10，SVC-DATA-G3）**：core 的 `pkg/marketdata/http_provider.go` 仍按旧 cmd/data 的 7 条路由取数，旧服务已退役 ⇒ 本仓补上 **7 条只读兼容端点**（`/ohlcv/{symbol}`、`/fundamental/{symbol}`、`/stocks`、`/index/{code}/constituents`、`/api/v1/trading/calendar`、`/api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`），core 零改。它们是**逐表兼容形状**，不带 `as_of` / `dataset_hash` 语义，不参与快照哈希；端口 `serving.LegacyReader`、实现 `internal/store/reference.go`、handler `internal/httpapi/legacy_read.go`。**这推翻了 K1 的字面口径（本仓不补齐旧读面），待主任追认**。已知限制：`stock_fundamentals` 的 DDL 仍是 core 迁移（本仓只读），`DATA_MARKET_SCHEMA=market` 且该表未建时 `/fundamental` 会 500。**真库端到端未执行**（本机无 PG），`docs/TASKS.md` 的 SVC-DATA-G3 记 🔶。
+
+**今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator 与写面 `assembly.Writer`；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 12 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`legacy_read.go` = G3 只读兼容面，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）；`core:cmd/data`（同步 / 调度 / handlers）+ `core:pkg/data`（connector 传输 / ETL / 因子）+ `core:pkg/marketdata`（取数抽象）仍在 core。`capital_flow` / `top_list` 两条作业的**落库那一跳已改投本仓**，取数与归一仍在 core；其余同步腿仍由 core 直写（多数用裸表名 → `public.*`；`market.index_daily` 是带前缀的**独立写路径**，`core:pkg/storage/index_daily.go:31`），点数以 grep 为准（`docs/db-schema.md` §1.5 的实测口径）。本仓是把这三块搬成服务。
 
 ## 2. 构建 / 测试（必须单仓可跑）
 

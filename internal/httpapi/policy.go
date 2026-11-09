@@ -23,6 +23,19 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /datasets/resolve": {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /datasets/{hash}":  {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"POST /ingest/points":   {Roles: []string{"service", "admin"}},
+
+	// ── G3 只读兼容面（2026-11-10，`legacy_read.go`）──
+	// core 旧读链的 7 条路由。读档位与 `/datasets/*` 一致；
+	// `POST /api/v1/ohlcv/bulk` 是**只读 POST**（请求体只承载查询参数，不写库），
+	// 沿 REV-17 的 any-authenticated 档——它此前就在 `legacyREV17` 里，落地后
+	// 必须移出（守卫测试禁止同一路由同时出现在两张表）。
+	"GET /ohlcv/{symbol}":            {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /fundamental/{symbol}":      {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /stocks":                    {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /index/{code}/constituents": {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/v1/trading/calendar":   {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/v1/stocks/{symbol}":    {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"POST /api/v1/ohlcv/bulk":        {AnyAuthenticated: true},
 })
 
 // legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
@@ -40,8 +53,8 @@ var legacyREV17 = map[string]kithttp.Rule{
 	"POST /api/sync/schedules/:id/toggle": {Roles: []string{"admin"}},
 
 	// ── ReadOnlyPOST：POST 承载查询 DSL，不写库 ──
-	"POST /screen":            {AnyAuthenticated: true},
-	"POST /api/v1/ohlcv/bulk": {AnyAuthenticated: true},
+	// `POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地本仓，移入 servedPolicy。
+	"POST /screen": {AnyAuthenticated: true},
 
 	// ── Trader：其余全部变更端点 ──
 	"POST /api/ingest/raw":                           {Roles: []string{"trader", "admin"}},

@@ -40,7 +40,7 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 > - **验收（真实输出，2026-11-07）**：`docker compose -f deploy/compose.yaml config -q` → **EXIT=0**；`go build ./...` → **EXIT=0**；`go.mod` 无 `replace`（0 行）、无 `go.work`；真实二进制 + 真库（便携 PG 16.2 `127.0.0.1:55432`、库 `tellurion_data_test`、`DATA_MARKET_SCHEMA=market`，监听 `127.0.0.1:18092`）→ `GET /health` `200 {"status":"ok"}`、`GET /readyz` `200 {"status":"ready","store":"postgres"}`。
 > - **未执行（如实）**：`docker compose up --build`（本机 Docker 引擎未起，`docker version` 客户端 27.4.1-rd / daemon 不可达）；容器内跑通属容器腿，不影响本单 ⑤ 的三条书面判据。
 
-### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ⬜
+### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] 🔶
 
 - **① 目标**：`market.*` / `ingest.*` 的唯一 writer 变成本仓；core 不再写行情/同步表，旧 `pkg/data` / `cmd/data` 删除。
 - **② 上下文**：`X1d`（QT-40）已规划「消灭第二写者」，但今天 core 仍持约 20 张裸表与生产写入；本仓 `POST /ingest/points` 只覆盖 `capital_flow` / `top_list` 两条作业。
@@ -48,6 +48,15 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 - **④ 约束与非目标**：不在 core 写者未停前做物理 `SET SCHEMA`；不搬 `quant.*` 运行态表；不接逐 bar / 逐笔。
 - **⑤ 验收**：core 侧 `market.*` / `ingest.*` 写点 = 0；`X1d` 关闭；core `cmd/data` 删除或只剩只读代理；新旧行数/校验和对拍报告归档。
 - **⑥ 边界**：本仓只负责自己的 schema 与 API；core 代码删除由 `SVC-CORE-DATA-RETIRE` 跟踪。
+
+> **施工记录（2026-11-10，G3 读面补齐；`gofmt -l .` 空、`go build/vet/test ./...` 全 0）**
+>
+> - **裁决（推翻 K1 字面；待主任追认）**：第三轮 K1（2026-11-08 补裁 #11）的口径是「本仓以已登记路由为唯一数据服务面，core 的旧读面由 core 侧逐条反代或删除、本仓不补齐」。实测 core `pkg/marketdata/http_provider.go` 仍按旧 cmd/data 的 **7 条路由**取数（`/ohlcv/{symbol}`、`/fundamental/{symbol}`、`/stocks`、`/index/{code}/constituents`、`/api/v1/trading/calendar`、`/api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`），而旧服务已随数据面退役删除 ⇒ 产品读链实际 404。用户裁决（2026-11-10）：**由本仓补齐这 7 条只读兼容端点，core 零改**。这推翻 K1 的字面口径（不是推翻其目标：本仓仍不提供逐 bar 远程取数、不新开供给面），理由 = 产品读链优先 + 这组形状是逐表兼容。**待主任追认**；不追认则应回到「core 侧删/反代」并撤掉本笔 7 条路由。
+> - **落地**：`internal/serving/legacy.go`（`LegacyReader` 端口 = `BarSource` + `TradingCalendar` + `Stocks` / `Stock` / `Fundamental` / `IndexConstituents`）；`internal/store/reference.go`（四条只读 SQL，点名列、无 `SELECT *`）；`internal/httpapi/legacy_read.go`（7 个 handler + `WithLegacyReader`；参数分诊 400、无记录 404 `not_found`、未接线 503 `dependency_unavailable`、bulk 逐票错误不进整体失败）；`server.go` 路由表、`policy.go` `servedPolicy`（`POST /api/v1/ohlcv/bulk` 从 `legacyREV17` **移出**）、`cmd/dataservice/main.go` 接线；`legacy_read_test.go` 覆盖 7 条成功形状 + 2 条 404 + 5 类 400 + 未接线 503。
+> - **形状对拍（逐条实测 core 消费面）**：`{ohlcv:[...]}` / `{fundamental:{...}}` / `{stocks:[...]}` / `{constituents:[{symbol,...}]}` / `{trading_days:["YYYY-MM-DD"]}` / `{stock:{...}}`（404 ⇒ core 合成 `Stock{Symbol}`）/ `{results:[{symbol,ohlcv,error?}]}`；日期格式 `20060102`（读）/ `2006-01-02`（日历）。
+> - **PIT 口径**：`/fundamental` 取 `COALESCE(available_date, trade_date) <= asOf` 的最新一期（与 core `pkg/storage` 一致）；`/index/{code}/constituents` 用半开区间 `[in_date, out_date)`；`stocks` 的 `delist_date` 用 `to_jsonb` 探针（本仓 `market.stocks` 无该列、旧 `public.stocks` 有）。
+> - **已知限制（不静默降级）**：`stock_fundamentals` 的 DDL 仍是 core 的迁移（本仓只读）。`DATA_MARKET_SCHEMA=market` 且该表未建时 `/fundamental/{symbol}` 会 500；收编属 K3，不在本笔。
+> - **未执行（如实）**：真库端到端起服务实测未跑（本机无 PG、Docker 引擎不可用）；X1d 物理 `SET SCHEMA`、`visible_at` 生产回填、新旧行数/校验和对拍报告、core 写点归零取证均未做 ⇒ 本单保持 🔶，⑤ 的「core 写点 = 0 / `cmd/data` 删除」仍未满足。
 
 ### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶
 

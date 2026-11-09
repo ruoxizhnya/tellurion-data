@@ -28,6 +28,13 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 | GET | `/datasets/resolve?universe=&index_code=&from=&to=&freq=&adjustment=&as_of=` | 解析票池 + 窗口 + 频率 + 复权口径 + 可见时点 ⇒ `{dataset_hash, metadata}`（`metadata` 回显六分量） |
 | GET | `/datasets/{hash}` | 按 hash 取数据（同一 hash 两次结果必须**字节一致**） |
 | POST | `/ingest/points` | **写面**：投送一批**已归一**的点位（`{data_type, points[]}`）⇒ 闸门 + 去重 + A 集门 + 内容比对落库；返回 `{data_type, received, persisted, skipped}` |
+| GET | `/ohlcv/{symbol}?start_date=YYYYMMDD&end_date=YYYYMMDD` | **G3 只读兼容**（core 旧读链）：日线 ⇒ `{ohlcv:[OHLCV]}` |
+| GET | `/fundamental/{symbol}?date=YYYYMMDD` | **G3 只读兼容**：`date` 当日已可用的最新一期财报 ⇒ `{fundamental: Fundamental}`；无记录 404 `not_found` |
+| GET | `/stocks[?exchange=]` | **G3 只读兼容**：股票列表 ⇒ `{stocks:[Stock]}` |
+| GET | `/index/{code}/constituents[?date=YYYYMMDD]` | **G3 只读兼容**：当日生效成分（缺省 = 今天）⇒ `{constituents:[IndexConstituent]}` |
+| GET | `/api/v1/trading/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` | **G3 只读兼容**：交易日轴 ⇒ `{trading_days:["YYYY-MM-DD"]}` |
+| GET | `/api/v1/stocks/{symbol}` | **G3 只读兼容**：单只股票 ⇒ `{stock: Stock}`；无该票 404 `not_found` |
+| POST | `/api/v1/ohlcv/bulk` | **G3 只读兼容**（只读 POST，请求体只承载查询参数）：批量日线 ⇒ `{results:[{symbol,ohlcv,error?}]}`；逐票错误不整体失败 |
 
 内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。`POST /ingest/points` 走的是**同一条链的后半段**（从 `ValidatePoints` 起），投影与次序在 `internal/assembly`——两条入口共享一条链，不是两份实现（ADR-0006）。
 
@@ -42,13 +49,14 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 > - `/datasets/resolve`、`/datasets/{hash}`：已实现（`internal/httpapi` + `internal/serving`）。
 > - `/factors/{name}@{hash}`：**已撤掉**（裁-14，2026-10-25）。路由表里不存在它 ⇒ ServeMux 默认 404；不再有 `factor_not_found` 文案。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**。上移触发条件（任一成立再启动整体迁移）：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
 > - `POST /ingest/points`：已实现（H4 ②，2026-10-25）。**调用方今天只有 core 的两条作业**（`capital_flow` / `top_list`，见 ADR-0006）；同步作业层本身**尚未迁入本仓**（仍在 core `cmd/data`，传输也在 core），所以这条端点是「别人取数、本仓落库」的接缝，不是本仓自己跑同步作业的能力。
+> - **G3 只读兼容面（2026-11-10）**：上述 7 条已实现（`internal/httpapi/legacy_read.go` + `serving.LegacyReader` + `internal/store/reference.go`）。它们只按表读、按 core 旧字段名编码，**不带 `as_of`/`dataset_hash` 语义**，也不参与快照哈希——任何新调用方都该用 `/datasets/*`。**这组端点是主任裁决对 K1（2026-11-08 补裁 #11「本仓不补齐 core 的 5 条旧读面」）字面口径的推翻**，追认状态见 `docs/TASKS.md` SVC-DATA-G3 施工记录。**已知限制**：`stock_fundamentals` 的 DDL 仍是 core 的迁移（本仓只读），在 `DATA_MARKET_SCHEMA=market` 且该表未建时 `/fundamental/{symbol}` 会 500（K3 收编前不静默降级）。
 
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
 > **鉴权策略表（2026-10-25，裁-15 + H4 ②）**：
-> - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。
-> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓，**但对应端点尚未迁入**（仍在 core）。保留这张表是为了端点迁移时「同一路由、同一角色」不再重新拍板；守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论。
-> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 5 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）。
+> - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。**G3（2026-11-10）**：6 条只读兼容 GET = `service` + viewer / trader / admin；`POST /api/v1/ohlcv/bulk` = any-authenticated（只读 POST，沿用 REV-17 口径，匿名仍拒）。
+> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`，`legacyREV17` 余 27 条**，其余端点仍由 core 提供（`cmd/data`）。保留这张表是为了端点迁移时「同一路由、同一角色」不再重新拍板；守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表。
+> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 12 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 七条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）。
 > - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点的调用方凭证**由 core 侧 env 注入（`INGEST_WRITE_*`），不在本仓签发。
 
 ### 1.1 服务探针与请求治理（G1，2026-11-07）—— ✅ 代码已落，真实 PG 腿当晚已跑

@@ -37,6 +37,7 @@ const maxIngestBodyBytes = 8 << 20
 type Server struct {
 	agg        *serving.Aggregator
 	points     *assembly.Writer
+	legacy     serving.LegacyReader
 	authorizer Authorizer
 	readiness  func(context.Context) error
 	available  func() bool
@@ -122,6 +123,17 @@ func (s *Server) routes() []routeSpec {
 		// 写面唯一的一条：已归一的点位投进来，闸门 + 幂等 + A 集门都在
 		// `internal/assembly` / `internal/store` 那一侧。
 		{"POST /ingest/points", s.handleIngestPoints},
+
+		// ── G3 只读兼容面（`legacy_read.go`）──
+		// core 的 `pkg/marketdata/http_provider.go` 仍打这 7 条旧路由；旧 cmd/data
+		// 已退役，不在本服务补上就整条读链 404。只读、不参与快照哈希。
+		{"GET /ohlcv/{symbol}", s.handleLegacyOHLCV},
+		{"GET /fundamental/{symbol}", s.handleLegacyFundamental},
+		{"GET /stocks", s.handleLegacyStocks},
+		{"GET /index/{code}/constituents", s.handleLegacyConstituents},
+		{"GET /api/v1/trading/calendar", s.handleLegacyCalendar},
+		{"GET /api/v1/stocks/{symbol}", s.handleLegacyStock},
+		{"POST /api/v1/ohlcv/bulk", s.handleLegacyBulk},
 	}
 }
 
