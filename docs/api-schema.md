@@ -9,6 +9,8 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 > **实现状态（2026-10-25 更新，QT-40 H4 ②）**：读面 `GET /datasets/resolve` 与 `GET /datasets/{hash}` 已落地；**写面第一条 `POST /ingest/points` 同日落地**（`internal/httpapi/server.go` handler + `internal/assembly` 装配层 + `cmd/dataservice` 接线）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（默认 `market`；物理搬迁完成前设空串走 `public`）；DSN 为空 ⇒ 读面与写面都 fail-closed 503（`/health` 常绿）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 >
 > ⚠️ **写端点已于 2026-11-07 晚在真 PG 上跑过**（便携 PostgreSQL 16.2 @ 55432，`DATA_MARKET_SCHEMA=market`）：同内容两次 `200 {"received":1,"persisted":1,"skipped":0}`；同主键改内容 → `409 content_conflict`；空库/停库时 `503 dependency_unavailable`。此前只有替身 Exec 的测试腿；真库门禁现在由 `internal/store` 的 `DATABASE_URL`-gated PG 套件 + 这次真二进制演练共同覆盖。
+>
+> ✅ **G3 只读兼容面已于 2026-11-10 在真 PG 上端到端跑通**（PostgreSQL 16.15 @ 5432，测试库 `tellurion_data_test`，空 `JWT_SECRET` 回环开放）：7 条端点全部返回预期形状（含 `/stocks/{symbol}` 404、bulk 未知票 `ohlcv: []` 不影响整体 200）；`/fundamental` 的 PIT 正确排除未来期；`stocks` 的 HTTP 回执与同库直读 SQL **md5 完全一致 `40f25781e835b1ff1e2d0e8d6a729fe5`**（2 行），`ohlcv` 行数/`sum(close)=21.2`/`sum(volume)=3469134` 双侧一致。证据与命令见 `docs/TASKS.md` `SVC-DATA-G3` 施工记录。
 
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一读入口**，connector 与存储不直接对外；写面只有投点这一条，且**只接受有界批次**。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。

@@ -56,7 +56,26 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 > - **形状对拍（逐条实测 core 消费面）**：`{ohlcv:[...]}` / `{fundamental:{...}}` / `{stocks:[...]}` / `{constituents:[{symbol,...}]}` / `{trading_days:["YYYY-MM-DD"]}` / `{stock:{...}}`（404 ⇒ core 合成 `Stock{Symbol}`）/ `{results:[{symbol,ohlcv,error?}]}`；日期格式 `20060102`（读）/ `2006-01-02`（日历）。
 > - **PIT 口径**：`/fundamental` 取 `COALESCE(available_date, trade_date) <= asOf` 的最新一期（与 core `pkg/storage` 一致）；`/index/{code}/constituents` 用半开区间 `[in_date, out_date)`；`stocks` 的 `delist_date` 用 `to_jsonb` 探针（本仓 `market.stocks` 无该列、旧 `public.stocks` 有）。
 > - **已知限制（不静默降级）**：`stock_fundamentals` 的 DDL 仍是 core 的迁移（本仓只读）。`DATA_MARKET_SCHEMA=market` 且该表未建时 `/fundamental/{symbol}` 会 500；收编属 K3，不在本笔。
-> - **未执行（如实）**：真库端到端起服务实测未跑（本机无 PG、Docker 引擎不可用）；X1d 物理 `SET SCHEMA`、`visible_at` 生产回填、新旧行数/校验和对拍报告、core 写点归零取证均未做 ⇒ 本单保持 🔶，⑤ 的「core 写点 = 0 / `cmd/data` 删除」仍未满足。
+> - **未执行（如实，2026-11-10 复查已部分补齐：真库端到端、行数/校验对拍、core 写点归零均已完成，见下方施工记录；X1d 两项运维动作仍未做）**：真库端到端起服务实测未跑（本机无 PG、Docker 引擎不可用）；X1d 物理 `SET SCHEMA`、`visible_at` 生产回填、新旧行数/校验和对拍报告、core 写点归零取证均未做 ⇒ 本单保持 🔶，⑤ 的「core 写点 = 0 / `cmd/data` 删除」仍未满足。
+
+**施工记录（2026-11-10，G3 真库端到端 + 对拍取证；本仓代码零改动）**
+
+> 环境：本机 PostgreSQL 16.15（Windows 服务运行中，`127.0.0.1:5432`），与 2026-11-07 记录的「本机无 PG」口径不同——本轮实测可用。
+>
+> - **① 端到端起服务**：新建测试库 `tellurion_data_test`（后缀 `_test`）；`go build -o %TEMP%\dataservice_e2e.exe ./cmd/dataservice` 退出码 0；以 `DATABASE_URL=...tellurion_data_test?sslmode=disable`、`DATA_MARKET_SCHEMA=market`、空 `JWT_SECRET`（回环开放访问）启动，`/readyz` 首轮 200，启动日志「data ports wired to PG; write面 wired to PG, auth=false」，DDL 自动建出 `market`/`ingest` 全部表。
+> - **② 播种**：`market.stocks` 2 行、`market.ohlcv_daily_qfq` 3 行、`market.trading_calendar` 7 行（含 11-07/11-08 两个非交易日）、`market.index_constituents` 2 行、`market.stock_fundamentals` 2 行（一期 `available_date=2026-10-30`、一期未来 `2026-12-25` 用于验 PIT）。`stock_fundamentals` 按已知限制**手工建表**（本仓 DDL 不建该表）。
+> - **③ 7 条端点真库回执（全部 200 / 404 符合预期）**：
+>   - `GET /ohlcv/000001.SZ?start_date=20261103&end_date=20261104` → 2 根，close 10.5 / 10.7；
+>   - `GET /fundamental/000001.SZ?date=20261110` → `pe=10.5`、`date=2026-10-30`（未来期 `2026-12-25` 被 PIT 正确排除）；
+>   - `GET /stocks` → 2 只；`GET /stocks?exchange=SZSE` → 1 只；
+>   - `GET /index/000300.SH/constituents?date=20261110` → 2 条（半开区间内）；
+>   - `GET /api/v1/trading/calendar?start=2026-11-02&end=2026-11-08` → 5 个交易日（周末两条被过滤）；
+>   - `GET /api/v1/stocks/000001.SZ` → 200 单只；`GET /api/v1/stocks/999999.SZ` → 404；
+>   - `POST /api/v1/ohlcv/bulk`（3 票，含 999999.SZ）→ 200，前两票带数据、未知票 `ohlcv: []`，整体不失败。
+> - **④ 新旧行数/校验对拍**（旧路径已删，等价取证 = HTTP 回执 vs 同库直读 SQL）：`stocks` 行数 2=2，**md5 完全一致 `40f25781e835b1ff1e2d0e8d6a729fe5`**（`symbol|name|exchange|industry|status` 排序后拼接）；`ohlcv` 行数 2=2、`sum(close)=21.2`、`sum(volume)=3469134` 双侧一致；`constituents` 2=2；`calendar` 5=5；`fundamental` PIT 取值 `pe=10.5 / available=2026-10-30` 与 SQL 一致。
+> - **⑤ core 写点归零取证（core 仓 `git grep`，非测试）**：`(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)\s+(market|ingest)\.` 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**裁决 ⑰ 保留 core owner**）⇒ 其余 `market.*` / `ingest.*` 写点 = 0；`FROM (market|ingest)\.` 唯一命中同文件 `index_daily.go:134`；`cmd/data` 与 `pkg/data` 目录均不存在；裸表写助手 `TableFor` 零命中。core 侧退役单 `SVC-CORE-DATA-RETIRE` 已 ✅，与本取证一致。
+> - **⑥ 仍未做（不翻 ✅）**：X1d 的物理 `SET SCHEMA`（生产迁移）与 `visible_at` 生产回填（运维动作）——两者都不是 agent 可自行执行的生产写；X1d 行仍 🔶，故本单保持 🔶。
+> - **⑦ 收尾**：测试库 `tellurion_data_test` 用完即删，进程已停；本仓代码与门禁零改动。
 
 ### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶
 
