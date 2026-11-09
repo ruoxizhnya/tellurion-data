@@ -26,7 +26,7 @@ verified-by: SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432�
 > - **新增守卫**：`TestIndexDaily_IsNotOwnedByThisRepo`——扫 `TableNames()` 与本仓 `Statements()`，出现 `market.index_daily` 即红（理由写进用例注释：两套 DDL 形状不同、`IF NOT EXISTS` 会让先建表者定形）；正向对照断言 `market.ohlcv_daily_qfq` 仍在，防「什么都没扫到」的假绿。**破坏验证实做**：临时把该表一行 `CREATE TABLE IF NOT EXISTS market.index_daily (...)` 加回 `market.go` ⇒ 用例红；逐字节还原后复绿（SHA256 见提交记录）。
 > - **文档**：`docs/db-schema.md` §所有权声明加「唯一例外」、§1.1 认领行改「owner = core，本仓不认领」、§6.2 C 集移除该表并写明理由、§7 处置行收紧为「连表都不建」、§8 例外补「DDL 由 core 持有」。
 > - **门禁（真实退出码）**：`gofmt -l` 四个改动文件输出为空（exit 0）、`go build ./...` = 0、`go vet ./...` = 0、`go test ./... -count=1` = 0（9 个包 `ok`）；真 PG 重放腿（`DATA_TEST_DSN=postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable`）`TestSchemaReplay_TwoRunsLeaveShapeUnchanged` **PASS (0.30s)** —— 删表后两次重放的行数 / 列集指纹 / `pg_indexes` 指纹仍逐位不变；`TableNames()` 实测 **22** 条（数正则匹配，market 18 + ingest 4）。破坏验证的还原 SHA256 = `98A51BF6289400098AA18ED4D3E811F42CE4B9747F44AFEA98FEA51ED3225C38`（破坏前 = 还原后）。
-> - **未做（如实）**：生产库无动作——本笔只改 DDL 集合，不 `DROP` 已存在的 `market.index_daily`（口径见 §8：物理搬迁前置是 core 停写，且该表归 core）。
+> - **未做（如实）**：生产库无动作——本笔只改 DDL 集合，不 `DROP` 已存在的 `market.index_daily`（口径见 §8：物理搬迁前置是 core 停写，且该表归 core）。也**不新增** `/market/index` 读路由：K1 补裁（2026-11-08）已定本仓不补齐 core 旧读面；core 侧该读链今天反代到本仓会 404，已作为退役遗留登记在 `tellurion:docs/TASKS.md` 的 `SVC-CORE-DATA-RETIRE` 段（2026-11-10）。
 
 ---
 
