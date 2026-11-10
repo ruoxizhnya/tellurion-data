@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ruoxizhnya/tellurion-contracts/domain"
+	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
 )
 
 // TushareAdapter wraps the existing pkg/data.TushareClient so it satisfies
@@ -184,9 +184,9 @@ func (a *TushareAdapter) fetchFundamentals(ctx context.Context, req FetchRequest
 	}, nil
 }
 
-// fundamentalToMap is a small helper that flattens a domain.Fundamental
+// fundamentalToMap is a small helper that flattens a market.Fundamental
 // into the Data map shape used by storage.BulkInsert.
-func fundamentalToMap(f domain.Fundamental) map[string]interface{} {
+func fundamentalToMap(f market.Fundamental) map[string]interface{} {
 	return map[string]interface{}{
 		"ts_code":        f.Symbol,
 		"pe":             f.PE,
@@ -202,7 +202,7 @@ func fundamentalToMap(f domain.Fundamental) map[string]interface{} {
 		"total_assets":   f.TotalAssets,
 		"total_liab":     f.TotalLiab,
 		// ann_date：披露日（可见时间锚点）在 wire 上的投影（D2-R1）。
-		// 直接透传 domain.Fundamental.AnnDate 的指针——同本 map 里 PE/PB 等
+		// 直接透传 market.Fundamental.AnnDate 的指针——同本 map 里 PE/PB 等
 		// 可空字段的口径：nil = 上游未披露 → **留空为 nil**，绝不用零值时间
 		// 或 0 顶上（缺失≠0）；锚点语义以规范层为准，本键是它的可选载体。
 		"ann_date": f.AnnDate,

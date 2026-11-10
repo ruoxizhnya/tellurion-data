@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-11
-verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，源码零 `contracts/market` 引用（全走 `domain/market`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
+verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -81,7 +81,7 @@ verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `
 |---|---|
 | core 侧旧数据面退役（`pkg/data` / `cmd/data` 删除） | `tellurion:docs/TASKS.md` |
 | X1d 生产物理搬迁 + `visible_at` 回填（运维动作） | `tellurion:docs/TASKS.md` → `OPS-X1D-PROD-MIGRATION` |
-| 6 个 `market` 别名（零写者表引用的形状） | `tellurion-contracts:docs/TASKS.md` → `CT-06-ALIAS-EXIT`。**本仓已迁完**（2026-11-11：源码零 `contracts/market` 引用，全部走 `domain/market`；pin `v0.6.0 → v0.9.0`，`build/vet/test` 全绿）⇒ contracts 侧可删别名 |
+| 6 个 `market` 别名（零写者表引用的形状） | `tellurion-contracts:docs/TASKS.md` → `CT-06-ALIAS-EXIT`。**本仓已零引用**（2026-11-11：根别名 `Fundamental` → `market.Fundamental`，其余 5 个别名 0 命中；根 `domain` 仅剩非别名类型 `MacroSeries` / `MarketActivity`；pin `v0.9.0`，`build/vet/test` 全绿）⇒ contracts 侧可删别名 |
 
 ## 维护本文件
 
