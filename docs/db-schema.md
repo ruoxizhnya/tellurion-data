@@ -72,7 +72,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
 | `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
-| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留待 X1d 迁移 |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 本地实例执行，见 `docs/archive/x1d-local-replay-2026-11-10.md`） |
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
@@ -287,5 +287,5 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 - **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
 - **但「唯一 writer」≠「已有 writer」**：7 张表今天零写者（`stocks` / `dividends` / `splits` / `trading_calendar` / `index_constituents` / `market_activity` / `ingest.raw`），`ingest.raw` 的归档面也未搬。这些在 QT-40 / K3 登记为后续单，**不写成本笔已完成**。
 - **读方覆盖**：5 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `sync_jobs` / `sync_schedules`）；其余 15 张中 10 张 A 集只写不读、4 张零写零读、1 张回填哨兵。
-- **X1d 物理 `SET SCHEMA` + `visible_at` 回填仍待运维**（§8 的顺序未变），G3 ⑤ 的最后一条据此未满足。
+- **X1d 物理 `SET SCHEMA` + `visible_at` 回填已在本机实例执行（2026-11-10）**：22 张目标表搬迁、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑通过（`docs/archive/x1d-local-replay-2026-11-10.md`）；未接触远端/生产库。
 

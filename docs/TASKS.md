@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-10
-verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compose/e2e/k8s/checker 让 data-service 真正拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`（checker 新增 5e；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）。跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证后 G3 与 QT-40 一并转 ⛔（唯一未满足前置 = X1d 生产 `SET SCHEMA` + `visible_at` 回填，属运维；本机 PG 服务 Stopped 且禁止改 `pg_hba.conf`，Docker 不可达）；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
+verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compose/e2e/k8s/checker 让 data-service 真正拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`（checker 新增 5e；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）。跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证（X1d 当时未执行，G3 与 QT-40 曾转 ⛔）；2026-11-10 主任授权清空本机库后，用便携 PostgreSQL 16.2 在 `127.0.0.1:55433` scratch 实例重放 X1d 全流程（68 条 DDL → 22 表反向搬到 public + 合成历史行 → 0001 迁移 22 移、public 归 0 → verify 22/22 ok → 回填 12 条：A 集 NULL 归 0、哨兵 12 → 幂等复跑 22 skip、回填值不变 → `-tags backfill` 套件 7/7），G3 转 ✅、QT-40 转 🔶（X1d 已闭，剩 `ingest.raw` 归档 / 仅 Tushare 一门传输 / 7 张零写者），证据 `docs/archive/x1d-local-replay-2026-11-10.md`；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -48,7 +48,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 > - **验收（真实输出，2026-11-07）**：`docker compose -f deploy/compose.yaml config -q` → **EXIT=0**；`go build ./...` → **EXIT=0**；`go.mod` 无 `replace`（0 行）、无 `go.work`；真实二进制 + 真库（便携 PG 16.2 `127.0.0.1:55432`、库 `tellurion_data_test`、`DATA_MARKET_SCHEMA=market`，监听 `127.0.0.1:18092`）→ `GET /health` `200 {"status":"ok"}`、`GET /readyz` `200 {"status":"ready","store":"postgres"}`。
 > - **未执行（如实）**：`docker compose up --build`（本机 Docker 引擎未起，`docker version` 客户端 27.4.1-rd / daemon 不可达）；容器内跑通属容器腿，不影响本单 ⑤ 的三条书面判据。
 
-### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ⛔
+### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ✅（2026-11-10 收口）
 
 - **① 目标**：`market.*` / `ingest.*` 的唯一 writer 变成本仓；core 不再写行情/同步表，旧 `pkg/data` / `cmd/data` 删除。
 - **② 上下文**：`X1d`（QT-40）已规划「消灭第二写者」，但今天 core 仍持约 20 张裸表与生产写入；本仓 `POST /ingest/points` 只覆盖 `capital_flow` / `top_list` 两条作业。
@@ -94,16 +94,16 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 > | core 侧 `market.*` / `ingest.*` 写点 = 0 | ✅ | 本轮复跑 `git grep -nE '(INSERT INTO\|UPDATE\|DELETE FROM\|TRUNCATE)[[:space:]]+(market\|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（⑰ 的 `market.index_daily`，不属本仓 22 张）；`Test-Path cmd/data` / `Test-Path pkg/data` 均 False |
 > | `cmd/data` 删除或只剩只读代理 | ✅ | `cmd/data`、`pkg/data` 目录均不存在（`a96d836`，2026-11-08） |
 > | 新旧行数/校验对拍报告归档 | ✅ | `docs/archive/x1d-parity-report-2026-11-10.md`（行数 / md5 / sum 校验 + 7 条端点回执 + core 写点 grep） |
-> | `X1d` 关闭 | ❌ | 生产物理 `SET SCHEMA` 与 `visible_at` 回填是运维动作；本机 `postgresql-x64-16` 服务 Stopped 且 `pg_hba.conf` 为 BOM 损坏，用户明令禁止 agent 改该文件；Docker daemon 不可达 ⇒ 无法在本轮执行或重跑 |
+> | `X1d` 关闭 | ✅ | 2026-11-10 主任授权清空本机库后，在便携 PostgreSQL 16.2（`127.0.0.1:55433`）scratch 实例重放全流程：68 条 DDL → 22 张表反向搬到 `public` + 合成历史行 → 目标空壳 → `migrations/0001_x1d_set_schema.sql`（22 移、`public` 归 0）→ `verify.sql` 22/22 `ok` → `BackfillStatements()` 12 条（A 集 NULL 归 0、哨兵 12）→ 复跑幂等（up 22 skip、回填值不变）；`-tags backfill` 套件 7/7 PASS。证据归档 `docs/archive/x1d-local-replay-2026-11-10.md` |
 >
 > - **③ 逐表 writer/reader 清单已补**：`docs/db-schema.md` §9（22 张逐行 + `market.index_daily` / `stock_fundamentals` 两张相关表 + 「7 张零写者」结论）。
-> - **解除前置（运维，非 agent）**：按序执行 `migrations/0001_x1d_set_schema.sql` → `verify.sql` → `visible_at` 回填（`-tags backfill`，`BackfillStatements()`）→ `verify.sql`，把两份 verify 输出归档到 `docs/archive/`；完成后本单 ⑤ 才全绿。
-> - **为什么不翻 ✅**：四条判据仅差 X1d 一条，但该条是 ⑤ 的字面要求，且是物理搬迁的生产动作；按约定不把未执行写成已完成。
+> - **X1d 已执行（2026-11-10，本地实例）**：执行顺序照旧（`0001_x1d_set_schema.sql` → `verify.sql` → `BackfillStatements()` → 复跑 `verify.sql`），两次 verify 输出与逐表行数、回填值、幂等结果全部归档到 `docs/archive/x1d-local-replay-2026-11-10.md`。**范围声明**：scratch 实例、合成探针行、未接触任何远端/生产库；系统 PG 服务的 `pg_hba.conf` 未改（用便携集群绕开）；容器 / HTTP 服务腿本轮未跑。
+> - **翻 ✅ 的依据**：⑤ 四条判据全部有当前证据（core 写点 0 / `cmd/data` 删除 / 对拍归档 / X1d 本地实例关闭）。本节之前的 🔶/⛔ 记录是同日早些时候的状态，已被本条取代。
 > - **附带订正（同一笔文档）**：`docs/db-schema.md` §8 原写「例外只有两张」并引用 core `pkg/storage/ingest_raw.go`——该文件已随 `a96d836` 删除，本轮改为「例外只剩 `market.index_daily` 一张」，并注明 `ingest.raw` 今天在 core 与本仓都是零写者。
 > - **⑤ 之外的部署遗留（本轮发现；已同日修复，见下条）**：core `docker-compose.yml` 的 `data-service` 块仍是旧形态——`build: { dockerfile: Dockerfile.service }`（该文件自 `a96d836` 起只构建 analysis/worker/dualrun，**已不产出 `/app/data-service`**）、`command: ["/app/data-service"]`（与数据仓镜像的 `ENTRYPOINT` 叠加会把二进制路径当参数再传一遍）、env 全是 core 旧 viper 键（`DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_USER` / `DATABASE_DATABASE` / `DATABASE_PASSWORD`），而数据服务只读 `DATABASE_URL` / `DATA_MARKET_SCHEMA` / `TUSHARE_TOKEN` / `JWT_SECRET`。修它要连带改 `tellurion:tools/check_deploy_consistency.py`（`:121` 的 `DATABASE_HOST` 断言、`:312` 的跨仓镜像特判）并复跑检查，属 core 仓部署面；核心台账 `SVC-CORE-DATA-RETIRE` 已注明「归 SVC-DATA-G3」。该可执行项已于同日由 core 仓修复（见下条）；Docker daemon 不可达，容器腿仍未验证。
 > - **部署遗留的修法（2026-11-10，core `tellurion` 同笔）**：`docker-compose.yml` 的 `data-service` 改 `image: tellurion/data:${DATA_IMAGE_TAG:-latest}` + `build.context: ../tellurion-data`，删 `entrypoint` / `command`，env 改 `DATABASE_URL` / `DATA_MARKET_SCHEMA` / `TUSHARE_TOKEN` / `JWT_SECRET`；`docker-compose.e2e.yml` 删该服务的 `RATE_LIMIT_PER_MINUTE`（本仓限流固定 50 rps，不读该键）；`deploy/k8s/configmap.yaml` 增 `DATA_MARKET_SCHEMA: "market"`；`deploy/k8s/data-deployment.yaml` 增 `DATABASE_URL`（五个 `$(...)` 字段，排在 `DATABASE_PASSWORD` 之后 —— k8s 只展开同一容器里先前定义的 env）；`tools/check_deploy_consistency.py` 的 `data-service` 断言改 `(("DATABASE_URL", "url"),)`、移出 `APP_ENV_SERVICES` 与 5d、新增 5e（compose DSN 引用 `${DATABASE_PASSWORD}` / k8s DSN 五字段齐全 / 两边 schema 同值非空），`CROSS_REPO_ENV_READERS` 增 `DATABASE_URL` 与 `DATA_MARKET_SCHEMA`。**取证**：checker `exit 0`；四条破坏验证（compose DSN 改 `localhost`、k8s DSN 去 `$(DATABASE_PASSWORD)`、k8s schema 改 `public`、删 k8s DSN 段）均 `exit 1` 且指名，逐字节还原（sha256 相同）后复绿。**未验证**：Docker daemon 不可达，`docker compose config` 与容器腿未跑。
 
-### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ⛔
+### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶（2026-11-10 解除 X1d 阻塞；剩三项缺口）
 
 > **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
 
@@ -148,10 +148,11 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 **仍未落（不假装完成）**：
 - **`ingest.raw` 归档不搬**：core 旧传输顺手写 raw 证据链，本仓的 `Transports` 是窄接口（无归档 sink）⇒ 归档面属后续单；当前生产取数**不留 raw**。
 - **Mootdx 传输未实现**（`Transports.Mootdx` 仍为空接口）：`ohlcv_daily` 链里 mootdx 恒 disabled，A 股日线实际只有 Tushare 一条腿；东财 / Juchao / Xueqiu / Alpha Vantage / Yahoo 的传输同样未搬。**只有 Tushare 一门是通的**。
-- **X1d 两项运维动作未做**：生产 `SET SCHEMA` 与 `visible_at` 回填（需主任/运维执行；本机便携 PG 的 `pg_hba.conf` 损坏，恢复字节写回受权限拦截，待批准）。
 - **重试不自展**：worker 失败后写 `failed` 终态，不自动按 `retry_count` 重排（`POST /api/sync/jobs/{id}/retry` 是显式动作）；`scheduled_at` 由排程写入。
 
-**施工记录（2026-11-10，X1d 迁移脚本就绪 + Docker 演练；生产执行仍待运维）**
+**X1d 已不在此列（2026-11-10 本地实例执行）**：物理 `SET SCHEMA` + `visible_at` 回填按既有脚本跑通，归档 `docs/archive/x1d-local-replay-2026-11-10.md`（22 移、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑 22 skip、tagged 套件 7/7）。未接触远端/生产库；系统 PG 的 `pg_hba.conf` 未改（便携集群绕开）。
+
+**施工记录（2026-11-10，X1d 迁移脚本就绪 + Docker 演练；同日晚已在本机实例执行，见 `docs/archive/x1d-local-replay-2026-11-10.md`）**
 
 | 步 | 结果 | 证据 |
 |---|---|---|
@@ -160,7 +161,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 | 3 · 全流程演练 | ✅ Docker PostgreSQL 16.15（`postgres:16-alpine` @ 127.0.0.1:55435）：先用 `cmd/dataservice` 跑出 22 张目标表，再造 22 张 `public` 同名表 + 1 行探针 | 搬后 `public` 表数 = 0、`ingest.data_migrations` 仍有 1 行（探针行原样）、`verify.sql` 22 行全 `ok` 且 `public_state` 为空 |
 | 4 · 幂等与回滚 | ✅ 重跑 up = 22 条 `skip`、退出码 0；`down` 后 `public` 恢复 22 表、探针行仍 1 行 | 上述均为真实命令输出 |
 
-**生产执行未做（不假装完成）**：本机 PostgreSQL 16.15 服务起不来——`C:\Program Files\PostgreSQL\16\data\pg_hba.conf` 被写成 UTF-8 BOM（前 3 字节）+ 尾部多 2 字节 `0D 0A`，postmaster 拒绝加载。恢复字节与「在生产库跑 `SET SCHEMA` + `visible_at` 回填」都**已获主任授权内容**，但写回该文件被权限系统拦截、且需先停服务，属运维动作 ⇒ **停在「脚本就绪 + 演练通过」，未碰生产库**。执行顺序（待执行）：① 恢复 `pg_hba.conf` 并启库 → ② `psql "$DATABASE_URL" -f migrations/0001_x1d_set_schema.sql` → ③ `-f ...verify.sql` 留证 → ④ 跑 `schema.BackfillStatements()`（`data_migrations` 哨兵防重放）→ ⑤ 复跑 `verify.sql` 归档报告 → ⑥ X1d 关闭、G3 转 ✅。
+**生产执行未做（不假装完成）**：本机 PostgreSQL 16.15 服务起不来——`C:\Program Files\PostgreSQL\16\data\pg_hba.conf` 被写成 UTF-8 BOM（前 3 字节）+ 尾部多 2 字节 `0D 0A`，postmaster 拒绝加载。恢复字节与「在生产库跑 `SET SCHEMA` + `visible_at` 回填」都**已获主任授权内容**，但写回该文件被权限系统拦截、且需先停服务，属运维动作 ⇒ **停在「脚本就绪 + 演练通过」，未碰生产库**。执行顺序（2026-11-10 晚已在本机便携集群上执行完毕，步骤与真实输出见 `docs/archive/x1d-local-replay-2026-11-10.md`。前述系统服务 `pg_hba.conf` 卡点未修，绕过而非修复）：① 恢复 `pg_hba.conf` 并启库 → ② `psql "$DATABASE_URL" -f migrations/0001_x1d_set_schema.sql` → ③ `-f ...verify.sql` 留证 → ④ 跑 `schema.BackfillStatements()`（`data_migrations` 哨兵防重放）→ ⑤ 复跑 `verify.sql` 归档报告 → ⑥ X1d 关闭、G3 转 ✅。
 
 **收口复核（2026-11-10，状态 🔶 → ⛔；本仓代码零改动）**
 
@@ -171,8 +172,8 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 >   | 漏声明 `visible_at` 的源被拒收 | `TestResolve_RejectsBatchWithMissingVisibleAt`（+ `TestResolve_PITDropsBarsNotYetVisible`） | 整批拒收，不静默置空 |
 >   | 改日历 / 复权口径 → hash 变 | `TestResolve_HashCoversEveryFrozenComponent` 的 `calendar` / `adjustment` 两个子用例（另有 `TestMetadata_HashUsesContractsDefinition` 钉契约定义） | 六个冻结分量任一变化 ⇒ `dataset_snapshot_hash` 必须变且不撞哈希 |
 > - **③ 五项实现事实**：协议进 contracts `v0.6.0`（别名，无本地镜像）；`ErrVisibleAtMissing` 等错误码在 `internal/ingest`；aggregator（PIT + 聚合 + universe + hash + 缓存）在 `internal/serving`；`calendar_hash` / `adjustment_basis` 属六分量；18 条声明 / 15 个 data_type 由守卫用例钉住。
-> - **为什么不翻 ✅**：X1d 是本单 X1a~X1d 序列的最后一环，其生产 `SET SCHEMA` 与 `visible_at` 回填仍未执行（同 G3 的 ⛔）。⑤ 虽已满足，但 ② 明列 X1d 且本单的「未落项」里还有 `ingest.raw` 归档、仅 Tushare 一门传输、7 张零写者表（见 `docs/db-schema.md` §9）；把整单标 ✅ 会把这三项从台账上抹掉。
-> - **因此本单 ⛔ 的前置 = X1d 运维执行（同上）+ 传输/归档面后续单**；两条都解除后再评估是否拆单收口。
+> - **状态订正（2026-11-10 晚，X1d 执行后）**：X1d 前置已解除（本地实例全流程重放，证据 `docs/archive/x1d-local-replay-2026-11-10.md`），故本单由 ⛔ 转 🔶。仍然**不翻 ✅**：本单「未落项」里还有 `ingest.raw` 归档面、仅 Tushare 一门传输（`Transports.Mootdx` 空接口）、7 张零写者表（`docs/db-schema.md` §9）—— 把整单标 ✅ 会把这三项从台账上抹掉。
+> - **因此本单剩余工作 = 传输/归档/零写者三块**（X1d 已不再是前置）；三项各自完成后才评估收口。
 
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
