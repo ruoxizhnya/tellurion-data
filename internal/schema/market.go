@@ -237,10 +237,16 @@ func MarketStatements() []string {
 		)`,
 
 		// 交易日历（calendar_hash 的输入，不是观测数据流）
+		//
+		// 单一 A 股日历（ADR-0009）：主键只有 trade_date，没有交易所维度。
+		// exchange 只记录「最近写入来源」，不是 key；SSE/SZSE/BSE 交易日一致。
+		// 写侧另有混批守卫（store.ErrMixedTradingExchanges）。CHECK 只对新建
+		// 表生效——既有库没有 ALTER 迁移，靠写侧守卫。
 		`CREATE TABLE IF NOT EXISTS market.trading_calendar (
 			trade_date DATE PRIMARY KEY,
-			exchange VARCHAR(10) DEFAULT 'SSE',
-			is_trading_day BOOLEAN DEFAULT TRUE
+			exchange VARCHAR(10) NOT NULL DEFAULT 'SSE',
+			is_trading_day BOOLEAN DEFAULT TRUE,
+			CONSTRAINT ck_trading_calendar_exchange CHECK (exchange IN ('SSE', 'SZSE', 'BSE'))
 		)`,
 
 		// 指数成分（as-of 语义的载体）

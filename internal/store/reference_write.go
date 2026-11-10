@@ -12,11 +12,21 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
 )
+
+// ErrMixedTradingExchanges 表示一批交易日历混入了多个交易所。
+//
+// `market.trading_calendar` 是**单一 A 股交易日历**（主键只有 `trade_date`，
+// 没有交易所维度）：同一天 SSE/SZSE/BSE 的开闭市一致，`exchange` 列只是
+// 「最近一次写入来源」的 provenance，不是 key。一批里混多个交易所说明调用方
+// 在按交易所分片写，后到者会覆盖前者——这是本表语义不允许的用法，拒写。
+var ErrMixedTradingExchanges = errors.New("store: trading calendar batch mixes exchanges")
 
 // TradingDay 是 `market.trading_calendar` 的行（store 侧镜像）。
 //
@@ -114,11 +124,27 @@ func (w *ReferenceWriter) UpsertStocks(ctx context.Context, stocks []market.Stoc
 
 // UpsertTradingDays 按 `trade_date` 覆盖 `exchange` / `is_trading_day`。
 //
-// 表的主键只有 `trade_date`：多交易所并写时后到者覆盖交易所列，这是既有
-// DDL 的形状（`docs/db-schema.md` §9），不在本笔改。
+// 单交易所假设（ADR-0009）：主键只有 `trade_date`，表是**一张** A 股交易日历；
+// `exchange` 只记录来源，不是维度。因此一批里出现多个交易所就拒写——否则
+// 后到者会静默覆盖前者，而读方（`GET /api/v1/trading/calendar`）根本不区分
+// 交易所。真要做分交易所日历时，先把主键改成 `(exchange, trade_date)` 并改
+// 读方，属另立单（ADR-0009 的重开条件）。
 func (w *ReferenceWriter) UpsertTradingDays(ctx context.Context, days []TradingDay) (int, error) {
 	if len(days) == 0 {
 		return 0, nil
+	}
+
+	exchanges := make([]string, len(days))
+	first := ""
+	for i, day := range days {
+		exchanges[i] = normalizeExchange(day.Exchange)
+		if first == "" {
+			first = exchanges[i]
+			continue
+		}
+		if exchanges[i] != first {
+			return 0, fmt.Errorf("%w: first=%s, got=%s", ErrMixedTradingExchanges, first, exchanges[i])
+		}
 	}
 
 	tx, err := w.db.BeginTx(ctx)
@@ -140,12 +166,8 @@ func (w *ReferenceWriter) UpsertTradingDays(ctx context.Context, days []TradingD
 	sql := fmt.Sprintf(stmt, w.table("trading_calendar"))
 
 	written := 0
-	for _, day := range days {
-		exchange := day.Exchange
-		if exchange == "" {
-			exchange = "SSE"
-		}
-		tag, err := tx.Exec(ctx, sql, utcDate(day.Date), exchange, day.IsTradingDay)
+	for i, day := range days {
+		tag, err := tx.Exec(ctx, sql, utcDate(day.Date), exchanges[i], day.IsTradingDay)
 		if err != nil {
 			return 0, fmt.Errorf("store: upsert trading day %s: %w", day.Date.Format("2006-01-02"), err)
 		}
@@ -156,6 +178,15 @@ func (w *ReferenceWriter) UpsertTradingDays(ctx context.Context, days []TradingD
 	}
 	committed = true
 	return written, nil
+}
+
+// normalizeExchange 把缺省/大小写差异折成 DDL CHECK 认可的取值。
+func normalizeExchange(exchange string) string {
+	exchange = strings.ToUpper(strings.TrimSpace(exchange))
+	if exchange == "" {
+		return "SSE"
+	}
+	return exchange
 }
 
 // table 返回带 schema 前缀的表名（与 `Store.table` 同口径）。

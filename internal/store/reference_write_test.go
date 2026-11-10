@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +105,40 @@ func TestReferenceWriter_UpsertTradingDaysDefaultsExchange(t *testing.T) {
 	}
 	if got := db.tx.args[0][2]; got != false {
 		t.Fatalf("is_trading_day arg = %v, want false", got)
+	}
+}
+
+// 单交易所假设：一批里混多个交易所必须拒写，且不开事务。
+func TestReferenceWriter_UpsertTradingDaysRejectsMixedExchanges(t *testing.T) {
+	w, db := newReferenceWriterForTest(t, "market")
+	days := []TradingDay{
+		{Date: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC), Exchange: "SSE", IsTradingDay: false},
+		{Date: time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), Exchange: "SZSE", IsTradingDay: true},
+	}
+
+	_, err := w.UpsertTradingDays(context.Background(), days)
+	if !errors.Is(err, ErrMixedTradingExchanges) {
+		t.Fatalf("err = %v, want ErrMixedTradingExchanges", err)
+	}
+	if db.beginCalls != 0 || len(db.tx.execs) != 0 {
+		t.Fatalf("mixed batch must fail before opening a transaction (begin=%d execs=%d)", db.beginCalls, len(db.tx.execs))
+	}
+}
+
+// 空串/大小写差异归一后仍是同一交易所，不属于混批。
+func TestReferenceWriter_UpsertTradingDaysNormalizesExchange(t *testing.T) {
+	w, db := newReferenceWriterForTest(t, "market")
+	days := []TradingDay{
+		{Date: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC), Exchange: " sse "},
+		{Date: time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), Exchange: "", IsTradingDay: true},
+	}
+
+	if _, err := w.UpsertTradingDays(context.Background(), days); err != nil {
+		t.Fatalf("UpsertTradingDays: %v", err)
+	}
+	for i, execArgs := range db.tx.args {
+		if got := execArgs[1]; got != "SSE" {
+			t.Fatalf("args[%d] exchange = %v, want SSE", i, got)
+		}
 	}
 }

@@ -207,6 +207,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 | 项 | 判断 | 落地 | 状态 |
 |---|---|---|---|
 | ① 参考数据解析契约 | **真实风险**：固定下标 + 无 `fields` 校验，缺列/改名会把退市票静默写成 `active`、把整天静默写成非交易日 | `tushare.requireFields`（缺列 ⇒ `ErrTransportDataQuality`）；`normalizeStocks` 改按列名；`internal/sync/reference_contract_test.go` + `testdata/*.json` 钉「官方形状 → 结构体 → upsert 参数」；缺列/改名 0 条 Exec；多余列忽略；`.BJ → BSE` 修正 | **✅ 完成**。线上核对（2026-11-11，真实 token）：`stock_basic` L 5580 行 / D 343 行（9 列，`delist_date` 空串），`trade_cal` 4 列 10 行（`is_open` 数字 1/0）；`TUSHARE_ONLINE=1` 的可选用例 `TestLiveReferenceShapes` PASS |
+| ② `trading_calendar` 主键 | **非真实风险**：无多交易所消费者——读方返回 `[]time.Time`、接口无交易所维度、SSE/SZSE/BSE 交易日一致 | 不改主键；写侧混批拒写（`ErrMixedTradingExchanges`，开事务前失败）；DDL `exchange NOT NULL DEFAULT 'SSE'` + 三值 CHECK（仅新库）；ADR-0009 决策一 | **✅ 完成**（按单交易所假设写死；重开 = 出现按交易所区分的响应/哈希消费者） |
 
 
 **本笔落地（代码 + 文档）**
