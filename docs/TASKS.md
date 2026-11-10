@@ -8,6 +8,8 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 
 > 本仓**唯一**任务台账。跨仓任务只在 §二 留指针，**不镜像正文**（双写必然漂移）。
 > 状态：`⬜ 待做` / `🔶 进行中` / `⛔ 阻塞（有未解除前置）` / `✅ 完成（附日期）`
+>
+> **台账终扫（2026-11-10）**：任务标题带 `⬜` / `🔶` / `⛔` 的 = **0 条**；正文旧标记以标题与最新「收口」块为准。**无开放项**。挂起：`ingest.raw` 归档、Mootdx 传输、`dividends` / `splits` / `index_constituents` / `market_activity` 四张零写者表（`⏸`，重开条件见 QT-40 处置表与 ADR-0008）。
 > 每张单六字段（① 目标 ② 上下文 ③ 要求 ④ 约束与非目标 ⑤ 验收 ⑥ 边界），判据见 `tellurion:AGENTS.md` §8.5。
 > 完成即标 ✅（附日期）并移入 `docs/archive/TASKS-YYYY-MM-DD-archived.md`；本文件只留未完成项。
 
