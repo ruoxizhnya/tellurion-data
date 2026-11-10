@@ -103,6 +103,6 @@ visible_at_cols=12          -- A 集 12 张 market 表均有 visible_at
 
 - **只动本机**：所有命令指向 `127.0.0.1:5432`；未触碰任何远端/生产库。
 - **未动其它库**：6 个 `tellurion_*` 测试/e2e 库按第 3 节清单保留，删除它们会打断其它仓 runbook 在册的测试腿。
-- **`tellurion` 库内非数据域的表**（`quant.*` / `audit.*` / `research.*` / `run.*` / `public.users` 等）随整库 DROP 一并消失，由各自服务的启动 DDL 重建；本轮未逐域核对其重建结果。
+- **`tellurion` 库内非数据域的表**（`quant.*` / `audit.*` / `research.*` / `run.*` / `public.users` 等）随整库 DROP 一并消失；**已逐域核对重建结果**，见 `tellurion:docs/archive/system-pg-domain-recovery-2026-11-10.md`（core / agent 启动 DDL 可自动重建，`research.*` 属已废弃不重建）。
 - **服务自启动**依赖 Windows 服务（`StartType=Automatic`）；本轮启动经一次 UAC 提权，非静默。
 - **QT-40 三块缺口未变**：`ingest.raw` 归档未搬、仅 Tushare 一门传输、7 张零写者表——本次只把运行环境从便携集群换成系统实例，不构成这三项的关闭依据。
