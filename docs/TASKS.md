@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-11-10
-verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compose/e2e/k8s/checker 让 data-service 真正拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`（checker 新增 5e；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）。跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证（X1d 当时未执行，G3 与 QT-40 曾转 ⛔）；2026-11-10 主任授权清空本机库后，用便携 PostgreSQL 16.2 在 `127.0.0.1:55433` scratch 实例重放 X1d 全流程（68 条 DDL → 22 表反向搬到 public + 合成历史行 → 0001 迁移 22 移、public 归 0 → verify 22/22 ok → 回填 12 条：A 集 NULL 归 0、哨兵 12 → 幂等复跑 22 skip、回填值不变 → `-tags backfill` 套件 7/7），G3 转 ✅、QT-40 转 🔶（X1d 已闭，剩 `ingest.raw` 归档 / 仅 Tushare 一门传输 / 7 张零写者）；同日终扫按 ADR-0008 收口 QT-40 ✅（东财 / Alpha Vantage 接线，`stocks` / `trading_calendar` 补参考数据写者；`ingest.raw`、Mootdx 与 `dividends` / `splits` / `index_constituents` / `market_activity` 四张零写者表 ⏸ 挂起，各带重开条件），证据 `docs/archive/x1d-local-replay-2026-11-10.md`；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）；系统实例初始化（2026-11-10）：`pg_hba.conf` 去 BOM + `postgresql-x64-16` 启动 + `tellurion` 库 DROP/重建 + 68 DDL/22 表/verify 22-22/回填 12 哨兵，证据 `docs/archive/system-pg-init-2026-11-10.md`
+last-verified: 2026-11-11
+verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，源码零 `contracts/market` 引用（全走 `domain/market`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -81,7 +81,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 |---|---|
 | core 侧旧数据面退役（`pkg/data` / `cmd/data` 删除） | `tellurion:docs/TASKS.md` |
 | X1d 生产物理搬迁 + `visible_at` 回填（运维动作） | `tellurion:docs/TASKS.md` → `OPS-X1D-PROD-MIGRATION` |
-| 6 个 `market` 别名（零写者表引用的形状） | `tellurion-contracts:docs/TASKS.md` → `CT-06-ALIAS-EXIT` |
+| 6 个 `market` 别名（零写者表引用的形状） | `tellurion-contracts:docs/TASKS.md` → `CT-06-ALIAS-EXIT`。**本仓已迁完**（2026-11-11：源码零 `contracts/market` 引用，全部走 `domain/market`；pin `v0.6.0 → v0.9.0`，`build/vet/test` 全绿）⇒ contracts 侧可删别名 |
 
 ## 维护本文件
 

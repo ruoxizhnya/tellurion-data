@@ -23,7 +23,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: tellurion-data:dev
+    image: tellurion/data:${DATA_IMAGE_TAG:-latest}
     command: ["-addr", "0.0.0.0:8081"]
     ports:
       - "127.0.0.1:8081:8081"

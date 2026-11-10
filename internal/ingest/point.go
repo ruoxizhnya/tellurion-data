@@ -7,7 +7,7 @@ import (
 )
 
 // UnifiedDataPoint 是跨仓共享的 wire 形状，定义在
-// `tellurion-contracts:dataprotocol`（QT-40 X1a，契约 `v0.6.0`）。
+// `tellurion-contracts:dataprotocol`（QT-40 X1a，契约 `v0.6.0` 起；2026-11-11 起 pin `v0.9.0`）。
 //
 // 本包不再持有逐字段镜像：七个字段（含 VisibleAt）、`ToJSON` 与
 // `DeduplicateKey` 都由契约提供，这里只留别名让包内调用点不换前缀。
