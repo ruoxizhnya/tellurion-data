@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-11
-verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
+verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -23,6 +23,16 @@ verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `
 - **⑤ 验收**：两条作业的真实行数与 `delist_date` 回读；既有库约束核对表逐行有结论。
 - **⑥ 边界**：本仓作业面与 schema；生产库执行归运维。
 - **重开条件**：一次带真实 `TUSHARE_TOKEN` 的部署。
+
+### DATA-LISTING-WINDOWS · point-in-time 上市/退市窗口 [P3] ⏸
+
+- **① 目标**：给下游「取池子时按日在市」提供可判定的上市/退市窗口。
+- **② 上下文**：core QT-67 的 `POST /api/v1/listing-windows` 已随 `SVC-CORE-DATA-RETIRE` 退役，今天没有任何服务提供；agent 的偏差维曾调它，但只会 404 后静默退回 `PoolSourceCurrent`，已于 2026-11-11 删除该客户端腿与生产接线（`tellurion-agent:0eaed19`）。本仓 `market.stocks` 已有 `list_date` / `delist_date`，具备实现条件。
+- **③ 要求**：若重开——① 提供粗粒度只读端点（一次覆盖整批 symbol / 整个区间，不做逐 symbol 远程）；② 明确 `NULL` 语义（未知 ≠ 一个看起来合理的日期）与 PIT 口径；③ 一条契约测试 + 与 agent 的对拍。
+- **④ 约束与非目标**：不为「补端点」而造无消费者的数据；不改 `market.stocks` 的既有列语义。
+- **⑤ 验收**：agent 的偏差维能据真实窗口报 `PoolSourcePointInTime`，且 `DelistedInPool` 有回读证据。
+- **⑥ 边界**：数据形状与读端口归本仓；消费口径归 agent。
+- **重开条件**：下游出现 point-in-time 上市/退市窗口的真实需求（回测票池按日在市、退市偏差维），届时由本仓提供；`market.stocks.delist_date` 已存在。
 
 ### DATA-INGEST-RAW · `ingest.raw` 归档面 [P2] ⏸
 
