@@ -133,6 +133,17 @@ verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/tr
 - **X1d 两项运维动作未做**：生产 `SET SCHEMA` 与 `visible_at` 回填（需主任/运维执行；本机便携 PG 的 `pg_hba.conf` 损坏，恢复字节写回受权限拦截，待批准）。
 - **重试不自展**：worker 失败后写 `failed` 终态，不自动按 `retry_count` 重排（`POST /api/sync/jobs/{id}/retry` 是显式动作）；`scheduled_at` 由排程写入。
 
+**施工记录（2026-11-10，X1d 迁移脚本就绪 + Docker 演练；生产执行仍待运维）**
+
+| 步 | 结果 | 证据 |
+|---|---|---|
+| 1 · 脚本三件套 | ✅ `migrations/0001_x1d_set_schema.sql`（up）/ `.down.sql`（回滚）/ `.verify.sql`（对拍）。单事务、幂等；`public.x` 不存在则跳过；目标空壳（0 行）删掉再搬；**目标有行即 `RAISE EXCEPTION` 整体中止**，绝不静默合并 | 首次演练即验证了中止路径：目标副本放 1 行 → `ERROR: 目标表 ingest.data_migrations 已有 1 行…拒绝自动合并`，退出码 3，且 `public` 侧 22 张表原样（事务整体回滚） |
+| 2 · 清单与代码同源 | ✅ `internal/schema/migration_sql_test.go:TestMigrationTableListMatchesSchema` 把三份 SQL 的表清单与 `schema.TableNames()` 逐条比对（22 张） | `go test ./internal/schema/...` PASS；加表只改一侧会红 |
+| 3 · 全流程演练 | ✅ Docker PostgreSQL 16.15（`postgres:16-alpine` @ 127.0.0.1:55435）：先用 `cmd/dataservice` 跑出 22 张目标表，再造 22 张 `public` 同名表 + 1 行探针 | 搬后 `public` 表数 = 0、`ingest.data_migrations` 仍有 1 行（探针行原样）、`verify.sql` 22 行全 `ok` 且 `public_state` 为空 |
+| 4 · 幂等与回滚 | ✅ 重跑 up = 22 条 `skip`、退出码 0；`down` 后 `public` 恢复 22 表、探针行仍 1 行 | 上述均为真实命令输出 |
+
+**生产执行未做（不假装完成）**：本机 PostgreSQL 16.15 服务起不来——`C:\Program Files\PostgreSQL\16\data\pg_hba.conf` 被写成 UTF-8 BOM（前 3 字节）+ 尾部多 2 字节 `0D 0A`，postmaster 拒绝加载。恢复字节与「在生产库跑 `SET SCHEMA` + `visible_at` 回填」都**已获主任授权内容**，但写回该文件被权限系统拦截、且需先停服务，属运维动作 ⇒ **停在「脚本就绪 + 演练通过」，未碰生产库**。执行顺序（待执行）：① 恢复 `pg_hba.conf` 并启库 → ② `psql "$DATABASE_URL" -f migrations/0001_x1d_set_schema.sql` → ③ `-f ...verify.sql` 留证 → ④ 跑 `schema.BackfillStatements()`（`data_migrations` 哨兵防重放）→ ⑤ 复跑 `verify.sql` 归档报告 → ⑥ X1d 关闭、G3 转 ✅。
+
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 
 | 步 | 结果 | 提交（本仓 main） |
