@@ -57,9 +57,9 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 
 // legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
 //
-// 这些端点目前仍由 core 的 `cmd/data` 提供，本仓路由表里没有它们；保留这张表
-// 是为了「新旧服务同一路由的鉴权结论一致」——端点迁移进来时按这张表挂闸，
-// 不再重新拍一次角色。守卫 `TestLegacyREV17PolicyIsVerbatim` 钉住条目与档位。
+// core `cmd/data` 已于 2026-11-08（`a96d836`）整体删除，本仓路由表也不再使用
+// 这些路径；保留这张表是为了「未来端点迁入时沿用同一档位结论」，不重新拍角色。
+// 守卫 `TestLegacyREV17PolicyIsVerbatim` 钉住条目与档位。
 //
 // 档位映射：Admin → admin；Trader → trader|admin；ReadOnlyPOST → any-authenticated。
 var legacyREV17 = map[string]kithttp.Rule{

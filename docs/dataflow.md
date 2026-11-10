@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-10-25
-verified-by: QT-40 H4 ②（写端点 + `internal/assembly` 装配层，链路多一条跨仓边）；W4 鉴权接线（kit net/http 适配 + 路由策略表 + REV-17 移植）
+last-verified: 2026-11-11
+verified-by: 代码-文档对齐审计 —— 传输/调度归属按 `a96d836` 后代码订正；作业层链路与 `/api/sync/*` 实际接线核对
 ---
 
 # Dataflow — tellurion-data
@@ -18,31 +18,31 @@ verified-by: QT-40 H4 ②（写端点 + `internal/assembly` 装配层，链路�
         │ 统一成 UnifiedDataPoint（含 visible_at、幂等坐标）
         ↓
 [装配]  internal/assembly —— `ingest.UnifiedDataPoint → store.Point` 的唯一投影处
-        │ 两条入口在这里汇成**一条**链：HTTP 投点 / 未来的作业层（ADR-0006）
+        │ 两条入口在这里汇成**一条**链：HTTP 投点 / 作业层（2026-11-10 起在本仓，ADR-0006）
         ↓
-[存储]  market / ingest（目标态；今天多数表落 public，X1d 分批迁，现状见 db-schema.md §1）  ← 内容真相源，DDL 唯一 owner = 本仓；写面 = `BulkInsert`
+[存储]  market / ingest（本机实例已于 2026-11-10 完成 `SET SCHEMA`，现状见 db-schema.md §1/§9）  ← 内容真相源，DDL 唯一 owner = 本仓；写面 = `BulkInsert`
         ↓
 [aggregator]  PIT 过滤 · 频率聚合 · 票池解析 · 快照 hash · 缓存   ← 对外唯一面
         ↓  /datasets/resolve · /datasets/{hash}
 core（回测/实盘）   analytics（基准/归因）   strategy（资产）   agent（实验）
 
-写路径的跨仓边（QT-40 H4，2026-10-25 起）：
-  core 的作业层（取数 + 归一，传输仍在 core）
+写路径的跨仓边（2026-11-10 起）：
+  本仓作业层（`/api/sync/jobs` → worker：取数 + 归一，传输在本仓）
       ──POST /ingest/points（≤10000 点、≤8 MiB；`visible_at` / `ingest_time` 不在投送面上）──▶
   [装配] → [存储]
   超限 / 缺锚点 / 换源冲突 ⇒ **整批拒收**（413 / 400 / 409），一行都不落
 
-（过渡第二路径，X1d 收敛）core ──直读──▶ factor_definitions / factor_cache（因子读面只在 core，本仓不提供）
+（过渡路径，未收敛）因子读面：core `cmd/analysis` 的 `/api/factors/:name` 仍转发到本仓 `/factors/:name`，而本仓已按裁-14 撤掉该路由 ⇒ 这条边**目前未接线**（见 §5 待裁）。
 ```
 
 > **频率分表与聚合口径**（`tellurion:docs/SPEC.md` 频率词表）：`1m` = `ohlcv_minute` 原样；`1d` = `ohlcv_daily_qfq`（唯一进回测的口径）；`15m` **由 1m 聚合产出、不物化**，每次取数实时聚合。图中与 §2 的「频率聚合」只指这一种。
-> **代码落点（2026-10-25，H4 ②）**：图中「归一化」的聚合与 PIT 两段在 `tellurion-data:internal/normalize`，**ETL 编排（`Registry.Fetch` / `ETLPipeline` / `ValidatePoints` / `GatePoints` / `Deduplicate`）在 `tellurion-data:internal/ingest`**；**「装配」在 `tellurion-data:internal/assembly`**——ADR-0004 第 2 条那句「投影在装配层完成」的那个装配层，两条入口（`POST /ingest/points` 与 `Pipeline`）共用它，免得「跳过 / 去重 / 闸门」的计数口径分叉；「aggregator」在 `tellurion-data:internal/serving`；存储的**读面（四个取数 port）与写面（`BulkInsert`）都在** `tellurion-data:internal/store`（`visible_at` 只从列里取、缺列交 PIT 整批拒收；写面只落 A 集表）。**仍在 core**：connector 的传输实现（Tushare/东财/Mootdx 的 HTTP/SDK 客户端与 `ingest.raw` 归档，经 `ingest.Transports` 注入）与同步作业的**调度**（`sync_jobs` → worker → executor）。**capital_flow / top_list 两条作业的落库那一跳已改投本仓**（core 不再对这两张表 `ON CONFLICT DO UPDATE`）；其余同步腿（日线 / 板块 / 财报…）仍由 core 直写 `public` —— 点数以 grep 为准，见 §4 不变量 3 的实测口径。
-> **因子边（裁-14，2026-10-25）**：本仓**不提供因子读面**——`/factors/{name}@{hash}` 已撤掉。因子**值**与**定义**的生产方和读端点都在 core（`pkg/data` → `SaveFactorCacheBatch`；`cmd/data/handlers_factor.go`），今天 core 直读 `factor_definitions` / `factor_cache`（过渡路径，如实登记上图）。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。
+> **代码落点（2026-10-25，H4 ②）**：图中「归一化」的聚合与 PIT 两段在 `tellurion-data:internal/normalize`，**ETL 编排（`Registry.Fetch` / `ETLPipeline` / `ValidatePoints` / `GatePoints` / `Deduplicate`）在 `tellurion-data:internal/ingest`**；**「装配」在 `tellurion-data:internal/assembly`**——ADR-0004 第 2 条那句「投影在装配层完成」的那个装配层，两条入口（`POST /ingest/points` 与 `Pipeline`）共用它，免得「跳过 / 去重 / 闸门」的计数口径分叉；「aggregator」在 `tellurion-data:internal/serving`；存储的**读面（四个取数 port）与写面（`BulkInsert`）都在** `tellurion-data:internal/store`（`visible_at` 只从列里取、缺列交 PIT 整批拒收；写面只落 A 集表）。**传输与调度在本仓（2026-11-10 起）**：`internal/transport/*` 持有 connector 的 HTTP/SDK 客户端，`internal/sync` 持有 `sync_jobs` → worker → executor 的调度；core 的 `pkg/data` / `cmd/data` 已于 `a96d836`（2026-11-08）整体删除，**core 对 `market.*` / `ingest.*` 的同步写点归零**（裁决 ⑰ 的 `market.index_daily` 除外）——点数以 grep 为准，见 `db-schema.md` §9.4。
+> **因子边（裁-14，2026-10-25）**：本仓**不提供因子读面**——`/factors/{name}@{hash}` 已撤掉。因子**值**的写在 core（`pkg/storage/cache.go` 的 `SaveFactorCacheBatch` 等，写 `factor_cache` / `factor_returns` / `ic_analysis`）；`pkg/data` 与 `cmd/data/handlers_factor.go` 已于 `a96d836` 删除。⚠️ 但 core 的 HTTP 门面 `cmd/analysis/handlers_proxy.go` 仍把 `/api/factors/:name` 转发到本仓 `/factors/:name` ⇒ **该跨仓边未接线**，属待裁项（见 §5）。**上移触发条件（任一成立再启动整体迁移）**：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。
 
 ## 2. 关键时序
 
 ### 取数（读路径，热）
-0. **鉴权闸**（2026-10-25）：每个请求先过 `requireAuth`——`/health` 公开；`/datasets/*` 需 `viewer` 及以上。
+0. **鉴权闸**（2026-10-25，2026-11-11 按 `servedPolicy` 校准）：每个请求先过 `requireAuth`——`/health` / `/readyz` 公开；`/datasets/*` 与 7 条 G3 只读面接受 `service` / `viewer` / `trader` / `admin`；`POST /api/v1/ohlcv/bulk` 任意已认证；`POST /ingest/points` **只有** `service` / `admin`；`/api/sync/*` 作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`，读面 = `service` / `viewer` / `trader` / `admin`（逐条见 `api-schema.md` §1）。
    未装配 Authorizer → 503 `auth_unavailable`，无凭证 / 坏 token → 401，越权 → 403；通过后才进入 aggregator。
 1. 调用方 `GET /datasets/resolve?universe=csi300&from=…&to=…&freq=1d`
 2. aggregator：票池解析 → 按 `visible_at <= as_of` 过滤 → 频率聚合（口径见 §1 注）→ 算 `dataset_hash`
@@ -95,7 +95,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 1. 同一 `dataset_hash` 两次拉取字节一致。
 2. 任何返回点满足 `visible_at <= as_of`。
 3. `market` / `ingest` 无第二写者（CI 静态检查 + 评审）。
-   ⚠️ **今天只对两条链成立**（2026-10-25 实测，H4 ② 落账）：`capital_flow` / `top_list` 的写入方只有本仓；core 仍在写 `ohlcv_daily_qfq`（`tellurion:pkg/storage/ohlcv.go:15,53`）、`sectors` 与 `stock_sector_map`（`tellurion:pkg/storage/sector.go:56,96`），另有两处带 schema 前缀的写点 `tellurion:pkg/storage/index_daily.go:31`（`market.index_daily`）与 `tellurion:pkg/storage/ingest_raw.go:62`（`ingest.raw`）。这条不变量**不作为已完成项**；判点数以 grep 为准，不引用任何文档里写死的数（含本行）。
+   ✅ **2026-11-10 起成立**：core 数据面写点已随 `a96d836`（2026-11-08）全部删除；core 非测试代码只剩裁决 ⑰ 的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go`，不在本仓 22 表内）。点数以 grep 为准，见 `db-schema.md` §9.4。
 4. connector 全部走 `ConnectorDeclaration`（漏声明被拒收）。
 5. 写面幂等：同主键同内容重写 = no-op；同主键异内容 = fail-loud 且整批不落（`ON CONFLICT DO NOTHING` + 内容比对，排除 `ingest_time`）。
 6. 写面只落 A 集（`visible_at` 三集合门）；B/C 集只能走各自同步腿或被明确豁免。
@@ -109,3 +109,19 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 - 表结构 → `docs/db-schema.md`
 - 接口形状 → `docs/api-schema.md`
 - 本文件只讲**流向与顺序**，不重复字段定义。
+
+### 5.1 待裁的跨仓边（2026-11-11 审计，未改动任何一侧）
+
+core `cmd/analysis/handlers_proxy.go` 仍无条件注册下列反代（`data_service.url` 缺省值 `http://data-service:8081`），但本仓路由表里没有对应端点：
+
+| core 对外路由 | core 转发到 | 本仓现状 |
+| --- | --- | --- |
+| `POST /api/screen` | `data /screen` | 不存在（`legacyREV17` 里的档位只作历史记录，不挂路由） |
+| `GET /api/stocks/count` | `data /stocks/count` | 不存在（只有 `GET /stocks`） |
+| `GET /api/factors/:factor_name` | `data /factors/:factor_name` | 不存在（裁-14 已撤） |
+| `GET /api/sync/jobs/:id/progress`、`/api/sync/workers` | `data /api/sync/*` | 不存在（本仓只有 jobs / schedules 共 11 条） |
+| `POST /api/v1/ohlcv/bulk` | `data /api/v1/ohlcv/bulk` | ✅ 存在 |
+
+判定：**core 侧代码偏离**（未随裁-14 与本仓 23 条路由表更新），不建议 data 单方面补路由；处置需 core 仓决策（删除反代或在 core 本地供数）。
+
+另：core `docs/openapi.yaml` 的 `/api/sync/{path}` 仍按旧 per-dataset 子路径（`/api/sync/stocks`、`/api/sync/ohlcv/all`、`/api/sync/fundamentals`、`/api/sync/calendar`、`/api/sync/dividends`、`/api/sync/splits`、`/api/sync/ingest/*`）描述，与本仓 X1c 的 `/api/sync/jobs|schedules` 不一致；同属待裁的跨仓契约分歧，未改动 core。

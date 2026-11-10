@@ -1,12 +1,12 @@
 ---
 status: active
-last-verified: 2026-11-07
-verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单行访问日志（不接 Prometheus）、降级启动与 503 自愈；真实 PG 恢复腿当晚已补跑（200→503→200 同一进程自愈）
+last-verified: 2026-11-11
+verified-by: 代码-文档对齐审计 —— 23 条路由逐条核对；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
 ---
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-25 更新，QT-40 H4 ②）**：读面 `GET /datasets/resolve` 与 `GET /datasets/{hash}` 已落地；**写面第一条 `POST /ingest/points` 同日落地**（`internal/httpapi/server.go` handler + `internal/assembly` 装配层 + `cmd/dataservice` 接线）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（默认 `market`；物理搬迁完成前设空串走 `public`）；DSN 为空 ⇒ 读面与写面都 fail-closed 503（`/health` 常绿）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
+> **实现状态（2026-10-25 更新，QT-40 H4 ②）**：读面 `GET /datasets/resolve` 与 `GET /datasets/{hash}` 已落地；**写面第一条 `POST /ingest/points` 同日落地**（`internal/httpapi/server.go` handler + `internal/assembly` 装配层 + `cmd/dataservice` 接线）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（compose 出厂值 `market`；设空串回落 `public`，仅作兼容保留，**不是搬迁开关**——本机实例的物理搬迁已于 2026-11-10 执行）；DSN 为空 ⇒ 读面与写面都 fail-closed 503（`/health` 常绿）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 >
 > ⚠️ **写端点已于 2026-11-07 晚在真 PG 上跑过**（便携 PostgreSQL 16.2 @ 55432，`DATA_MARKET_SCHEMA=market`）：同内容两次 `200 {"received":1,"persisted":1,"skipped":0}`；同主键改内容 → `409 content_conflict`；空库/停库时 `503 dependency_unavailable`。此前只有替身 Exec 的测试腿；真库门禁现在由 `internal/store` 的 `DATABASE_URL`-gated PG 套件 + 这次真二进制演练共同覆盖。
 >
@@ -17,13 +17,13 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
 > `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
-> `viewer` 及以上（any-of 写全，不是层级）；**写端点只接受 `service` / `admin`**（见 §1 策略表注）。**全部端点**
+> `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；
 > 无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配 `JWT_SECRET` 或声明容器只在回环发布）。
 
 ## 1. 接口面
 
-> 逐个端点的**参数语义、错误映射、幂等与版本策略**在 `tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §4.1 C 组（M8 接口对表，2026-10-21）。正式 schema 落 core `docs/openapi.yaml`（真相源在 core，QT-50 ③-③），**本文件不复制 openapi**。
+> 逐个端点的**参数语义、错误映射、幂等与版本策略**在 `tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` §4.1 C 组（M8 接口对表，2026-10-21）。正式 schema 名义上落 core `docs/openapi.yaml`（QT-50 ③-③），**本文件不复制 openapi**。⚠️ 2026-11-11 审计发现该 openapi 的 `/api/sync/{path}` 仍按**旧 per-dataset 子路径**（`/api/sync/stocks`、`/api/sync/ohlcv/all`、`/api/sync/ingest/*`…）描述，与 X1c 落地的 `/api/sync/jobs|schedules` 不一致——属待裁的跨仓边，见 `dataflow.md` §5.1。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -75,9 +75,9 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 
 > **鉴权策略表（2026-10-25，裁-15 + H4 ②）**：
 > - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。**G3（2026-11-10）**：6 条只读兼容 GET = `service` + viewer / trader / admin；`POST /api/v1/ohlcv/bulk` = any-authenticated（只读 POST，沿用 REV-17 口径，匿名仍拒）。**X1c 作业层（2026-11-10）**：`GET /api/sync/jobs`、`GET /api/sync/jobs/{id}`、`GET /api/sync/schedules` = `service` + viewer / trader / admin；`POST /api/sync/jobs`、`{id}/cancel`、`{id}/retry`、`schedules/{id}/run` = trader | admin；`POST /api/sync/schedules`、`PUT`、`DELETE`、`{id}/toggle` = admin（沿用 REV-17「排程管理 admin、其余变更 trader」的档位，迁移不重拍）。
-> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`；8 条作业/排程策略已于 X1c（2026-11-10）落地并移入 `servedPolicy`（`{id}` 形状、角色结论不变）⇒ `legacyREV17` 余 19 条**，其余端点仍由 core 提供（`cmd/data`）。保留这张表是为了端点迁移时「同一路由、同一角色」不再重新拍板；守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表。
+> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`；8 条作业/排程策略已于 X1c（2026-11-10）落地并移入 `servedPolicy`（`{id}` 形状、角色结论不变）⇒ `legacyREV17` 余 19 条**。core `cmd/data` 已于 `a96d836`（2026-11-08）删除，这 19 条今天**没有任何进程提供服务**；保留这张表是为了端点迁入时「同一路由、同一角色」不再重新拍板。守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表。
 > - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 23 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 七条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）；作业层 HTTP 行为由 `internal/httpapi/sync_test.go` 覆盖（202/400/404/409/503、空数组、坏 cron、`run` 立即入队）。
-> - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点的调用方凭证**由 core 侧 env 注入（`INGEST_WRITE_*`），不在本仓签发。
+> - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点调用方**：2026-11-08 起 core 已无投点作业（`INGEST_WRITE_*` 随之删除）；作业层 worker 在本仓进程内直接走 `assembly.Pipeline` → `store.BulkInsert`，不经 HTTP 投点。
 
 ### 1.1 服务探针与请求治理（G1，2026-11-07）—— ✅ 代码已落，真实 PG 腿当晚已跑
 
@@ -158,9 +158,9 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 | 角色不足 | ✅ 2026-10-25 | 角色不在策略表（数据面接受 `service` / `viewer` / `trader` / `admin`） | 403 `forbidden`；不重试 |
 | 鉴权闸未装配 | ✅ 2026-10-25 | 进程未装 `Authorizer` | 503 `auth_unavailable`；**拒绝而非放行** |
 | 请求超限 | ✅ 2026-11-07（G1） | 同一身份令牌桶耗尽（默认 50 rps / 突发 200；探针豁免） | 429 `rate_limited` + `Retry-After`；不重试到成功为止，按退避重试 |
-| `ErrDeclarationMissing` | ✅（`tellurion:pkg/data/source/contract.go:66`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
+| `ErrDeclarationMissing` | ✅（`internal/ingest/declaration.go`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
 | `ErrDeclarationInvalid` / `ErrDeclarationMismatch` | ✅（`:67` / `:68`） | 声明非法（枚举 / 缺 `VisibleExpr` / 重复）／声明与数据形态矛盾 | 注册期拒收 |
-| `ErrUnsupported` | ✅（`tellurion:pkg/data/source/adapter.go:73`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
+| `ErrUnsupported` | ✅（`internal/ingest/adapter.go`） | 请求了未登记的数据类型 | 400，不返回空集。**不另造 `ErrUnknownDataType`**（同义哨兵会让 `errors.Is` 分诊两义，见对表 E 组） |
 | `ErrVisibleAtMissing` | ✅（`tellurion-data:internal/normalize/pit.go`） | 数据点缺 `visible_at` | 拒收该批次；**不许用 mtime 兜底**。⚠️ 代价：历史行无该列、不可回填 ⇒ 与 X1d 加列同批设计（对表 T5） |
 | `ErrSnapshotMismatch` | ✅（`tellurion-data:internal/serving/errors.go`） | hash 与返回内容不一致 | 500 + 告警（数据已被篡改或缓存串了）；与「没这个 hash」（404）**必须是两个码** |
 | `ErrMissingParameter` / `ErrInvalidParameter` / `ErrUniverseAmbiguous` / `ErrEmptyUniverse` / `ErrEmptyCalendar` / `ErrEmptyDataVersion` / `ErrUnexpectedSymbol` / `ErrSnapshotNotFound` | ✅（`tellurion-data:internal/serving/errors.go`） | resolve 参数缺失 / 非法 / 票池二义 / 票池为空 / 日历为空 / 数据版本为空 / 越界 symbol；按 hash 取不到 | 400 / 409 / 404 的分诊口径见该文件头注释；哨兵只增不删（**唯一例外**：`ErrFactorNotFound` 随裁-14 撤路由一并删除，不再有第二个「因子读面在本仓」的真相） |
@@ -184,9 +184,9 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 | 类别 | 触发与判据 | HTTP 码 | 是否重试 | 是否落痕 | 调用方该做什么 | 真实用例 / 为什么没有 |
 |---|---|---|---|---|---|---|
 | **PG 不可达** | 拨号失败、SQLSTATE `08`、连接/语句超时、查询中途断开；`internal/store.classifyDependency` 统一折成 `store.ErrDependencyUnavailable` | **503** `dependency_unavailable`（读面与写面同码） | **调用方重试**：指数退避（1s 起，封顶 30s），依赖恢复后同一进程自愈。本仓**不在请求内重试** | 是。访问日志 `status=503`；`/readyz` 的 `error`；降级启动时 `data-service: schema not applied yet ...`，恢复时 `schema applied after retry` | 不要当成 404「没数据」，也不要换源/兜底数据；退避重试，连续失败超过 3 分钟告警。503 **不带** `Retry-After`（恢复时间不可知），与 429 区分 | ✅ 真跑：DSN 指向 `127.0.0.1:5999`（无监听）→ `/datasets/resolve`、`/ingest/points` 均 503 且进程不退出（`docs/runbook.md` §7）；单测 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal`、`TestResolveMapsDependencyUnavailableTo503`、`TestClassifyDependency`、`TestIngestPointsMapsWriteFailuresToCodes/pg_unavailable` |
-| **数据源配额耗尽** | `ingest.ErrRateLimited`（`internal/ingest/adapter.go`）；由传输/connector 在源侧配额用尽时返回 | **无 HTTP 码**：本仓没有任何路由触发取数，`POST /ingest/points` 只收**已归一**的点 | 不在同一源上重试；`Registry.Fetch` **换下一个源一次**（`IsRetryable`）。无备源则原样返回作业层 | **不在本仓**：本仓没有生产取数调用方（传输在 core），故没有请求日志可看；落痕在作业层 | 作业层决定：等配额窗口重置或换源；**不要高频重打**（配额错误重试不会成功，只会把窗口耗得更久） | ✅ 单测 `TestRegistryFetch_QuotaExhaustedFallsBackToNextSource`、`TestRegistryFetch_QuotaExhaustedWithNoFallbackReturnsRateLimited`。**HTTP 面无用例及原因**：没有 HTTP 端点调用 `Registry.Fetch`，造不出这个响应 |
-| **connector 超时** | 出站 HTTP 客户端超时 / 上游 5xx ⇒ `ingest.ErrUpstreamUnavailable`（`internal/ingest/adapter.go`） | **无 HTTP 码**，同上：取数不在本仓 HTTP 面 | 不在同一源上重试；`Registry.Fetch` 换源一次；无备源则返回作业层 | **不在本仓**：超时发生在 core 的传输/作业进程，日志在那边 | 作业层按自己的超时预算重排任务；区分「源慢」与「本仓慢」——本仓的慢看访问日志 `dur_ms` | ✅ 单测 `TestRegistryFetch_FallsBackOnRetryableError`（同一条可重试分诊路径）。**HTTP 面无用例及原因**：同「配额耗尽」，没有路由触发 connector |
-| **内容冲突** | 同主键已存在且全列内容不同（含换源）⇒ `store.ErrContentConflict` | **409** `content_conflict` | **不重试**：同一批重放仍是 409，重试不会消解 | 是。访问日志 `status=409`；错误报文带主键（`600519.SH ohlcv_daily`） | **人工判定**：上游改了历史 vs 口径混了；走受控修正，不许改成自动覆盖（ADR-0004/0006）。修好后重投同一批 | ✅ 单测 `TestIngestPointsMapsWriteFailuresToCodes/content_conflict`；落库层 `TestWriter_DifferentContentFailsLoudAndRollsBack`（整批回滚，不写半批）。真库腿未执行（见 §7） |
+| **数据源配额耗尽** | `ingest.ErrRateLimited`（`internal/ingest/adapter.go`）；由传输/connector 在源侧配额用尽时返回 | **无 HTTP 码**：本仓 HTTP 面没有取数路由，取数由 `/api/sync/jobs*` 的 worker 触发 | 不在同一源上重试；`Registry.Fetch` **换下一个源一次**（`IsRetryable`）。无备源则原样返回作业层 | **在本仓作业层**：`Registry.Fetch` 由 `internal/sync` 的 worker 调用，落痕为 `ingest.sync_jobs.error_message` 与访问日志 | 作业层决定：等配额窗口重置或换源；**不要高频重打**（配额错误重试不会成功，只会把窗口耗得更久） | ✅ 单测 `TestRegistryFetch_QuotaExhaustedFallsBackToNextSource`、`TestRegistryFetch_QuotaExhaustedWithNoFallbackReturnsRateLimited`。**HTTP 面无用例及原因**：没有 HTTP 端点直接调用 `Registry.Fetch`，造不出这个响应 |
+| **connector 超时** | 出站 HTTP 客户端超时 / 上游 5xx ⇒ `ingest.ErrUpstreamUnavailable`（`internal/ingest/adapter.go`） | **无 HTTP 码**，同上：取数不在本仓 HTTP 面 | 不在同一源上重试；`Registry.Fetch` 换源一次；无备源则返回作业层 | **在本仓**：传输与 worker 同进程，落痕为 `ingest.sync_jobs.error_message` | 作业层按自己的超时预算重排任务；区分「源慢」与「本仓慢」——本仓的慢看访问日志 `dur_ms` | ✅ 单测 `TestRegistryFetch_FallsBackOnRetryableError`（同一条可重试分诊路径）。**HTTP 面无用例及原因**：同「配额耗尽」，没有路由触发 connector |
+| **内容冲突** | 同主键已存在且全列内容不同（含换源）⇒ `store.ErrContentConflict` | **409** `content_conflict` | **不重试**：同一批重放仍是 409，重试不会消解 | 是。访问日志 `status=409`；错误报文带主键（`600519.SH ohlcv_daily`） | **人工判定**：上游改了历史 vs 口径混了；走受控修正，不许改成自动覆盖（ADR-0004/0006）。修好后重投同一批 | ✅ 单测 `TestIngestPointsMapsWriteFailuresToCodes/content_conflict`；落库层 `TestWriter_DifferentContentFailsLoudAndRollsBack`（整批回滚，不写半批）。真库腿 2026-11-07 晚已跑（见 §1 注） |
 
 **两个跨类的硬规矩**：
 
@@ -220,7 +220,7 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 | 启动/重放 DDL 单次 | 30s | `schemaStartupTimeout` | 记为失败；数据端点保持 503，10s 后重试 |
 | PG 拨号 | 5s | `internal/store` `connectTimeout` | 503 `dependency_unavailable`（`*pgconn.ConnectError`） |
 | PG 单条语句 | 30s | `internal/store` `statementTimeout`（`statement_timeout=30000`） | SQLSTATE `57014` ⇒ 503 `dependency_unavailable` |
-| 出站 connector | **不在本仓** | 传输在 core；本仓没有出站 HTTP 调用 | —— |
+| 出站 connector | 各传输客户端自带预算（`internal/transport/*`） | 传输与 worker 同进程；HTTP 面不触发取数 | 超时由 connector 返回 `ErrUpstreamUnavailable`，作业记失败（`sync_jobs.error_message`） |
 
 **重试（本仓的答案几乎都是「不重试」）**：
 
@@ -234,7 +234,7 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 
 > **为什么本仓不重试、由作业侧重试**：重试需要三样本仓没有的东西——**任务状态**（同一作业重跑
 > 到哪一步）、**退避与上限**（谁来决定第几次放弃）、**告警归属**（失败该通知谁）。三者都在作业层
-> （今天的 core `cmd/data`，迁入后仍是作业进程）。本仓是**无状态数据面**，只负责一次判定的结果；
+> （本仓 `internal/sync` 的 worker）。本仓是**无状态数据面**，只负责一次判定的结果；
 > 在请求里重试会把「依赖故障」翻译成「请求堆积」，把 503 的可观测性也一起毁掉。
 > 反过来，**启动迁移重试是本仓自己的事**：它没有上游作业可依赖，且必须让进程活到库恢复。
 

@@ -1,6 +1,6 @@
 # tellurion-data
 
-> module: `tellurion-data` ｜ 状态：**X1 施工中** —— `internal/ingest` / `internal/normalize` / `internal/serving` 已落地；HTTP 面（**12 路由** + 鉴权闸：`GET /health`、`GET /readyz`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，以及 **7 条 G3 只读兼容端点** `GET /ohlcv/{symbol}`、`GET /fundamental/{symbol}`、`GET /stocks`、`GET /index/{code}/constituents`、`GET /api/v1/trading/calendar`、`GET /api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`）与取数存储 port 已接线，REV-17 策略已移植（见 `docs/TASKS.md` QT-40 / SVC-DATA-G3）
+> module: `tellurion-data` ｜ 状态：**X1c / X1d 已落地（2026-11-10）** —— `internal/ingest` / `internal/normalize` / `internal/serving` / `internal/store` / `internal/schema` / `internal/transport/tushare` / `internal/sync` 已落地；HTTP 面（**23 路由** + 鉴权闸：`GET /health`、`GET /readyz`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，**7 条 G3 只读兼容端点** `GET /ohlcv/{symbol}`、`GET /fundamental/{symbol}`、`GET /stocks`、`GET /index/{code}/constituents`、`GET /api/v1/trading/calendar`、`GET /api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`，以及 **11 条作业/排程端点** `/api/sync/jobs*`、`/api/sync/schedules*`）与取数存储 port 已接线，REV-17 策略已移植（路由真相源见 `docs/api-schema.md` §1，收口记录见 `docs/archive/tasks-archive-2026-11.md`）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
@@ -13,7 +13,11 @@
 | `internal/ingest` | connector 注册门 + 12 connector 取数/归一化（声明真源 = 各自 `Declarations()`） |
 | `internal/normalize` | 频率聚合（1m → 15m/1d）+ PIT 闸门 |
 | `internal/serving` | aggregator（票池解析 · 取数 · 聚合 · PIT · hash · 缓存） |
-| `internal/httpapi` | HTTP 面（`/health` + `/datasets/*`；全端点鉴权闸） |
+| `internal/store` | 四个取数 port + 写面 `BulkInsert` / `ReferenceWriter` |
+| `internal/schema` | `market` / `ingest` 的 DDL 归属（22 表）+ `visible_at` 三集合 |
+| `internal/transport/tushare` | Tushare 传输（ADR-0007） |
+| `internal/sync` | 作业队列 + 排程 + Worker + Scheduler |
+| `internal/httpapi` | HTTP 面（23 路由；全端点鉴权闸） |
 | `cmd/dataservice` | 进程入口（默认 `:8081`；无 secret 且非回环 → 拒绝启动） |
 | `doc.go` | 根包文档占位（无实现） |
 

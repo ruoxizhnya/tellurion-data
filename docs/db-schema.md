@@ -77,7 +77,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
 
-> **⚠️ 这条红线今天只对两条链成立（2026-10-25 实测，H4 ② 落账）**：`capital_flow` 与 `top_list` 的写入方**只有本仓**（core 的那两条作业改成 `POST /ingest/points`，不再自己 `ON CONFLICT DO UPDATE`）。core 仍是下列表的写者：`ohlcv_daily_qfq`（`tellurion:pkg/storage/ohlcv.go:15,53`）、`sectors` 与 `stock_sector_map`（`tellurion:pkg/storage/sector.go:56,96`），另有两处带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`）。**判点数以 grep 为准，本节不写死的数**（写进去的那个数下一次漂移没人负责）。物理 `SET SCHEMA` 搬迁（D4）因此**仍未解除**：搬走 A 集表会让 core 那三处**无前缀**写点落到 `public` 的新同名表上，悄悄造出两份真相 —— 那一步的前置是「core 的 A 集写点全部归一或停写」，不是「停掉两个 executor」。
+> **✅ 2026-11-10 终局（取代 2026-10-25 的过渡口径）**：core 的数据面写点在 `a96d836`（2026-11-08）随 `pkg/data` / `cmd/data` 整体删除而**归零**（`pkg/storage/ohlcv.go` / `sector.go` / `ingest_raw.go` / `stocks.go` / `calendar.go` 均已删除）；core 非测试代码对 `market.*` / `ingest.*` 的写点只剩裁决 ⑰ 显式留给 core 的 `market.index_daily`（`pkg/storage/index_daily.go`），它不属本仓 22 张表。物理 `SET SCHEMA` 已于 2026-11-10 在本机实例执行（22 表、`public` 归零、`verify.sql` 22/22），详见 §9 与 `docs/archive/x1d-local-replay-2026-11-10.md`。判点数仍以 grep 为准（§9.4 给出可复跑的 grep 口径）。
 
 > **迁移不是改名**：X1d 的头号目标是"单一写者"，不是"统一前缀"。今天多数表无前缀（落默认 schema），搬进 `market` 要动所有读方 —— 分批进行，每批都要过对拍。
 
@@ -95,18 +95,18 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 ## 3. 红线
 
 1. **单一写者**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
-2. **`visible_at` 必填**：缺失即拒收（`ErrVisibleAtMissing`）。它是防前视的**第二道防线**。⚠️ 今天**门与该列都不存在**（对表 E 组实测）⇒ 执法点、加列范围（哪些表在门外）与上线次序全部在 **§6**；不在 §6 的范围里"默认已被这条红线管住"。
+2. **`visible_at` 必填**：缺失即拒收（`ErrVisibleAtMissing`）。它是防前视的**第二道防线**。⚠️ 2026-10-24（X1d）起**门与列都已落地**（`GatePoints` + `VisibleAtStatements()`；PG 回填 2026-11-10 在本机实例执行）；执法点、加列范围（哪些表在门外）与上线次序见 **§6**，不在 §6 的范围里"默认已被这条红线管住"。
 3. **`visible_at` 的锚点必须是"披露日"，不是"报告期截止日"**：财报拿报告期末当锚点 = 把前视洞放回来。
 4. **不许逐 bar / 逐笔远程**：延迟预算不允许；高频路径在 core 进程内。
 5. 归一化在 connector 侧完成，**不许把原始字段泄漏进协议**。
 
 ## 4. 建表与迁移
 
-**现状（必须先知道）**：core 的迁移是「**启动时按序执行一组幂等 DDL**」——唯一真相是 `pkg/storage/postgres.go` 的 `migrationStatements()` 数组（`migrate()` 在服务启动时逐条跑）；**没有版本表、没有 down、没有执行记录**（有意取舍，理由见 core 的 `migrations/README.md`）。`migrations/`（14 个）与 `docs/migrations/`（25 个）里的 `.sql` 是**历史镜像，不执行**——改它们不会改库。
+**现状（必须先知道）**：core 自有的 `quant.*` / `audit.*` / `public.stock_fundamentals` 等迁移仍是「**启动时按序执行一组幂等 DDL**」——唯一真相是 `pkg/storage/postgres.go` 的 `migrationStatements()` 数组（`migrate()` 在服务启动时逐条跑）；**没有版本表、没有 down、没有执行记录**（有意取舍，理由见 core 的 `migrations/README.md`）。`market` / `ingest` 两个 schema **不在此列**（见下一段）。`migrations/`（14 个）与 `docs/migrations/`（25 个）里的 `.sql` 是**历史镜像，不执行**——改它们不会改库。
 
 **X1d 起（2026-10-24）**：`market` / `ingest` 两个 schema 的 DDL 归属已落到本仓 `internal/schema`（`Statements()` / `VisibleAtStatements()` / `BackfillStatements()`）。执行机制沿用 core 式 ①：有序幂等语句数组 + 启动时执行，不引入迁移库。
 
-- **目标态**：本仓的数组是唯一真相；core 的内联数组在物理搬迁（D4）完成前仍是运行期事实，**这段双份是已登记的过渡状态**，不是新写者。
+- **目标态（2026-11-10 已达成）**：本仓的数组是唯一真相；core 的内联数组已随 `a96d836`（2026-11-08）删除（core 只剩自己拥有的 `stock_fundamentals` / `market.index_daily` 等），双份过渡状态结束。
 - **不许做的**：在本仓数组里静默 `ALTER TABLE ... SET SCHEMA`（§1 注：迁移不是改名）；也不许把 `visible_at` 直接写进 `CREATE TABLE`（列必须走独立的加列腿，否则目标侧与今天侧的列会各自长出来）。
 - **X1d 物理搬迁脚本（2026-11-10）**：`migrations/0001_x1d_set_schema.sql`（另有 `.down.sql` / `.verify.sql`），单事务、幂等；目标空壳可删，**目标副本有行即报错中止**（绝不静默合并）。22 张表的清单与 `schema.TableNames()` 由 `TestMigrationTableListMatchesSchema` 钉住（三份脚本都要对得上）。它**不进** `Statements()`——迁移是运维动作，不是建表。演练（Docker PostgreSQL 16.15）：22 表搬迁、`public` 归零、探针行保留、非空冲突整体回滚（`public` 仍 22 表）、重跑 22 条 skip、`down` 还原 22 表且行数不变。**本地系统实例已执行（2026-11-10）**：系统 PostgreSQL 16.15（服务 `postgresql-x64-16`，`127.0.0.1:5432`）修复 `pg_hba.conf` 的 UTF-8 BOM 后启动；`tellurion` 库按删除前清单 DROP + 重建 → 68 条 DDL / 22 张表 → `0001` 22 条 skip → `verify.sql` 22/22 `ok`、`public_state` 全空 → 回填 12 条（空表 0 行、哨兵 12）→ 幂等复跑 + `-tags backfill` 套件全 PASS。取证见 `docs/archive/system-pg-init-2026-11-10.md`。**仍未做**：任何远端/生产实例零动作（按约定执行者是运维）。
 
@@ -130,6 +130,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 ## 6. `visible_at` 加列与历史行回填（对表 T5，2026-10-22 定）
 
+> **状态更新（2026-10-24 / 2026-11-10）**：本节是 2026-10-22 的设计起点；门与列均已于 X1d 落地并在本机实例回填。判据与次序仍有效，"今天不存在"只描述立节时的状态。
 > **要解决的矛盾**（不是"要不要做"，是"顺序错了会静默坏数据"）：`ErrVisibleAtMissing` 这道门**今天不存在**（§3 红线 2 是目标），而**已落库的行没有任何一列承载可见时刻**。门与列必须同批设计，否则门一上线就把历史数据全判违规（core 对表 §6 风险节的原话）。
 > 本节只定**范围、规则、次序与判据**；执行属 X1b/X1d，DDL 文本今天仍只在 core 内联数组里（§4 已述）。
 
@@ -198,7 +199,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 3. 覆盖面要如实登记：B 集与 C 集里「门拦不到」的每一条，都要有一条测试或一条显式豁免，**不许靠"门在 ETL 上"这句话默认全覆盖**。
 4. **已落的测试证据（2026-10-24，G4）**：整批拒收 —— `TestWriter_RejectsWholeBatchWithoutVisibleAt`、`TestETLProcess_MissingVisibleAnchorRejectsWholeBatchWithoutWriting`、PG 腿 `TestPG_BulkInsert_RejectsBatchWithoutVisibleAt`；B 集拒写 —— `TestWriter_RejectsTablesOutsideASet`、PG 腿 `TestPG_BulkInsert_RejectsBSetType`；同 hash 重写 —— `TestWriter_SameContentRewriteIsNoOp` / `TestPG_BulkInsert_IsIdempotentOnSameContent`，异内容 —— `TestWriter_DifferentContentFailsLoudAndRollsBack` / `TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch`。**破坏验证**：把 `store.BulkInsert` 的 `VisibleAt` 判空短路（`if false && …`）⇒ 整批拒收用例红；逐字节还原后绿（SHA256 一致）。
 5. **回填测试证据（2026-10-24，P6，仅测试库）**：`TestBackfillSuite_TestDatabaseOnly`（`-tags backfill`）PASS —— A 集 12 张回填后无 NULL 且逐档取值符合 §6.3/§6.4（after_close 显式 15:00 北京、锚点列、`ingest_time`、`created_at`），哨兵逐条对账且二次执行不改值，B 集 `as_of` 不改写、C 集无 `visible_at`；临时 schema 跑完即删。**生产 DSN 自动 skip**由 `TestBackfillTestDSN_ProductionDatabaseIsSkippedNotRun` 钉住（只读 `DATA_TEST_DSN`，库名须 `_test`）。**破坏验证**：`057a` 改成 `SET visible_at = trade_date` ⇒ 禁止第四档用例 + 测试库取值/零点两条断言红；逐字节还原后绿（SHA256 一致）。
-6. **写面经 HTTP 的覆盖面（2026-10-25，H4 ②）**：`POST /ingest/points` 的 A 集门与 `ON CONFLICT DO NOTHING` 语句形状由 `internal/httpapi/points_test.go:TestIngestPointsThroughRealWriter` 在**真 `store.Writer`** 上钉住（B 集 `daily_basic` / C 集 `fundamentals` 过闸门后仍被写面拒收，且一条 INSERT 都没发出；A 集 `ohlcv_daily` 发出的 SQL 含 `visible_at` 列）。「缺 `visible_at` 整批不落」在装配层另有一条独立腿（`internal/assembly`：`TestWriteRejectsWholeBatchWithoutAnchorAndNeverCallsStore`）。⚠️ **诚实边界**：这两条都不连库 —— 真 SQL 作用在真表上的腿仍只有 `internal/store` 的 `DATABASE_URL`-gated PG 套件；写端点**没有被端到端真跑过一次**。
+6. **写面经 HTTP 的覆盖面（2026-10-25，H4 ②）**：`POST /ingest/points` 的 A 集门与 `ON CONFLICT DO NOTHING` 语句形状由 `internal/httpapi/points_test.go:TestIngestPointsThroughRealWriter` 在**真 `store.Writer`** 上钉住（B 集 `daily_basic` / C 集 `fundamentals` 过闸门后仍被写面拒收，且一条 INSERT 都没发出；A 集 `ohlcv_daily` 发出的 SQL 含 `visible_at` 列）。「缺 `visible_at` 整批不落」在装配层另有一条独立腿（`internal/assembly`：`TestWriteRejectsWholeBatchWithoutAnchorAndNeverCallsStore`）。⚠️ **诚实边界（2026-11-10 更新）**：上述单测不连库；真 SQL 腿由 `internal/store` 的 `DATABASE_URL`-gated PG 套件覆盖，写端点已于 2026-11-07 晚在真 PG（便携 16.2）上端到端跑过（同内容 200 / 改内容 409 / 停库 503），见 `api-schema.md` §1 注。
 
 ## 7. K3 十张「有表无写者」的处置（SVC-DATA-G2 ③③，2026-11-07）
 
@@ -226,15 +227,17 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 **三句话钉死口径**：
 
-1. **出厂值是 `market`**：`tellurion-data:deploy/compose.yaml:32`（`DATA_MARKET_SCHEMA: market`），`cmd/dataservice/main.go:124` 只把它交给 `store.Options.MarketSchema`。
-2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`（`cmd/dataservice/main.go:194-204`），`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store/store.go:76-83` 与 `internal/store/write.go:97-104` 回落为 `public`（注释写明是「D4 物理搬迁完成前的过渡值」，`internal/store/store.go:60-62`）。
-3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只剩一张**——core 显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`，**该表连 DDL 都由 core 持有**，本仓不建，见裁决 ⑰）。`ingest.raw` 曾也是例外（core 旧 `pkg/storage/ingest_raw.go:62` 带前缀写），但该文件随 `a96d836`（2026-11-08）数据面退役整体删除，今天 core 对 `ingest.raw` 零写点；本仓的 `ingest.raw` 因此是**零写者**（见 §9）。
+1. **出厂值是 `market`**：`deploy/compose.yaml` 的 `DATA_MARKET_SCHEMA: market`；`cmd/dataservice/main.go` 只把它交给 `store.Options.MarketSchema`。
+2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`，`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store` 的标识符拼装处回落为 `public`（注释写明是兼容 D4 之前的过渡值）。
+3. ~~core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`~~ **（2026-11-08 起不再成立）**：core 的数据面写点已随 `a96d836` 全部删除；本机实例 2026-11-10 已执行 `SET SCHEMA`，`public` 侧 22 张同名表归零。今天 `DATA_MARKET_SCHEMA=market` 与 core 之间只剩 `market.index_daily`（裁决 ⑰：core 自带 schema 前缀，DDL 也在 core，本仓不建不读）。`ingest.raw` 在 core 侧零写点，本仓也仍是零写者（见 §9）。
 
 **物理 `SET SCHEMA` 搬迁的前置 = core 停写**（不是「本仓 DDL 先建好」）：
 
+> **2026-11-10 状态**：前置已满足（core 写点归零），搬迁已在本机实例执行；下面三条保留为可复用的搬迁纪律，不再代表待办。
+
 - 只要 core 还在用裸表名写，把 `public.x` 搬进 `market.x` 之后，core 的下一次启动迁移/写入会再次解析到 `public.x`（或再次 `CREATE TABLE IF NOT EXISTS x`），结果不是报错就是**悄悄长出第二份同名表**——两种都与「单一 writer」相反。
 - 因此搬迁顺序只能是：**core 写点归零/删除 → 确认无裸名写 → 再 `SET SCHEMA`**。core 侧那一半是 `tellurion:SVC-CORE-DATA-RETIRE`（本仓不改 core 写点，见 G2 ④）。
-- `DATA_MARKET_SCHEMA` 在代码里保留「空 = public」只是为了让过渡期能指向今天的位置；**它不是搬迁开关**：切这个变量不搬任何一行数据，也不改变 DDL 落点。出厂 compose 始终写 `market`（目标态），运维不要用改环境变量来代替 `SET SCHEMA`。
+- `DATA_MARKET_SCHEMA` 在代码里保留「空 = public」只是兼容保留；**它不是搬迁开关**：切这个变量不搬任何一行数据，也不改变 DDL 落点。出厂 compose 始终写 `market`，运维不要用改环境变量来代替 `SET SCHEMA`。
 
 ## 9. 逐表 writer / reader 清单（SVC-DATA-G3 ③，2026-11-10）
 
@@ -261,7 +264,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.global_ohlcv` | 同上 | 无 |
 | `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写；含 `delist_date`，见 ADR-0009 决策二） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
-| `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /ingest/jobs*`） |
+| `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /api/sync/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
 
 > 参考数据的解析契约（`stock_basic` / `trade_cal` 字段形状、缺列 fail-closed）由 `internal/sync/reference_contract_test.go` + `testdata/*.json` 钉住；2026-11-11 已用 `TUSHARE_TOKEN` 线上核对（L 5580 行 / D 343 行 / `trade_cal` 4 列），**未**走过生产部署后的作业级写入。
