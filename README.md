@@ -39,6 +39,7 @@ docker compose -f deploy/compose.yaml down
 - `deploy/compose.yaml` 自带 `postgres`（`pg_isready` 健康检查）；`data` 用 `depends_on.condition=service_healthy` 等它就绪后再起。
 - 宿主端口 `8081`；`DATABASE_URL` / `DATA_MARKET_SCHEMA=market` / `JWT_SECRET` 已在 compose 内配好。连外部库时用 `DATA_DATABASE_URL=...` 覆盖。
 - 镜像多阶段构建（`golang:1.25-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/health`。
+- 取数传输（ADR-0008）：`TUSHARE_TOKEN` 有值才装 Tushare（点位作业 + `stocks` / `trading_calendar` 参考数据作业）；东财客户端无凭证恒装配；`ALPHA_VANTAGE_KEY` 有值才启用 Alpha Vantage。无 token 时取数作业在作业行上响亮失败（不会静默写 0 行）。
 
 > 起服务：默认 `:8081`（全网卡）且无 `JWT_SECRET` 会被启动闸**拒绝**（不允许无鉴权数据面暴露）。
 > 本地开发用 `-addr 127.0.0.1:8081`；容器形态必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published` 或配 `JWT_SECRET`。

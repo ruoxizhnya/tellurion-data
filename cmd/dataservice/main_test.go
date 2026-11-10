@@ -92,9 +92,16 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 	src := readOwnSource(t)
 	for _, want := range []string{
 		"store.NewWriter(store.PoolWriteDB(pool), opts)",
-		"transports.Tushare = tushare.NewDefault(token)",
+		"tushareClient = tushare.NewDefault(token)",
 		"assembly.Registry(transports)",
 		"assembly.New(registry, writer, nil)",
+		// 传输多门（QT-40）：东财无凭证恒装配；Alpha Vantage 从环境变量取 key。
+		"Eastmoney:       ingest.NewEastmoneyClient()",
+		"AlphaVantageKey: strings.TrimSpace(os.Getenv(\"ALPHA_VANTAGE_KEY\"))",
+		// 参考数据腿（stocks / trading_calendar）：只在本跳接线；漏了则这两类
+		// 作业以 misconfigured 失败（不是静默成功）。
+		"store.NewReferenceWriter(store.PoolWriteDB(pool), opts)",
+		"runner.Reference = &syncjob.ReferenceRunner{",
 		"httpapi.WithPoints(points)",
 		"httpapi.WithReadiness(readinessCheck(pool))",
 		// 作业层（X1c 的调度那一半）同样只在本跳接线：队列没挂上则

@@ -49,6 +49,12 @@ verified-by: SVC-DATA-G4 —— 失败语义四类、超时/重试边界、单�
 | POST | `/api/sync/schedules/{id}/toggle` | **排程**：翻转 `is_active`；激活时从当前时刻推进 `next_run_at` |
 | POST | `/api/sync/schedules/{id}/run` | **排程**：立即入队一次（不改 `next_run_at`）⇒ 202 `{job_id, next_run_at}` |
 
+> **`job_type` 的两个保留字面值（2026-11-10，ADR-0008）**：除 data_type 外，`stocks` 与 `trading_calendar` 是**参考数据作业**，走 `ReferenceRunner` 的 upsert 腿（`market.stocks` / `market.trading_calendar`），**不经过**点位闸门与 `FetchRequestFromParams` 的 data_type 校验。
+> - `stocks`：`params` 可给 `exchange`（空 = 全市场）、`list_status`（空 = `L` 上市中；退市要单独跑 `D`）。
+> - `trading_calendar`：`params` 可给 `exchange`（空 = `SSE`）、`start_date` / `end_date`（空 = 当年；需要历史必须显式给区间）。
+> - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这两类作业以 `misconfigured` 失败（不会静默写 0 行）。
+
+
 内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。`POST /ingest/points` 走的是**同一条链的后半段**（从 `ValidatePoints` 起），投影与次序在 `internal/assembly`——两条入口共享一条链，不是两份实现（ADR-0006）。
 
 > **`POST /ingest/points` 的三条硬规矩**（都在 `internal/assembly`，handler 只做编码与分诊）：

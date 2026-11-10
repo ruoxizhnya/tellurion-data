@@ -52,8 +52,8 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 > **红线**：热读路径**仅供 run 前一次快照预加载**（回测启动前取完全区间进引擎快照），**禁止在回测循环内调用**——策略运行时不得直查数据面（`tellurion:docs/SPEC.md`「快照预加载，不许运行时查询」）。
 
 ### 入库（写路径，冷）
-1. 触发：`POST /api/sync/jobs`（在 **core**，或调度器按 `sync_schedules` 投递）→ `sync_jobs` → worker 领取 → executor → ETL（下面 2–6 步）
-   - **跨仓形态（H4 起，capital_flow / top_list 两条）**：core 的 executor 只跑 2–3 步（取数 + 归一），然后把点位 `POST /ingest/points` 投进本仓，**4–6 步在本仓进程内执行**。判据是「闸门与幂等在落库那一侧」——投送方不该能声明「我这批是可见的」。
+1. 触发：`POST /api/sync/jobs`（本仓作业层；调度器按 `sync_schedules` 投递）→ `sync_jobs` → worker 领取 → executor → ETL（下面 2–6 步）
+   - **历史形态（H4，capital_flow / top_list）**：core 的 executor 只跑 2–3 步（取数 + 归一），再 `POST /ingest/points` 投进本仓——该形态已随 core `pkg/data` 退役（`a96d836`，2026-11-08）消失。今天 2–6 步都在本仓进程内；`POST /ingest/points` 保留为「别人取数、本仓落库」的接缝，走同一条链的后半段（ADR-0006）。判据不变：闸门与幂等在落库那一侧。
 2. connector 取数（`ingest.Registry.Fetch`：按 data_type 的链依次尝试，可重试错误换源、不可重试立即返回、disabled 跳过）→ 声明 `TimeSemantics` / `FrequencySpec`
 3. `Normalizer` 映射成 `UnifiedDataPoint`（`ingest_time` 由 pipeline 时钟统一填；载荷为 nil 的点只计入 `skipped`）
 4. `ValidatePoints` 拒收形态不合法（缺 symbol / trade_time / data）
@@ -61,7 +61,16 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 6. `Deduplicate` 按幂等坐标（symbol + data_type + trade_time）去重 → `store.BulkInsert` 写 A 集表：`ON CONFLICT DO NOTHING` + 内容比对（排除易变列 `ingest_time`）；同内容 no-op、同主键异内容 `ErrContentConflict` 整批回滚；B/C 集 data_type 拒写（`ErrWriteTableNotInASet` / `ErrUnmappedDataType`）。`persisted` 口径 = **请求点已就位**（新插入 + 同内容 no-op），不是新增行数
 
 > **红线**：同步 HTTP 端点**不得承载无界批量**——无界批量一律走作业层（`POST /api/sync/jobs` → `sync_jobs` → worker → executor → ETL，`tellurion:docs/SPEC.md` DATA-10）；HTTP 灌数入口只许单次有界任务（DATA-12：以「没有无界批量问题」为前提）。
-> **这条红线现在执法在本仓**（2026-10-25，H4 ②）：`POST /ingest/points` 有 `assembly.MaxPointsPerRequest = 10000` 与 8 MiB 报文上限两道门，超限**整批拒收 413**，既不截断也不「写前 N 条」。代价如实登记：调用方（core 的作业层）必须按上界分片，一片一个请求，于是一次作业跨请求失败时**已落的那片不回滚**——作业层的「整池一次」原子性从来就不在跨仓这一侧，读 `sync_jobs.error_message` 时要按分片理解。
+> **这条红线现在执法在本仓**（2026-10-25，H4 ②）：`POST /ingest/points` 有 `assembly.MaxPointsPerRequest = 10000` 与 8 MiB 报文上限两道门，超限**整批拒收 413**，既不截断也不「写前 N 条」。代价如实登记：调用方必须按上界分片，一片一个请求，于是一次作业跨请求失败时**已落的那片不回滚**——作业层的「整池一次」原子性从来就不在跨仓这一侧，读 `sync_jobs.error_message` 时要按分片理解。
+
+### 参考数据（旁路点位链，ADR-0008）
+`stocks` / `trading_calendar` 是 C 集参照表（无 `visible_at`、无 data_type 声明），不走上图，走一条短链：
+
+1. `POST /api/sync/jobs` 或排程以**保留 job_type**（`stocks` / `trading_calendar`）入队；
+2. `Runner.Execute` 在 `FetchRequestFromParams` **之前**分流给 `ReferenceRunner`（参考数据作业不会掉进点位管线）；
+3. `ReferenceTransport` 取数（`stock_basic` / `trade_cal`）→ `store.ReferenceWriter` 用 `ON CONFLICT` upsert：**后到者覆盖可变列**，不做内容比对整批回滚。
+
+它不经过 `ValidatePoints` / `GatePoints` / `Deduplicate` / `BulkInsert`。参照表的语义是「后到者覆盖」而不是「历史不可改」，硬套点位闸门只会把合法的名称/状态变更判成冲突。
 
 ## 3. 失败模式（每一处 fail-closed 都要能指名）
 

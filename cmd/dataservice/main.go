@@ -182,9 +182,16 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 
 	// 取数链：`TUSHARE_TOKEN` 有值才装真传输；否则注册表只有声明，作业会被
 	// connector 判成 disabled 并在作业行上响亮失败（不会静默写 0 行）。
-	transports := ingest.Transports{}
+	// 东财 HTTP 客户端无凭证，恒装配；Alpha Vantage 仅在 key 有值时启用
+	// （Juchao / Xueqiu / Yahoo 自带默认端点，由 connector 恒启用）。
+	transports := ingest.Transports{
+		Eastmoney:       ingest.NewEastmoneyClient(),
+		AlphaVantageKey: strings.TrimSpace(os.Getenv("ALPHA_VANTAGE_KEY")),
+	}
+	var tushareClient *tushare.Client
 	if token := strings.TrimSpace(os.Getenv("TUSHARE_TOKEN")); token != "" {
-		transports.Tushare = tushare.NewDefault(token)
+		tushareClient = tushare.NewDefault(token)
+		transports.Tushare = tushareClient
 	}
 	registry, err := assembly.Registry(transports)
 	if err != nil {
@@ -209,9 +216,25 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		return nil, nil, err
 	}
 	jobCtx, stopJobs := context.WithCancel(context.Background())
+	runner := syncjob.NewRunner(assembly.Pipeline(registry, writer, nil))
+	// 参考数据腿（`stocks` / `trading_calendar`）：也归 Tushare。没有 token 时
+	// 不装配——这类作业会以 misconfigured 响亮失败，而不是掉进点位管线。
+	if tushareClient != nil {
+		referenceWriter, refErr := store.NewReferenceWriter(store.PoolWriteDB(pool), opts)
+		if refErr != nil {
+			stopJobs()
+			stopRetry()
+			pool.Close()
+			return nil, nil, refErr
+		}
+		runner.Reference = &syncjob.ReferenceRunner{
+			Transport: tushareClient,
+			Writer:    referenceWriter,
+		}
+	}
 	worker := &syncjob.Worker{
 		Store:  queue,
-		Runner: syncjob.NewRunner(assembly.Pipeline(registry, writer, nil)),
+		Runner: runner,
 		ID:     workerID,
 		Logger: log.Default(),
 	}

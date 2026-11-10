@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-10
-verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compose/e2e/k8s/checker 让 data-service 真正拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`（checker 新增 5e；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）。跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证（X1d 当时未执行，G3 与 QT-40 曾转 ⛔）；2026-11-10 主任授权清空本机库后，用便携 PostgreSQL 16.2 在 `127.0.0.1:55433` scratch 实例重放 X1d 全流程（68 条 DDL → 22 表反向搬到 public + 合成历史行 → 0001 迁移 22 移、public 归 0 → verify 22/22 ok → 回填 12 条：A 集 NULL 归 0、哨兵 12 → 幂等复跑 22 skip、回填值不变 → `-tags backfill` 套件 7/7），G3 转 ✅、QT-40 转 🔶（X1d 已闭，剩 `ingest.raw` 归档 / 仅 Tushare 一门传输 / 7 张零写者），证据 `docs/archive/x1d-local-replay-2026-11-10.md`；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）；系统实例初始化（2026-11-10）：`pg_hba.conf` 去 BOM + `postgresql-x64-16` 启动 + `tellurion` 库 DROP/重建 + 68 DDL/22 表/verify 22-22/回填 12 哨兵，证据 `docs/archive/system-pg-init-2026-11-10.md`
+verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compose/e2e/k8s/checker 让 data-service 真正拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`（checker 新增 5e；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）。跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证（X1d 当时未执行，G3 与 QT-40 曾转 ⛔）；2026-11-10 主任授权清空本机库后，用便携 PostgreSQL 16.2 在 `127.0.0.1:55433` scratch 实例重放 X1d 全流程（68 条 DDL → 22 表反向搬到 public + 合成历史行 → 0001 迁移 22 移、public 归 0 → verify 22/22 ok → 回填 12 条：A 集 NULL 归 0、哨兵 12 → 幂等复跑 22 skip、回填值不变 → `-tags backfill` 套件 7/7），G3 转 ✅、QT-40 转 🔶（X1d 已闭，剩 `ingest.raw` 归档 / 仅 Tushare 一门传输 / 7 张零写者）；同日终扫按 ADR-0008 收口 QT-40 ✅（东财 / Alpha Vantage 接线，`stocks` / `trading_calendar` 补参考数据写者；`ingest.raw`、Mootdx 与 `dividends` / `splits` / `index_constituents` / `market_activity` 四张零写者表 ⏸ 挂起，各带重开条件），证据 `docs/archive/x1d-local-replay-2026-11-10.md`；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）；系统实例初始化（2026-11-10）：`pg_hba.conf` 去 BOM + `postgresql-x64-16` 启动 + `tellurion` 库 DROP/重建 + 68 DDL/22 表/verify 22-22/回填 12 哨兵，证据 `docs/archive/system-pg-init-2026-11-10.md`
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -115,7 +115,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 > - **清理**：便携演练集群 `%TEMP%\pgdata_x1d_replay`（73.0 MB，含库 `tellurion_x1d_replay` / `tellurion_test`）已删；`%TEMP%\x1d_seed.sql` 已删；临时库 `tellurion_data_test` 保留为本仓在册 `DATA_TEST_DSN` 夹具。
 > - **边界（如实）**：只动本机 `127.0.0.1:5432`，远端/生产零动作；`tellurion` 库内其它域（`quant.*` / `audit.*` / `research.*` / `run.*` / `public.users` 等）随整库 DROP 一并消失，由各自服务启动 DDL 重建，本轮未逐域复核。**本条不改变 QT-40 的三项剩余缺口**。
 
-### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶（2026-11-10 解除 X1d 阻塞；剩三项缺口）
+### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ✅（2026-11-10 收口；三缺口逐条处置见下方「终扫处置」）
 
 > **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
 
@@ -189,6 +189,24 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 > - **状态订正（2026-11-10 晚，X1d 执行后）**：X1d 前置已解除（本地实例全流程重放，证据 `docs/archive/x1d-local-replay-2026-11-10.md`），故本单由 ⛔ 转 🔶。仍然**不翻 ✅**：本单「未落项」里还有 `ingest.raw` 归档面、仅 Tushare 一门传输（`Transports.Mootdx` 空接口）、7 张零写者表（`docs/db-schema.md` §9）—— 把整单标 ✅ 会把这三项从台账上抹掉。
 > - **因此本单剩余工作 = 传输/归档/零写者三块**（X1d 已不再是前置）；三项各自完成后才评估收口。
 
+
+**三缺口终扫处置（2026-11-10；裁决与落点见 ADR-0008）**
+
+> 上方 2026-11-10 复核里「本条不翻 ✅ / 剩余工作 = 传输/归档/零写者三块」的口径，已被本表逐条取代：能做的做了，不值得做的按挂起落账（每条带重开条件），不留悬空开放项。
+
+| 缺口 | 处置前现状 | 推荐路径与代价 | 结论 |
+|---|---|---|---|
+| `ingest.raw` 归档面 | core 退役时随 `pkg/data` 删除；本仓 `Transports` 是解析后窄接口，没有 raw 字节通道；表零写者、零读者、无保留期 | 补归档 = 改传输接口加 raw sink + 保留期/脱敏/容量口径 + 至少一个回放消费者；代价高、当前零消费者 | **⏸ 挂起**（不搬）。重开条件：出现回放/审计取证消费者时另立单，单内必须同时给保留期、脱敏与容量上限；今天生产取数不留 raw（与处置前一致，已书面化） |
+| 传输多门 | 仅 `TUSHARE_TOKEN` 装配 Tushare；东财客户端代码在仓内但未接线；Juchao/Xueqiu/Yahoo 自带默认端点、connector 恒启用；Alpha Vantage 需 key；Mootdx 无实现（`Transports.Mootdx` 空接口，需 TDX TCP 协议/SDK） | 东财无凭证、一行接线 ⇒ 值得；Alpha Vantage 一行 env ⇒ 值得；Mootdx 需自研二进制协议或引 SDK + 柜台网络/账号，且当前无分钟线/实时消费方 ⇒ 不值得 | **东财 + Alpha Vantage 已接线**（`cmd/dataservice`）；**Mootdx ⏸ 挂起**，重开条件：出现分钟线/实时行情消费方 + 选定 SDK 并验证网络可达 |
+| 7 张零写者表 | `stocks` / `trading_calendar` / `index_constituents` / `dividends` / `splits` / `market_activity` / `ingest.raw` 无 writer（`docs/db-schema.md` §9） | `stocks` / `trading_calendar` 有读端点（G3 七条兼容端点依赖）且 Tushare 取数面已在 ⇒ 值得，走参考数据 upsert；`index_constituents` 需多期快照推导 in/out 区间、无消费者 ⇒ 不值得；`dividends` / `splits` 无消费者、无 connector ⇒ 不值得；`market_activity` 属 B 集 `as_of` 语义、补写者另属一设计且无消费者 ⇒ 不值得 | **`stocks` + `trading_calendar` 已补写者**（作业类型 `stocks` / `trading_calendar`，见 `docs/api-schema.md` §4）；其余 4 张 **⏸ 挂起**：`index_constituents` 重开 = 确定指数集与来源后另立单；`dividends` / `splits` 重开 = 公司行为/复权消费方出现；`market_activity` 重开 = B 集读消费者出现 |
+
+**本笔落地（代码 + 文档）**
+
+- 传输：`cmd/dataservice` 装配 `ingest.NewEastmoneyClient()`（无凭证，恒启用）与 `ALPHA_VANTAGE_KEY`（有值才启用）；Tushare 仍由 `TUSHARE_TOKEN` 控制。
+- 参考数据：`internal/ingest/reference.go`（`ReferenceTransport` 窄口 + `TradingDay`）→ `internal/transport/tushare/calendar.go`（`trade_cal`，按列名定位、`is_open` 1/0 与字符串两种都认）→ `internal/store/reference_write.go`（`ON CONFLICT` upsert，空串/0/零值折 NULL，冲突时 `COALESCE` 保住已有值）→ `internal/sync/reference.go`（`stocks` / `trading_calendar` 两个保留 job_type，旁路点位闸门）→ `Runner.Reference` 分流。
+- **为什么旁路 ETL（不是给 data_type 加两行）**：这两张是 C 集参照表（无 `visible_at`、无 data_type 声明），点位闸门的「整批 PIT + 幂等内容比对」对它们不成立；参考数据的语义是「后到者覆盖可变列」。详见 `docs/adr/0008-参考数据同步与传输多门.md`。
+- **门禁（真实输出，2026-11-10）**：`gofmt -l .` 空、`go vet ./...` 退出码 0、`go test ./... -count=1` 11 个包全 `ok`（含新增 `calendar_test.go` 4 条、`reference_write_test.go` 3 条、`reference_test.go` 5 条，以及 `TestComposeRootWiresTheWriteFace` 新增 4 段装配钉住）。
+- **未执行（如实）**：没有 `TUSHARE_TOKEN`，参考数据作业只验证了「无 token ⇒ `reference sync is not wired ... misconfigured`」的失败路径；真库 upsert 未跑（本机 PG 在跑，但缺 token 拿不到真实 `stock_basic` / `trade_cal` 响应）。upsert SQL 的 ON CONFLICT 语义由 store 单测钉住参数与空值折 NULL。
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 

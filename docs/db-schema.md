@@ -243,7 +243,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 > `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 22 张**）。
 > core `cmd/data` / `pkg/data` 已于 `a96d836`（2026-11-08）整体删除；`Test-Path cmd/data` / `Test-Path pkg/data` 均为 False。
 
-### 9.1 有本仓写者的表（14 张）
+### 9.1 有本仓写者的表（16 张）
 
 | 表 | 本仓写者 | 本仓读方 |
 |---|---|---|
@@ -259,20 +259,20 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.news` | 同上 | 无 |
 | `market.hot_search` | 同上 | 无 |
 | `market.global_ohlcv` | 同上 | 无 |
+| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
+| `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert） | `GET /api/v1/trading/calendar` |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /ingest/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
 
-### 9.2 零写者的表（7 张 + 1 张哨兵）
+### 9.2 零写者的表（5 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
 
-| 表 | 本仓写者 | 本仓读方 | 说明 |
+| 表 | 本仓写者 | 本仓读方 | 处置（2026-11-10） |
 |---|---|---|---|
-| `market.stocks` | **无** | `GET /stocks`、`GET /api/v1/stocks/{symbol}` | K3「补写者」项；core 旧写者已随数据面退役删除 |
-| `market.dividends` | 无 | 无 | 同上 |
-| `market.splits` | 无 | 无 | 同上 |
-| `market.trading_calendar` | 无 | `GET /api/v1/trading/calendar` | 同上 |
-| `market.index_constituents` | 无 | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定 | 同上 |
-| `market.market_activity` | 无 | 无 | B 集；`daily_basic` 传输已取数但写面被 `writeExcludedTypes` 排除；core 旧写入已删 |
-| `ingest.raw` | 无 | 无 | core `pkg/storage/ingest_raw.go` 已删（`a96d836`）；本仓传输是窄接口、无归档 sink（QT-40 登记） |
+| `market.dividends` | 无 | 无 | ⏸ 挂起：无消费者、无 connector。重开 = 公司行为/复权消费方出现 |
+| `market.splits` | 无 | 无 | ⏸ 挂起：同上 |
+| `market.index_constituents` | 无 | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定 | ⏸ 挂起：Tushare `index_weight` 只给周期快照权重，`in_date/out_date` 区间需多期快照推导；当前无消费者驱动。重开 = 确定指数集与来源后另立单 |
+| `market.market_activity` | 无 | 无 | ⏸ 挂起：B 集（`as_of` 语义）；`daily_basic` 传输可取数但写面被 `writeExcludedTypes` 排除，补 B 集写者属另一设计。重开 = B 集读消费者出现 |
+| `ingest.raw` | 无 | 无 | ⏸ 挂起：core `pkg/storage/ingest_raw.go` 已删（`a96d836`）；本仓传输是窄接口、无归档 sink。重开 = 出现回放/审计取证消费者，且单内给出保留期/脱敏/容量上限 |
 | `ingest.data_migrations` | 仅 `schema.BackfillStatements()` 哨兵（`-tags backfill`，运维执行） | 回填 guard | 不是日常写者，不计入上表 |
 
 ### 9.3 与本仓相关但不属 22 张的两张表
@@ -285,7 +285,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 ### 9.4 结论
 
 - **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
-- **但「唯一 writer」≠「已有 writer」**：7 张表今天零写者（`stocks` / `dividends` / `splits` / `trading_calendar` / `index_constituents` / `market_activity` / `ingest.raw`），`ingest.raw` 的归档面也未搬。这些在 QT-40 / K3 登记为后续单，**不写成本笔已完成**。
-- **读方覆盖**：5 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `sync_jobs` / `sync_schedules`）；其余 15 张中 10 张 A 集只写不读、4 张零写零读、1 张回填哨兵。
+- **零写者已从 7 张降到 5 张（2026-11-10 终扫）**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008）；剩余 `dividends` / `splits` / `index_constituents` / `market_activity` / `ingest.raw` 全部登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
+- **读方覆盖**：7 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `sync_jobs` / `sync_schedules`）；其余 15 张中 10 张 A 集只写不读、4 张挂起零写零读、1 张回填哨兵。
 - **X1d 物理 `SET SCHEMA` + `visible_at` 回填已在本机实例执行（2026-11-10）**：22 张目标表搬迁、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑通过（`docs/archive/x1d-local-replay-2026-11-10.md`）；未接触远端/生产库。
 

@@ -41,6 +41,9 @@ func PassthroughNormalizer(item ingest.DataItem, source, dataType string) ingest
 // Runner 执行单个作业。
 type Runner struct {
 	Executor Executor
+	// Reference 处理参考数据作业（`stocks` / `trading_calendar`）。nil ⇒ 这类
+	// 作业报 misconfigured，而不是掉进点位管线被当成「未声明的 data_type」。
+	Reference *ReferenceRunner
 }
 
 // NewRunner 构造执行器；executor 为 nil 时 Execute 返回 ErrMisconfigured。
@@ -48,10 +51,22 @@ func NewRunner(executor Executor) *Runner { return &Runner{Executor: executor} }
 
 // Execute 跑一个作业并返回管线计数。
 //
+// 参考数据作业（`IsReferenceJobType`）在参数解析之前分流：它们不是 data_type，
+// 走的是 `ReferenceRunner` 的 upsert 腿（见 `reference.go`）。
+//
 // 参数不合法（`FetchRequestFromParams` 失败）不会触达任何上游——这类失败
 // 重试一万次也一样，worker 会把它记成 failed 而不是重试。
 func (r *Runner) Execute(ctx context.Context, job Job) (ingest.ProcessResult, error) {
-	if r == nil || r.Executor == nil {
+	if r == nil {
+		return ingest.ProcessResult{}, ErrMisconfigured
+	}
+	if IsReferenceJobType(job.JobType) {
+		if r.Reference == nil {
+			return ingest.ProcessResult{}, fmt.Errorf("%w: reference sync is not wired (job_type %q)", ErrMisconfigured, job.JobType)
+		}
+		return r.Reference.Execute(ctx, job)
+	}
+	if r.Executor == nil {
 		return ingest.ProcessResult{}, ErrMisconfigured
 	}
 	req, err := FetchRequestFromParams(job.JobType, job.Params)

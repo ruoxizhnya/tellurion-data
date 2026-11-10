@@ -19,6 +19,7 @@ import (
 
 type fakeExecutor struct {
 	mu      sync.Mutex
+	calls   int
 	req     ingest.FetchRequest
 	norm    ingest.Normalizer
 	result  ingest.ProcessResult
@@ -29,6 +30,7 @@ type fakeExecutor struct {
 func (f *fakeExecutor) Process(ctx context.Context, req ingest.FetchRequest, normalizer ingest.Normalizer) (ingest.ProcessResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	f.req = req
 	f.norm = normalizer
 	return f.result, f.err
