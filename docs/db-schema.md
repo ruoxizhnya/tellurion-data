@@ -72,7 +72,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
 | `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
-| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 本地实例执行，见 `docs/archive/x1d-local-replay-2026-11-10.md`） |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 便携演练见 `docs/archive/x1d-local-replay-2026-11-10.md`；系统实例 `127.0.0.1:5432` 同日按新结构整库重建，见 `docs/archive/system-pg-init-2026-11-10.md`） |
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
@@ -108,7 +108,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 - **目标态**：本仓的数组是唯一真相；core 的内联数组在物理搬迁（D4）完成前仍是运行期事实，**这段双份是已登记的过渡状态**，不是新写者。
 - **不许做的**：在本仓数组里静默 `ALTER TABLE ... SET SCHEMA`（§1 注：迁移不是改名）；也不许把 `visible_at` 直接写进 `CREATE TABLE`（列必须走独立的加列腿，否则目标侧与今天侧的列会各自长出来）。
-- **X1d 物理搬迁脚本（2026-11-10）**：`migrations/0001_x1d_set_schema.sql`（另有 `.down.sql` / `.verify.sql`），单事务、幂等；目标空壳可删，**目标副本有行即报错中止**（绝不静默合并）。22 张表的清单与 `schema.TableNames()` 由 `TestMigrationTableListMatchesSchema` 钉住（三份脚本都要对得上）。它**不进** `Statements()`——迁移是运维动作，不是建表。演练（Docker PostgreSQL 16.15）：22 表搬迁、`public` 归零、探针行保留、非空冲突整体回滚（`public` 仍 22 表）、重跑 22 条 skip、`down` 还原 22 表且行数不变。**生产执行未做**：本机 PG 的 `pg_hba.conf` 损坏（BOM），恢复字节需主任批准；且按约定执行者是运维。
+- **X1d 物理搬迁脚本（2026-11-10）**：`migrations/0001_x1d_set_schema.sql`（另有 `.down.sql` / `.verify.sql`），单事务、幂等；目标空壳可删，**目标副本有行即报错中止**（绝不静默合并）。22 张表的清单与 `schema.TableNames()` 由 `TestMigrationTableListMatchesSchema` 钉住（三份脚本都要对得上）。它**不进** `Statements()`——迁移是运维动作，不是建表。演练（Docker PostgreSQL 16.15）：22 表搬迁、`public` 归零、探针行保留、非空冲突整体回滚（`public` 仍 22 表）、重跑 22 条 skip、`down` 还原 22 表且行数不变。**本地系统实例已执行（2026-11-10）**：系统 PostgreSQL 16.15（服务 `postgresql-x64-16`，`127.0.0.1:5432`）修复 `pg_hba.conf` 的 UTF-8 BOM 后启动；`tellurion` 库按删除前清单 DROP + 重建 → 68 条 DDL / 22 张表 → `0001` 22 条 skip → `verify.sql` 22/22 `ok`、`public_state` 全空 → 回填 12 条（空表 0 行、哨兵 12）→ 幂等复跑 + `-tags backfill` 套件全 PASS。取证见 `docs/archive/system-pg-init-2026-11-10.md`。**仍未做**：任何远端/生产实例零动作（按约定执行者是运维）。
 
 **本仓约定**（从建仓第一天执行）：
 
