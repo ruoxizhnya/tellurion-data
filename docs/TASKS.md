@@ -208,7 +208,8 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 - 参考数据：`internal/ingest/reference.go`（`ReferenceTransport` 窄口 + `TradingDay`）→ `internal/transport/tushare/calendar.go`（`trade_cal`，按列名定位、`is_open` 1/0 与字符串两种都认）→ `internal/store/reference_write.go`（`ON CONFLICT` upsert，空串/0/零值折 NULL，冲突时 `COALESCE` 保住已有值）→ `internal/sync/reference.go`（`stocks` / `trading_calendar` 两个保留 job_type，旁路点位闸门）→ `Runner.Reference` 分流。
 - **为什么旁路 ETL（不是给 data_type 加两行）**：这两张是 C 集参照表（无 `visible_at`、无 data_type 声明），点位闸门的「整批 PIT + 幂等内容比对」对它们不成立；参考数据的语义是「后到者覆盖可变列」。详见 `docs/adr/0008-参考数据同步与传输多门.md`。
 - **门禁（真实输出，2026-11-10）**：`gofmt -l .` 空、`go vet ./...` 退出码 0、`go test ./... -count=1` 11 个包全 `ok`（含新增 `calendar_test.go` 4 条、`reference_write_test.go` 3 条、`reference_test.go` 5 条，以及 `TestComposeRootWiresTheWriteFace` 新增 4 段装配钉住）。
-- **未执行（如实）**：没有 `TUSHARE_TOKEN`，参考数据作业只验证了「无 token ⇒ `reference sync is not wired ... misconfigured`」的失败路径；真库 upsert 未跑（本机 PG 在跑，但缺 token 拿不到真实 `stock_basic` / `trade_cal` 响应）。upsert SQL 的 ON CONFLICT 语义由 store 单测钉住参数与空值折 NULL。
+- **真库腿（真实输出，2026-11-10）**：`DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable` 跑 `go test ./internal/store -run TestReferenceWriter_PG` → **2/2 PASS**（`UpsertStocksOverwritesAndPreservesUnknowns`：二次 upsert 覆盖名称/状态、缺字段不擦已有值、`market_cap` 0 保持 NULL；`UpsertTradingDaysOverwritesOpenFlag`：按 `trade_date` 覆盖 `is_trading_day` 且不重复行）。隔离用临时 schema，跑完 `DROP SCHEMA CASCADE`。
+- **未执行（如实）**：没有 `TUSHARE_TOKEN`，参考数据作业只验证了「无 token ⇒ `reference sync is not wired ... misconfigured`」的失败路径；真实 `stock_basic` / `trade_cal` 响应未取。upsert SQL 本身已由上面的真库腿证明，不再只是单测。
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 
