@@ -69,6 +69,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 1. `POST /api/sync/jobs` 或排程以**保留 job_type**（`stocks` / `trading_calendar`）入队；
 2. `Runner.Execute` 在 `FetchRequestFromParams` **之前**分流给 `ReferenceRunner`（参考数据作业不会掉进点位管线）；
 3. `ReferenceTransport` 取数（`stock_basic` / `trade_cal`）→ `store.ReferenceWriter` 用 `ON CONFLICT` upsert：**后到者覆盖可变列**，不做内容比对整批回滚。
+4. **字段契约 fail-closed**：`stock_basic` 必填 `ts_code` / `symbol` / `name` / `list_date` / `delist_date`，`trade_cal` 必填 `cal_date` / `is_open`；缺列或改名 ⇒ `ErrTransportDataQuality`，作业在开事务前失败（不会把退市票静默写成 `active`，也不会把整天静默写成非交易日）。多余列显式忽略。fixture 与线上核对见 `internal/sync/testdata/` + `internal/sync/reference_contract_test.go`。
 
 它不经过 `ValidatePoints` / `GatePoints` / `Deduplicate` / `BulkInsert`。参照表的语义是「后到者覆盖」而不是「历史不可改」，硬套点位闸门只会把合法的名称/状态变更判成冲突。
 

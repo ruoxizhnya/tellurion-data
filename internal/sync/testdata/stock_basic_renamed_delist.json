@@ -1,0 +1,10 @@
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "fields": ["ts_code", "symbol", "name", "industry", "list_date", "delist_dt", "area", "market", "is_hs"],
+    "items": [
+      ["600001.SH", "600001", "退市样本", "钢铁", "19970101", "20200101", "上海", "主板", "N"]
+    ]
+  }
+}

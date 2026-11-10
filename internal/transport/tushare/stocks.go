@@ -37,19 +37,40 @@ func (c *Client) FetchStocks(ctx context.Context, exchange, listStatus string) (
 	if err != nil {
 		return nil, err
 	}
-	return c.normalizeStocks(resp), nil
+	// 契约：官方响应必须带这 5 列（2026-11-11 线上核对：L/D 两种查询均返回
+	// 完整 9 列，空值以空串出现）。缺列 = 改名或形状变故，fail-closed。
+	if err := requireFields(resp, "ts_code", "symbol", "name", "list_date", "delist_date"); err != nil {
+		return nil, err
+	}
+	stocks, skipped := c.normalizeStocks(resp)
+	if len(resp.Data.Items) > 0 && len(stocks) == 0 {
+		return nil, dataQuality("stock_basic 返回 %d 行但一行都没能归一（跳过 %d 行）",
+			len(resp.Data.Items), skipped)
+	}
+	return stocks, nil
 }
 
-// normalizeStocks 把 stock_basic 响应转成 market.Stock。
-func (c *Client) normalizeStocks(resp *response) []market.Stock {
+// normalizeStocks 把 stock_basic 响应转成 market.Stock；返回 (行, 跳过行数)。
+//
+// 列按名字定位而不是固定下标：线上 `list_status=D` 的响应里 `area` /
+// `industry` / `market` 可以是空串，但 fields 头仍是 9 列——按名取才不会
+// 因列序变化把 list_date 读成 delist_date。`area` / `market` / `is_hs`
+// 是**故意忽略**的多余列（本仓不落库）。
+func (c *Client) normalizeStocks(resp *response) ([]market.Stock, int) {
+	tsIdx := columnIndex(resp, "ts_code")
+	symIdx := columnIndex(resp, "symbol")
+	nameIdx := columnIndex(resp, "name")
+	indIdx := columnIndex(resp, "industry")
+	listIdx := columnIndex(resp, "list_date")
+	delistIdx := columnIndex(resp, "delist_date")
+
 	out := make([]market.Stock, 0, len(resp.Data.Items))
+	skipped := 0
 	for _, item := range resp.Data.Items {
-		if len(item) < 9 {
-			continue
-		}
-		tsCode := tushareCell(item, 0)
-		symbol := tushareCell(item, 1)
+		tsCode := tushareCell(item, tsIdx)
+		symbol := tushareCell(item, symIdx)
 		if tsCode == "" && symbol == "" {
+			skipped++
 			continue
 		}
 		useSymbol := tsCode
@@ -59,28 +80,36 @@ func (c *Client) normalizeStocks(resp *response) []market.Stock {
 
 		stock := market.Stock{
 			Symbol:   useSymbol,
-			Name:     tushareCell(item, 2),
+			Name:     tushareCell(item, nameIdx),
 			Exchange: extractExchange(useSymbol),
-			Industry: tushareCell(item, 4),
+			Industry: tushareCell(item, indIdx),
 			Status:   "active",
 		}
-		if listDate := tushareCell(item, 6); listDate != "" {
-			if t, err := time.Parse("20060102", listDate); err == nil {
-				stock.ListDate = t
+		if listDate := tushareCell(item, listIdx); listDate != "" {
+			t, err := time.Parse("20060102", listDate)
+			if err != nil {
+				// 日期非空但不可解析 = 脏行；静默写 NULL 会把「上市日未知」
+				// 混进历史票池，跳过并由调用方按「全跳过」判数据质量。
+				skipped++
+				continue
 			}
+			stock.ListDate = t
 		}
-		if delistDate := tushareCell(item, 7); delistDate != "" {
-			if t, err := time.Parse("20060102", delistDate); err == nil {
-				d := t
-				stock.DelistDate = &d
-				if !d.After(c.now()) {
-					stock.Status = "delisted"
-				}
+		if delistDate := tushareCell(item, delistIdx); delistDate != "" {
+			t, err := time.Parse("20060102", delistDate)
+			if err != nil {
+				skipped++
+				continue
+			}
+			d := t
+			stock.DelistDate = &d
+			if !d.After(c.now()) {
+				stock.Status = "delisted"
 			}
 		}
 		out = append(out, stock)
 	}
-	return out
+	return out, skipped
 }
 
 // FetchDailyOHLCV 取某票区间的**前复权**日线。

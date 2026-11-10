@@ -202,6 +202,13 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 | 传输多门 | 仅 `TUSHARE_TOKEN` 装配 Tushare；东财客户端代码在仓内但未接线；Juchao/Xueqiu/Yahoo 自带默认端点、connector 恒启用；Alpha Vantage 需 key；Mootdx 无实现（`Transports.Mootdx` 空接口，需 TDX TCP 协议/SDK） | 东财无凭证、一行接线 ⇒ 值得；Alpha Vantage 一行 env ⇒ 值得；Mootdx 需自研二进制协议或引 SDK + 柜台网络/账号，且当前无分钟线/实时消费方 ⇒ 不值得 | **东财 + Alpha Vantage 已接线**（`cmd/dataservice`）；**Mootdx ⏸ 挂起**，重开条件：出现分钟线/实时行情消费方 + 选定 SDK 并验证网络可达 |
 | 7 张零写者表 | `stocks` / `trading_calendar` / `index_constituents` / `dividends` / `splits` / `market_activity` / `ingest.raw` 无 writer（`docs/db-schema.md` §9） | `stocks` / `trading_calendar` 有读端点（G3 七条兼容端点依赖）且 Tushare 取数面已在 ⇒ 值得，走参考数据 upsert；`index_constituents` 需多期快照推导 in/out 区间、无消费者 ⇒ 不值得；`dividends` / `splits` 无消费者、无 connector ⇒ 不值得；`market_activity` 属 B 集 `as_of` 语义、补写者另属一设计且无消费者 ⇒ 不值得 | **`stocks` + `trading_calendar` 已补写者**（作业类型 `stocks` / `trading_calendar`，见 `docs/api-schema.md` §4）；其余 4 张 **⏸ 挂起**：`index_constituents` 重开 = 确定指数集与来源后另立单；`dividends` / `splits` 重开 = 公司行为/复权消费方出现；`market_activity` 重开 = B 集读消费者出现 |
 
+**残余风险修复（2026-11-11，data / contracts 四项）**
+
+| 项 | 判断 | 落地 | 状态 |
+|---|---|---|---|
+| ① 参考数据解析契约 | **真实风险**：固定下标 + 无 `fields` 校验，缺列/改名会把退市票静默写成 `active`、把整天静默写成非交易日 | `tushare.requireFields`（缺列 ⇒ `ErrTransportDataQuality`）；`normalizeStocks` 改按列名；`internal/sync/reference_contract_test.go` + `testdata/*.json` 钉「官方形状 → 结构体 → upsert 参数」；缺列/改名 0 条 Exec；多余列忽略；`.BJ → BSE` 修正 | **✅ 完成**。线上核对（2026-11-11，真实 token）：`stock_basic` L 5580 行 / D 343 行（9 列，`delist_date` 空串），`trade_cal` 4 列 10 行（`is_open` 数字 1/0）；`TUSHARE_ONLINE=1` 的可选用例 `TestLiveReferenceShapes` PASS |
+
+
 **本笔落地（代码 + 文档）**
 
 - 传输：`cmd/dataservice` 装配 `ingest.NewEastmoneyClient()`（无凭证，恒启用）与 `ALPHA_VANTAGE_KEY`（有值才启用）；Tushare 仍由 `TUSHARE_TOKEN` 控制。
@@ -209,7 +216,7 @@ verified-by: core 部署面同日修复（2026-11-10）：`tellurion` 的 compos
 - **为什么旁路 ETL（不是给 data_type 加两行）**：这两张是 C 集参照表（无 `visible_at`、无 data_type 声明），点位闸门的「整批 PIT + 幂等内容比对」对它们不成立；参考数据的语义是「后到者覆盖可变列」。详见 `docs/adr/0008-参考数据同步与传输多门.md`。
 - **门禁（真实输出，2026-11-10）**：`gofmt -l .` 空、`go vet ./...` 退出码 0、`go test ./... -count=1` 11 个包全 `ok`（含新增 `calendar_test.go` 4 条、`reference_write_test.go` 3 条、`reference_test.go` 5 条，以及 `TestComposeRootWiresTheWriteFace` 新增 4 段装配钉住）。
 - **真库腿（真实输出，2026-11-10）**：`DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable` 跑 `go test ./internal/store -run TestReferenceWriter_PG` → **2/2 PASS**（`UpsertStocksOverwritesAndPreservesUnknowns`：二次 upsert 覆盖名称/状态、缺字段不擦已有值、`market_cap` 0 保持 NULL；`UpsertTradingDaysOverwritesOpenFlag`：按 `trade_date` 覆盖 `is_trading_day` 且不重复行）。隔离用临时 schema，跑完 `DROP SCHEMA CASCADE`。
-- **未执行（如实）**：没有 `TUSHARE_TOKEN`，参考数据作业只验证了「无 token ⇒ `reference sync is not wired ... misconfigured`」的失败路径；真实 `stock_basic` / `trade_cal` 响应未取。upsert SQL 本身已由上面的真库腿证明，不再只是单测。
+- **未执行（如实）**：没有 `TUSHARE_TOKEN`，参考数据作业只验证了「无 token ⇒ `reference sync is not wired ... misconfigured`」的失败路径；真实 `stock_basic` / `trade_cal` 响应未取。upsert SQL 本身已由上面的真库腿证明，不再只是单测。**（2026-11-11 补：token 可用，真实响应已核，见上方「残余风险修复」①。）**
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 

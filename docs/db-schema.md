@@ -259,10 +259,12 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.news` | 同上 | 无 |
 | `market.hot_search` | 同上 | 无 |
 | `market.global_ohlcv` | 同上 | 无 |
-| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
-| `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert） | `GET /api/v1/trading/calendar` |
+| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
+| `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写） | `GET /api/v1/trading/calendar` |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /ingest/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
+
+> 参考数据的解析契约（`stock_basic` / `trade_cal` 字段形状、缺列 fail-closed）由 `internal/sync/reference_contract_test.go` + `testdata/*.json` 钉住；2026-11-11 已用 `TUSHARE_TOKEN` 线上核对（L 5580 行 / D 343 行 / `trade_cal` 4 列），**未**走过生产部署后的作业级写入。
 
 ### 9.2 零写者的表（5 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
 

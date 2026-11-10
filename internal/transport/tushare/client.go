@@ -351,6 +351,8 @@ func extractExchange(tsCode string) string {
 			return "SSE"
 		case ".SZ":
 			return "SZSE"
+		case ".BJ":
+			return "BSE"
 		}
 	}
 	return strings.Split(tsCode, ".")[0]
@@ -381,4 +383,25 @@ func columnIndex(resp *response, name string) int {
 		}
 	}
 	return -1
+}
+
+// requireFields 校验响应头包含全部必填列；缺一列即数据质量失败。
+//
+// 为什么 fail-closed：按名取不到列时 `tushareCell` 返回空串，于是
+// `stock_basic` 会把退市票静默写成 active、`trade_cal` 会把整天静默写成
+// 非交易日——错的是语义，作业却显示成功。缺列/改名只能响亮失败。
+//
+// 只校验**语义必需**列：可选列（`area`/`market`/`industry`/`exchange`）缺了
+// 写 NULL 或回落到入参是合法语义，不在此列。
+func requireFields(resp *response, names ...string) error {
+	var missing []string
+	for _, name := range names {
+		if columnIndex(resp, name) < 0 {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return dataQuality("响应缺少必填列 %v（fields=%v）", missing, resp.Data.Fields)
+	}
+	return nil
 }

@@ -1,0 +1,10 @@
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "fields": ["exchange", "cal_date", "pretrade_date"],
+    "items": [
+      ["SSE", "20261109", "20261106"]
+    ]
+  }
+}

@@ -39,6 +39,12 @@ func (c *Client) FetchTradeCalendar(ctx context.Context, exchange string, start,
 	if err != nil {
 		return nil, err
 	}
+	// 契约：cal_date / is_open 缺一不可（2026-11-11 线上核对：SSE 响应恒为
+	// exchange,cal_date,is_open,pretrade_date 四列，is_open 是 JSON 数字 0/1）。
+	// `exchange` 是可选项：缺列时回落到入参。
+	if err := requireFields(resp, "cal_date", "is_open"); err != nil {
+		return nil, err
+	}
 
 	days, skipped := normalizeTradeCalendar(resp, exchange)
 	if len(resp.Data.Items) > 0 && len(days) == 0 {

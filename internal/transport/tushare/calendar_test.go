@@ -93,3 +93,17 @@ func TestFetchTradeCalendar_EmptyResponseIsZeroRows(t *testing.T) {
 		t.Fatalf("got %d days, want 0", len(days))
 	}
 }
+
+// 缺 is_open ⇒ 不能把整日静默判成非交易日。
+func TestFetchTradeCalendar_MissingIsOpenIsDataQuality(t *testing.T) {
+	c, _ := newClient(t, func(string) ([]string, [][]any) {
+		return []string{"exchange", "cal_date", "pretrade_date"}, [][]any{
+			{"SSE", "20261109", "20261106"},
+		}
+	})
+
+	_, err := c.FetchTradeCalendar(context.Background(), "SSE", time.Time{}, time.Time{})
+	if !errors.Is(err, ingest.ErrTransportDataQuality) {
+		t.Fatalf("err = %v, want ErrTransportDataQuality", err)
+	}
+}
