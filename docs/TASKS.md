@@ -100,6 +100,7 @@ verified-by: 跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader �
 > - **解除前置（运维，非 agent）**：按序执行 `migrations/0001_x1d_set_schema.sql` → `verify.sql` → `visible_at` 回填（`-tags backfill`，`BackfillStatements()`）→ `verify.sql`，把两份 verify 输出归档到 `docs/archive/`；完成后本单 ⑤ 才全绿。
 > - **为什么不翻 ✅**：四条判据仅差 X1d 一条，但该条是 ⑤ 的字面要求，且是物理搬迁的生产动作；按约定不把未执行写成已完成。
 > - **附带订正（同一笔文档）**：`docs/db-schema.md` §8 原写「例外只有两张」并引用 core `pkg/storage/ingest_raw.go`——该文件已随 `a96d836` 删除，本轮改为「例外只剩 `market.index_daily` 一张」，并注明 `ingest.raw` 今天在 core 与本仓都是零写者。
+> - **⑤ 之外的部署遗留（本轮新发现，未修，如实登记）**：core `docker-compose.yml` 的 `data-service` 块仍是旧形态——`build: { dockerfile: Dockerfile.service }`（该文件自 `a96d836` 起只构建 analysis/worker/dualrun，**已不产出 `/app/data-service`**）、`command: ["/app/data-service"]`（与数据仓镜像的 `ENTRYPOINT` 叠加会把二进制路径当参数再传一遍）、env 全是 core 旧 viper 键（`DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_USER` / `DATABASE_DATABASE` / `DATABASE_PASSWORD`），而数据服务只读 `DATABASE_URL` / `DATA_MARKET_SCHEMA` / `TUSHARE_TOKEN` / `JWT_SECRET`。修它要连带改 `tellurion:tools/check_deploy_consistency.py`（`:121` 的 `DATABASE_HOST` 断言、`:312` 的跨仓镜像特判）并复跑检查，属 core 仓部署面；核心台账 `SVC-CORE-DATA-RETIRE` 已注明「归 SVC-DATA-G3」。本轮因计划限定本仓零代码改动、且 Docker daemon 不可达无法验证容器腿而未做，登记为 G3 剩余**可执行**项（与 X1d 的运维阻塞不同）。
 
 ### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ⛔
 
