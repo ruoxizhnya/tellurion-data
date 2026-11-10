@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-10
-verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。此前：G3 ⑤ + X1c/X1d 退役后复核（core 写点仅剩 ⑰ 的 `market.index_daily`、`cmd/data`/`pkg/data` 已删、对拍 md5 一致；发现 core 退役把传输实现一并删掉而本仓禁区不许自持传输 ⇒ 生产取数链无执行者，登记待裁）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
+verified-by: 跨仓收口复核（2026-11-10）：G3 ③ 逐表 writer/reader 清单补进 `docs/db-schema.md` §9（22 张 + 两张相关表 + 7 张零写者），对拍证据归档 `docs/archive/x1d-parity-report-2026-11-10.md`，⑤ 四条判据逐条取证后 G3 与 QT-40 一并转 ⛔（唯一未满足前置 = X1d 生产 `SET SCHEMA` + `visible_at` 回填，属运维；本机 PG 服务 Stopped 且禁止改 `pg_hba.conf`，Docker 不可达）；同时订正 §8 关于 core `ingest.raw` 写点的过期表述。此前：X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -48,7 +48,7 @@ verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/tr
 > - **验收（真实输出，2026-11-07）**：`docker compose -f deploy/compose.yaml config -q` → **EXIT=0**；`go build ./...` → **EXIT=0**；`go.mod` 无 `replace`（0 行）、无 `go.work`；真实二进制 + 真库（便携 PG 16.2 `127.0.0.1:55432`、库 `tellurion_data_test`、`DATA_MARKET_SCHEMA=market`，监听 `127.0.0.1:18092`）→ `GET /health` `200 {"status":"ok"}`、`GET /readyz` `200 {"status":"ready","store":"postgres"}`。
 > - **未执行（如实）**：`docker compose up --build`（本机 Docker 引擎未起，`docker version` 客户端 27.4.1-rd / daemon 不可达）；容器内跑通属容器腿，不影响本单 ⑤ 的三条书面判据。
 
-### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] 🔶
+### SVC-DATA-G3 · 切读 / 停写与 core 旧实现退役（ADR-036）[P0] ⛔
 
 - **① 目标**：`market.*` / `ingest.*` 的唯一 writer 变成本仓；core 不再写行情/同步表，旧 `pkg/data` / `cmd/data` 删除。
 - **② 上下文**：`X1d`（QT-40）已规划「消灭第二写者」，但今天 core 仍持约 20 张裸表与生产写入；本仓 `POST /ingest/points` 只覆盖 `capital_flow` / `top_list` 两条作业。
@@ -85,7 +85,23 @@ verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/tr
 > - **⑥ 仍未做（不翻 ✅）**：X1d 的物理 `SET SCHEMA`（生产迁移）与 `visible_at` 生产回填（运维动作）——两者都不是 agent 可自行执行的生产写；X1d 行仍 🔶，故本单保持 🔶。
 > - **⑦ 收尾**：测试库 `tellurion_data_test` 用完即删，进程已停；本仓代码与门禁零改动。
 
-### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] 🔶
+**收口复核（2026-11-10，状态 🔶 → ⛔；本仓代码零改动）**
+
+> 判据来源 = ⑤ 四句话，逐条给证据；**未满足的一条是唯一阻塞项**。
+>
+> | ⑤ 判据 | 状态 | 证据 |
+> |---|---|---|
+> | core 侧 `market.*` / `ingest.*` 写点 = 0 | ✅ | 本轮复跑 `git grep -nE '(INSERT INTO\|UPDATE\|DELETE FROM\|TRUNCATE)[[:space:]]+(market\|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（⑰ 的 `market.index_daily`，不属本仓 22 张）；`Test-Path cmd/data` / `Test-Path pkg/data` 均 False |
+> | `cmd/data` 删除或只剩只读代理 | ✅ | `cmd/data`、`pkg/data` 目录均不存在（`a96d836`，2026-11-08） |
+> | 新旧行数/校验对拍报告归档 | ✅ | `docs/archive/x1d-parity-report-2026-11-10.md`（行数 / md5 / sum 校验 + 7 条端点回执 + core 写点 grep） |
+> | `X1d` 关闭 | ❌ | 生产物理 `SET SCHEMA` 与 `visible_at` 回填是运维动作；本机 `postgresql-x64-16` 服务 Stopped 且 `pg_hba.conf` 为 BOM 损坏，用户明令禁止 agent 改该文件；Docker daemon 不可达 ⇒ 无法在本轮执行或重跑 |
+>
+> - **③ 逐表 writer/reader 清单已补**：`docs/db-schema.md` §9（22 张逐行 + `market.index_daily` / `stock_fundamentals` 两张相关表 + 「7 张零写者」结论）。
+> - **解除前置（运维，非 agent）**：按序执行 `migrations/0001_x1d_set_schema.sql` → `verify.sql` → `visible_at` 回填（`-tags backfill`，`BackfillStatements()`）→ `verify.sql`，把两份 verify 输出归档到 `docs/archive/`；完成后本单 ⑤ 才全绿。
+> - **为什么不翻 ✅**：四条判据仅差 X1d 一条，但该条是 ⑤ 的字面要求，且是物理搬迁的生产动作；按约定不把未执行写成已完成。
+> - **附带订正（同一笔文档）**：`docs/db-schema.md` §8 原写「例外只有两张」并引用 core `pkg/storage/ingest_raw.go`——该文件已随 `a96d836` 删除，本轮改为「例外只剩 `market.index_daily` 一张」，并注明 `ingest.raw` 今天在 core 与本仓都是零写者。
+
+### QT-40 · X1 数据服务（统一协议 + aggregator + `dataset_snapshot_hash`）[P1] ⛔
 
 > **迁入说明（2026-10-21）**：本单自 core 仓 `tellurion:docs/TASKS.md`「五、X 线」迁入（任务台账批量重分布：X 线单展开到各服务仓为正式六字段单，「占位仓不写正式任务单」旧约定同时作废）。六字段正文逐字保留、不改写；core 侧同号条目已改为指针。
 
@@ -143,6 +159,19 @@ verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/tr
 | 4 · 幂等与回滚 | ✅ 重跑 up = 22 条 `skip`、退出码 0；`down` 后 `public` 恢复 22 表、探针行仍 1 行 | 上述均为真实命令输出 |
 
 **生产执行未做（不假装完成）**：本机 PostgreSQL 16.15 服务起不来——`C:\Program Files\PostgreSQL\16\data\pg_hba.conf` 被写成 UTF-8 BOM（前 3 字节）+ 尾部多 2 字节 `0D 0A`，postmaster 拒绝加载。恢复字节与「在生产库跑 `SET SCHEMA` + `visible_at` 回填」都**已获主任授权内容**，但写回该文件被权限系统拦截、且需先停服务，属运维动作 ⇒ **停在「脚本就绪 + 演练通过」，未碰生产库**。执行顺序（待执行）：① 恢复 `pg_hba.conf` 并启库 → ② `psql "$DATABASE_URL" -f migrations/0001_x1d_set_schema.sql` → ③ `-f ...verify.sql` 留证 → ④ 跑 `schema.BackfillStatements()`（`data_migrations` 哨兵防重放）→ ⑤ 复跑 `verify.sql` 归档报告 → ⑥ X1d 关闭、G3 转 ✅。
+
+**收口复核（2026-11-10，状态 🔶 → ⛔；本仓代码零改动）**
+
+> - **⑤ 三条判据逐条点名（均有现存用例，且 2026-11-10 单仓 `go test ./... -count=1` 全绿）**：
+>   | ⑤ 判据 | 用例 | 断言 |
+>   |---|---|---|
+>   | 同一 hash 两次拉取返回一致 | `internal/serving/aggregator_test.go:TestResolve_IsDeterministicAndEchoesMetadata` + `internal/httpapi/server_test.go:TestResolveIsIdempotentAcrossRequests` / `TestSnapshotSameHashReturnsByteIdenticalBody` | 同一请求两次 `Hash` 相同；`/datasets/{hash}` 响应逐字节一致 |
+>   | 漏声明 `visible_at` 的源被拒收 | `TestResolve_RejectsBatchWithMissingVisibleAt`（+ `TestResolve_PITDropsBarsNotYetVisible`） | 整批拒收，不静默置空 |
+>   | 改日历 / 复权口径 → hash 变 | `TestResolve_HashCoversEveryFrozenComponent` 的 `calendar` / `adjustment` 两个子用例（另有 `TestMetadata_HashUsesContractsDefinition` 钉契约定义） | 六个冻结分量任一变化 ⇒ `dataset_snapshot_hash` 必须变且不撞哈希 |
+> - **③ 五项实现事实**：协议进 contracts `v0.6.0`（别名，无本地镜像）；`ErrVisibleAtMissing` 等错误码在 `internal/ingest`；aggregator（PIT + 聚合 + universe + hash + 缓存）在 `internal/serving`；`calendar_hash` / `adjustment_basis` 属六分量；18 条声明 / 15 个 data_type 由守卫用例钉住。
+> - **为什么不翻 ✅**：X1d 是本单 X1a~X1d 序列的最后一环，其生产 `SET SCHEMA` 与 `visible_at` 回填仍未执行（同 G3 的 ⛔）。⑤ 虽已满足，但 ② 明列 X1d 且本单的「未落项」里还有 `ingest.raw` 归档、仅 Tushare 一门传输、7 张零写者表（见 `docs/db-schema.md` §9）；把整单标 ✅ 会把这三项从台账上抹掉。
+> - **因此本单 ⛔ 的前置 = X1d 运维执行（同上）+ 传输/归档面后续单**；两条都解除后再评估是否拆单收口。
+
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 

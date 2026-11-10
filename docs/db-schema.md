@@ -228,11 +228,64 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 1. **出厂值是 `market`**：`tellurion-data:deploy/compose.yaml:32`（`DATA_MARKET_SCHEMA: market`），`cmd/dataservice/main.go:124` 只把它交给 `store.Options.MarketSchema`。
 2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`（`cmd/dataservice/main.go:194-204`），`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store/store.go:76-83` 与 `internal/store/write.go:97-104` 回落为 `public`（注释写明是「D4 物理搬迁完成前的过渡值」，`internal/store/store.go:60-62`）。
-3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只有两张**——core 已显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`，**该表连 DDL 都由 core 持有**，本仓不建，见裁决 ⑰）与 `ingest.raw`（`tellurion:pkg/storage/ingest_raw.go:62`），这两张与目标 schema 是同一张表。
+3. **core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`**。所以出厂 `market` 与 core 的 `public.*` **不是同一批表**：本仓的 `market.*` 是 DDL 新建的表（今天无历史数据），core 同步出来的行仍在 `public.*` 的同名表里。**例外只剩一张**——core 显式带前缀的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go:31`，**该表连 DDL 都由 core 持有**，本仓不建，见裁决 ⑰）。`ingest.raw` 曾也是例外（core 旧 `pkg/storage/ingest_raw.go:62` 带前缀写），但该文件随 `a96d836`（2026-11-08）数据面退役整体删除，今天 core 对 `ingest.raw` 零写点；本仓的 `ingest.raw` 因此是**零写者**（见 §9）。
 
 **物理 `SET SCHEMA` 搬迁的前置 = core 停写**（不是「本仓 DDL 先建好」）：
 
 - 只要 core 还在用裸表名写，把 `public.x` 搬进 `market.x` 之后，core 的下一次启动迁移/写入会再次解析到 `public.x`（或再次 `CREATE TABLE IF NOT EXISTS x`），结果不是报错就是**悄悄长出第二份同名表**——两种都与「单一 writer」相反。
 - 因此搬迁顺序只能是：**core 写点归零/删除 → 确认无裸名写 → 再 `SET SCHEMA`**。core 侧那一半是 `tellurion:SVC-CORE-DATA-RETIRE`（本仓不改 core 写点，见 G2 ④）。
 - `DATA_MARKET_SCHEMA` 在代码里保留「空 = public」只是为了让过渡期能指向今天的位置；**它不是搬迁开关**：切这个变量不搬任何一行数据，也不改变 DDL 落点。出厂 compose 始终写 `market`（目标态），运维不要用改环境变量来代替 `SET SCHEMA`。
+
+## 9. 逐表 writer / reader 清单（SVC-DATA-G3 ③，2026-11-10）
+
+> **表名口径** = `internal/schema.TableNames()` 的 **22 张**（`market` 18 + `ingest` 4）。
+> **取证方式**：本仓写者/读方逐条点名 `internal/store`、`internal/sync`、`internal/schema` 的 SQL 常量与端口实现；core 侧实测
+> `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 22 张**）。
+> core `cmd/data` / `pkg/data` 已于 `a96d836`（2026-11-08）整体删除；`Test-Path cmd/data` / `Test-Path pkg/data` 均为 False。
+
+### 9.1 有本仓写者的表（14 张）
+
+| 表 | 本仓写者 | 本仓读方 |
+|---|---|---|
+| `market.ohlcv_daily_qfq` | `store.Writer.BulkInsert`（`POST /ingest/points`；同步作业 worker 同一写面） | `GET /ohlcv/{symbol}`、`POST /api/v1/ohlcv/bulk`、`GET /datasets/resolve`（`store.ReadBars`）、`GET /datasets/{hash}`（`store.DataVersion`） |
+| `market.ohlcv_minute` | 同上 | `GET /datasets/resolve`（`1m`，`ReadBars`）、`GET /datasets/{hash}`（`DataVersion`）；**无**逐分钟兼容端点 |
+| `market.realtime_quote` | 同上 | 无 |
+| `market.capital_flow` | 同上（东财 connector / `POST /ingest/points` 投点） | 无 |
+| `market.sectors` | 同上 | 无 |
+| `market.stock_sector_map` | 同上 | 无 |
+| `market.top_list` | 同上 | 无 |
+| `market.limit_up_pool` | 同上 | 无 |
+| `market.announcements` | 同上 | 无 |
+| `market.news` | 同上 | 无 |
+| `market.hot_search` | 同上 | 无 |
+| `market.global_ohlcv` | 同上 | 无 |
+| `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /ingest/jobs*`） |
+| `ingest.sync_schedules` | 同上 | 同上 |
+
+### 9.2 零写者的表（7 张 + 1 张哨兵）
+
+| 表 | 本仓写者 | 本仓读方 | 说明 |
+|---|---|---|---|
+| `market.stocks` | **无** | `GET /stocks`、`GET /api/v1/stocks/{symbol}` | K3「补写者」项；core 旧写者已随数据面退役删除 |
+| `market.dividends` | 无 | 无 | 同上 |
+| `market.splits` | 无 | 无 | 同上 |
+| `market.trading_calendar` | 无 | `GET /api/v1/trading/calendar` | 同上 |
+| `market.index_constituents` | 无 | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定 | 同上 |
+| `market.market_activity` | 无 | 无 | B 集；`daily_basic` 传输已取数但写面被 `writeExcludedTypes` 排除；core 旧写入已删 |
+| `ingest.raw` | 无 | 无 | core `pkg/storage/ingest_raw.go` 已删（`a96d836`）；本仓传输是窄接口、无归档 sink（QT-40 登记） |
+| `ingest.data_migrations` | 仅 `schema.BackfillStatements()` 哨兵（`-tags backfill`，运维执行） | 回填 guard | 不是日常写者，不计入上表 |
+
+### 9.3 与本仓相关但不属 22 张的两张表
+
+| 表 | 归属 | 写者 | 本仓读方 |
+|---|---|---|---|
+| `market.index_daily` | **core**（DDL 与读写都在 core，裁决 ⑰） | core `pkg/storage/index_daily.go:31` | 无（本仓不建、不读） |
+| `stock_fundamentals` | **core**（DDL 与写点仍在 core，裸表名 ⇒ `public.stock_fundamentals`） | core | `GET /fundamental/{symbol}` 读 `market.stock_fundamentals`（PIT）。`DATA_MARKET_SCHEMA=market` 时二者**不是同一张表**——已知限制，收编属 K3 |
+
+### 9.4 结论
+
+- **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
+- **但「唯一 writer」≠「已有 writer」**：7 张表今天零写者（`stocks` / `dividends` / `splits` / `trading_calendar` / `index_constituents` / `market_activity` / `ingest.raw`），`ingest.raw` 的归档面也未搬。这些在 QT-40 / K3 登记为后续单，**不写成本笔已完成**。
+- **读方覆盖**：5 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `sync_jobs` / `sync_schedules`）；其余 15 张中 10 张 A 集只写不读、4 张零写零读、1 张回填哨兵。
+- **X1d 物理 `SET SCHEMA` + `visible_at` 回填仍待运维**（§8 的顺序未变），G3 ⑤ 的最后一条据此未满足。
 
