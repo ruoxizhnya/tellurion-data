@@ -17,15 +17,10 @@ import (
 //     `/fundamental/{symbol}` 会 500 —— 这是 K3 收编前必须知道的限制，不是静默降级。
 
 // Stocks 实现 `serving.LegacyReader`：股票列表（exchange 为空 = 全市场）。
-//
-// `delist_date` 用 jsonb 探针取而不是直接列名：本仓 `market.stocks` 的 DDL
-// 没有这一列，而旧库（core 的 `public.stocks`）有。`to_jsonb(t)->>'delist_date'`
-// 在列不存在时返回 NULL 而不是报错，于是同一段 SQL 在两种 schema 下都能跑；
-// 列缺失时 `DelistDate` 为 nil（= 仍在市），这正是旧库缺该列时的历史语义。
 func (s *Store) Stocks(ctx context.Context, exchange string) ([]market.Stock, error) {
 	sql := `SELECT t.symbol, t.name, t.exchange, COALESCE(t.industry, ''),
 			COALESCE(t.market_cap, 0), t.list_date, COALESCE(t.status, 'active'),
-			NULLIF(to_jsonb(t)->>'delist_date', '')::date
+			t.delist_date
 		FROM ` + s.table("stocks") + ` t`
 	args := []any{}
 	if exchange != "" {
@@ -60,7 +55,7 @@ func (s *Store) Stocks(ctx context.Context, exchange string) ([]market.Stock, er
 func (s *Store) Stock(ctx context.Context, symbol string) (market.Stock, bool, error) {
 	sql := `SELECT t.symbol, t.name, t.exchange, COALESCE(t.industry, ''),
 			COALESCE(t.market_cap, 0), t.list_date, COALESCE(t.status, 'active'),
-			NULLIF(to_jsonb(t)->>'delist_date', '')::date
+			t.delist_date
 		FROM ` + s.table("stocks") + ` t
 		WHERE t.symbol = $1
 		LIMIT 1`

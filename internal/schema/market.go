@@ -21,10 +21,14 @@ func MarketStatements() []string {
 			industry VARCHAR(100),
 			market_cap DOUBLE PRECISION,
 			list_date DATE,
+			delist_date DATE,
 			status VARCHAR(20) DEFAULT 'active',
 			created_at TIMESTAMPTZ DEFAULT NOW(),
 			updated_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
+		// 既有库没有通用 ALTER 迁移通道：这条幂等加列让 `market.stocks` 前滚
+		// 到带 delist_date 的形状（ADR-0009 决策二）。
+		`ALTER TABLE IF EXISTS market.stocks ADD COLUMN IF NOT EXISTS delist_date DATE`,
 
 		// 日线（前复权，唯一进回测口径）
 		`CREATE TABLE IF NOT EXISTS market.ohlcv_daily_qfq (

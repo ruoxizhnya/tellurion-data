@@ -29,14 +29,15 @@ func TestReferenceWriter_PG_UpsertStocksOverwritesAndPreservesUnknowns(t *testin
 	ctx := context.Background()
 
 	listDate := time.Date(1991, 4, 3, 0, 0, 0, 0, time.UTC)
+	delistDate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	written, err := writer.UpsertStocks(ctx, []market.Stock{{
 		Symbol: "000001.SZ", Name: "平安银行", Exchange: "SZSE",
-		Industry: "银行", ListDate: listDate, Status: "active",
+		Industry: "银行", ListDate: listDate, DelistDate: &delistDate, Status: "active",
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, written)
 
-	// 第二轮：名称与状态变、源端没给 industry / market_cap。
+	// 第二轮：名称与状态变、源端没给 industry / market_cap / delist_date。
 	written, err = writer.UpsertStocks(ctx, []market.Stock{{
 		Symbol: "000001.SZ", Name: "平安银行(新)", Exchange: "SZSE", Status: "delisted",
 	}})
@@ -45,14 +46,18 @@ func TestReferenceWriter_PG_UpsertStocksOverwritesAndPreservesUnknowns(t *testin
 
 	var name, industry, status string
 	var marketCap *float64
+	var storedDelist *time.Time
 	err = pool.QueryRow(ctx,
-		"SELECT name, industry, status, market_cap FROM "+scratch+".stocks WHERE symbol = $1",
-		"000001.SZ").Scan(&name, &industry, &status, &marketCap)
+		"SELECT name, industry, status, market_cap, delist_date FROM "+scratch+".stocks WHERE symbol = $1",
+		"000001.SZ").Scan(&name, &industry, &status, &marketCap, &storedDelist)
 	require.NoError(t, err)
 	assert.Equal(t, "平安银行(新)", name, "name must be overwritten")
 	assert.Equal(t, "银行", industry, "missing industry must not erase the stored value")
 	assert.Equal(t, "delisted", status, "status must be overwritten")
 	assert.Nil(t, marketCap, "market_cap 0 must stay NULL")
+	require.NotNil(t, storedDelist, "delist_date must be persisted")
+	assert.Equal(t, "2020-01-01", storedDelist.Format("2006-01-02"),
+		"missing delist_date must not erase the stored value")
 }
 
 func TestReferenceWriter_PG_UpsertTradingDaysOverwritesOpenFlag(t *testing.T) {

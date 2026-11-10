@@ -23,9 +23,10 @@ func newReferenceWriterForTest(t *testing.T, prefix string) (*ReferenceWriter, *
 
 func TestReferenceWriter_UpsertStocksWritesNullsForUnknowns(t *testing.T) {
 	w, db := newReferenceWriterForTest(t, "market")
+	delist := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	stocks := []market.Stock{
 		{Symbol: "000001.SZ", Name: "平安银行", Exchange: "SZSE", Industry: "银行", MarketCap: 0,
-			ListDate: time.Date(1991, 4, 3, 0, 0, 0, 0, time.UTC), Status: "active"},
+			ListDate: time.Date(1991, 4, 3, 0, 0, 0, 0, time.UTC), DelistDate: &delist, Status: "active"},
 		{Symbol: "600001.SH", Name: "退市票", Exchange: "SSE", Status: ""},
 	}
 
@@ -45,7 +46,7 @@ func TestReferenceWriter_UpsertStocksWritesNullsForUnknowns(t *testing.T) {
 	if !strings.Contains(db.tx.execs[0], "market.stocks") {
 		t.Fatalf("sql does not target market.stocks: %s", db.tx.execs[0])
 	}
-	// industry 有值、market_cap 0 → NULL、list_date 有值、status 保持。
+	// industry 有值、market_cap 0 → NULL、list_date / delist_date 有值、status 保持。
 	args := db.tx.args[0]
 	if args[2] != "SZSE" {
 		t.Fatalf("exchange arg = %v", args[2])
@@ -56,13 +57,22 @@ func TestReferenceWriter_UpsertStocksWritesNullsForUnknowns(t *testing.T) {
 	if args[5] == nil {
 		t.Fatalf("list_date must be preserved")
 	}
-	// 第二行：industry 空 → NULL；status 空 → active；list_date 零值 → NULL。
+	if args[6] == nil || args[6].(time.Time).Format("2006-01-02") != "2020-01-01" {
+		t.Fatalf("delist_date arg = %v, want 2020-01-01", args[6])
+	}
+	if args[7] != "active" {
+		t.Fatalf("status arg = %v, want active", args[7])
+	}
+	// 第二行：industry 空 → NULL；status 空 → active；list_date / delist_date 缺失 → NULL。
 	second := db.tx.args[1]
 	if second[3] != nil {
 		t.Fatalf("empty industry must become NULL, got %v", second[3])
 	}
-	if second[6] != "active" {
-		t.Fatalf("empty status must default to active, got %v", second[6])
+	if second[6] != nil {
+		t.Fatalf("nil delist_date must become NULL, got %v", second[6])
+	}
+	if second[7] != "active" {
+		t.Fatalf("empty status must default to active, got %v", second[7])
 	}
 	if second[5] != nil {
 		t.Fatalf("zero list_date must become NULL, got %v", second[5])

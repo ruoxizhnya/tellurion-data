@@ -60,12 +60,12 @@ func NewReferenceWriter(db WriteDB, opts Options) (*ReferenceWriter, error) {
 // UpsertStocks 按 `symbol` 覆盖可变列，返回写入行数（pgx 的 RowsAffected 之和）。
 //
 // 空值语义：`industry` 空串 → NULL（源端没给分类）；`market_cap` 0 → NULL
-// （Tushare `stock_basic` 不提供市值，0 不是「市值真的为 0」）；`list_date`
-// 零值 → NULL。冲突时用 `COALESCE(EXCLUDED.col, 表.col)` 保住已有值——源端
-// 某次没给的字段不该把上一轮已经写好的值擦掉。
+// （Tushare `stock_basic` 不提供市值，0 不是「市值真的为 0」）；`list_date` /
+// `delist_date` 零值/未给 → NULL。冲突时用 `COALESCE(EXCLUDED.col, 表.col)`
+// 保住已有值——源端某次没给的字段不该把上一轮已经写好的值擦掉。
 //
-// `delist_date` 不写：本仓 DDL 没有该列（读面用 `to_jsonb` 探针兼容旧库），
-// 退市由 `status` 表达（`delisted`）。
+// `delist_date` 必须落库（ADR-0009 决策二）：回测的历史票池要按退市日截断，
+// 只靠 `status='delisted'` 无法回答「某日是否已退市」，会引入幸存者偏差。
 func (w *ReferenceWriter) UpsertStocks(ctx context.Context, stocks []market.Stock) (int, error) {
 	if len(stocks) == 0 {
 		return 0, nil
@@ -83,16 +83,17 @@ func (w *ReferenceWriter) UpsertStocks(ctx context.Context, stocks []market.Stoc
 	}()
 
 	const stmt = `INSERT INTO %s AS s
-		(symbol, name, exchange, industry, market_cap, list_date, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		(symbol, name, exchange, industry, market_cap, list_date, delist_date, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
 		ON CONFLICT (symbol) DO UPDATE SET
-			name       = EXCLUDED.name,
-			exchange   = EXCLUDED.exchange,
-			industry   = COALESCE(EXCLUDED.industry, s.industry),
-			market_cap = COALESCE(EXCLUDED.market_cap, s.market_cap),
-			list_date  = COALESCE(EXCLUDED.list_date, s.list_date),
-			status     = EXCLUDED.status,
-			updated_at = NOW()`
+			name        = EXCLUDED.name,
+			exchange    = EXCLUDED.exchange,
+			industry    = COALESCE(EXCLUDED.industry, s.industry),
+			market_cap  = COALESCE(EXCLUDED.market_cap, s.market_cap),
+			list_date   = COALESCE(EXCLUDED.list_date, s.list_date),
+			delist_date = COALESCE(EXCLUDED.delist_date, s.delist_date),
+			status      = EXCLUDED.status,
+			updated_at  = NOW()`
 	sql := fmt.Sprintf(stmt, w.table("stocks"))
 
 	written := 0
@@ -108,6 +109,7 @@ func (w *ReferenceWriter) UpsertStocks(ctx context.Context, stocks []market.Stoc
 			nullIfEmpty(stock.Industry),
 			nullIfZeroFloat(stock.MarketCap),
 			nullIfZeroTime(stock.ListDate),
+			nullIfNilTime(stock.DelistDate),
 			status,
 		)
 		if err != nil {
@@ -214,4 +216,12 @@ func nullIfZeroTime(t time.Time) any {
 		return nil
 	}
 	return utcDate(t)
+}
+
+// nullIfNilTime 把 nil 指针折成 NULL（`delist_date` 缺失 = 仍在市）。
+func nullIfNilTime(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return utcDate(*t)
 }

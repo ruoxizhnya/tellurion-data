@@ -26,7 +26,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.index_daily` | 指数日线（**已是 `market.` 前缀**；**owner = core，本仓不认领**，见 §7） |
 | `dividends` / `splits` | 分红 / 拆股（公司行为） |
 | `trading_calendar` | 交易日历 |
-| `stocks` | 标的（内外部代码映射） |
+| `stocks` | 标的（内外部代码映射；含 `delist_date`，供历史票池 / survivorship 过滤） |
 | `index_constituents` | 指数成分 |
 
 > **摘除认领**：`backtest_adjustment_anchors`（回测复权锚点）**已划归 core 回测域（2026-10-21 裁决）；本仓不认领** —— 写者是 `tellurion:pkg/backtest/adjustment_snapshot.go`（起跑冻结/回填锚点），不是本仓行情同步，不随 `market` 迁移（详见 `tellurion:docs/design/qt-decoupling/data-service-contract-and-ownership.md` 归属表）。
@@ -259,7 +259,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.news` | 同上 | 无 |
 | `market.hot_search` | 同上 | 无 |
 | `market.global_ohlcv` | 同上 | 无 |
-| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
+| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写；含 `delist_date`，见 ADR-0009 决策二） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /ingest/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |

@@ -151,7 +151,7 @@ func TestReferenceContract_StockBasicFixture(t *testing.T) {
 
 	first := db.tx.execs[0].args
 	if first[0] != "000001.SZ" || first[1] != "平安银行" || first[2] != "SZSE" ||
-		first[3] != "银行" || first[6] != "active" {
+		first[3] != "银行" || first[7] != "active" {
 		t.Fatalf("upsert args[0] = %v", first)
 	}
 	if _, ok := first[5].(time.Time); !ok {
@@ -160,8 +160,15 @@ func TestReferenceContract_StockBasicFixture(t *testing.T) {
 	if first[4] != nil {
 		t.Fatalf("market_cap 0 must become NULL, got %v", first[4])
 	}
-	if db.tx.execs[2].args[6] != "delisted" {
-		t.Fatalf("delisted status arg = %v", db.tx.execs[2].args[6])
+	if first[6] != nil {
+		t.Fatalf("active stock delist_date must be NULL, got %v", first[6])
+	}
+	delisted := db.tx.execs[2].args
+	if delisted[7] != "delisted" {
+		t.Fatalf("delisted status arg = %v", delisted[7])
+	}
+	if got, ok := delisted[6].(time.Time); !ok || got.Format("2006-01-02") != "2020-01-01" {
+		t.Fatalf("delisted delist_date arg = %v, want 2020-01-01", delisted[6])
 	}
 }
 
