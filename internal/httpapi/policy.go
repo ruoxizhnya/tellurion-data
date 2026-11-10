@@ -36,6 +36,23 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /api/v1/trading/calendar":   {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /api/v1/stocks/{symbol}":    {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"POST /api/v1/ohlcv/bulk":        {AnyAuthenticated: true},
+
+	// ── 作业层（2026-11-10，`sync.go`）──
+	// 档位**沿用 REV-17 的结论**（迁移不重拍角色）：排程管理 = admin；
+	// 作业创建/取消/重试与「立即跑一次」= trader|admin。
+	// 新增的两条只读面（列表/详情）按数据面读档位开放——作业结果不含持仓，
+	// 但运维要能看见队列；完全不给读会让「作业卡住了」只能进库查。
+	"POST /api/sync/jobs":                  {Roles: []string{"trader", "admin"}},
+	"GET /api/sync/jobs":                   {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/sync/jobs/{id}":              {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"POST /api/sync/jobs/{id}/cancel":      {Roles: []string{"trader", "admin"}},
+	"POST /api/sync/jobs/{id}/retry":       {Roles: []string{"trader", "admin"}},
+	"POST /api/sync/schedules":             {Roles: []string{"admin"}},
+	"GET /api/sync/schedules":              {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"PUT /api/sync/schedules/{id}":         {Roles: []string{"admin"}},
+	"DELETE /api/sync/schedules/{id}":      {Roles: []string{"admin"}},
+	"POST /api/sync/schedules/{id}/toggle": {Roles: []string{"admin"}},
+	"POST /api/sync/schedules/{id}/run":    {Roles: []string{"trader", "admin"}},
 })
 
 // legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
@@ -46,14 +63,10 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 //
 // 档位映射：Admin → admin；Trader → trader|admin；ReadOnlyPOST → any-authenticated。
 var legacyREV17 = map[string]kithttp.Rule{
-	// ── Admin：排程管理 ──
-	"POST /api/sync/schedules":            {Roles: []string{"admin"}},
-	"PUT /api/sync/schedules/:id":         {Roles: []string{"admin"}},
-	"DELETE /api/sync/schedules/:id":      {Roles: []string{"admin"}},
-	"POST /api/sync/schedules/:id/toggle": {Roles: []string{"admin"}},
-
 	// ── ReadOnlyPOST：POST 承载查询 DSL，不写库 ──
 	// `POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地本仓，移入 servedPolicy。
+	// 作业层 8 条（schedules CRUD/toggle/run、jobs create/cancel/retry）已于
+	// 作业层施工（2026-11-10）落地本仓，同样移入 servedPolicy。
 	"POST /screen": {AnyAuthenticated: true},
 
 	// ── Trader：其余全部变更端点 ──
@@ -74,10 +87,6 @@ var legacyREV17 = map[string]kithttp.Rule{
 	"POST /sync/factors/all":                         {Roles: []string{"trader", "admin"}},
 	"POST /api/sync/factor-attribution/:factor_name": {Roles: []string{"trader", "admin"}},
 	"POST /api/sync/factor-ic/:factor_name":          {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/jobs":                            {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/jobs/:id/cancel":                 {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/jobs/:id/retry":                  {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/schedules/:id/run":               {Roles: []string{"trader", "admin"}},
 	"POST /api/v1/cache/warm":                        {Roles: []string{"trader", "admin"}},
 }
 

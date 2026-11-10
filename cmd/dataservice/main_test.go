@@ -92,10 +92,16 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 	src := readOwnSource(t)
 	for _, want := range []string{
 		"store.NewWriter(store.PoolWriteDB(pool), opts)",
-		"assembly.DeclarationsRegistry()",
-		"assembly.New(declarations, writer, nil)",
+		"transports.Tushare = tushare.NewDefault(token)",
+		"assembly.Registry(transports)",
+		"assembly.New(registry, writer, nil)",
 		"httpapi.WithPoints(points)",
 		"httpapi.WithReadiness(readinessCheck(pool))",
+		// 作业层（X1c 的调度那一半）同样只在本跳接线：队列没挂上则
+		// `/api/sync/jobs` 全 503，worker/scheduler 不起则作业永远 pending。
+		"syncjob.NewPGStore(pool, nil)",
+		"httpapi.WithSync(queue)",
+		"go startJobsWhenReady(jobCtx, &schemaReady, worker, scheduler)",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("build() 的写面装配链少了这一段：%q\n（漏了它，投点端点会在运行时 503，而 internal/* 的套件全绿）", want)

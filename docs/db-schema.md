@@ -72,7 +72,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
 | `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
-| `sync_jobs` / `sync_schedules` | 同步任务与调度 | 无前缀（`public` 默认）→ 目标 `ingest`（本仓 DDL 已建 `ingest.sync_jobs` / `ingest.sync_schedules`，物理仍在 `public`） |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留待 X1d 迁移 |
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
@@ -215,8 +215,8 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。**2026-11-10 已施工**：本仓 DDL、`TableNames()` 条目、C 集豁免三处删除，并加守卫 `TestIndexDaily_IsNotOwnedByThisRepo`（本仓 statements 出现该表即红）——从「建表但不认领写权」收紧为「连表都不建」，因为两套 DDL 形状不同、先建表者定形 |
 | `market_activity` | `tellurion:pkg/storage/market_activity.go:35`（`saveMarketActivitySQL`） | **补写者** | B 集：写者是 core 的 `daily_basic` 同步腿（不经 `BulkInsert`）；收编那条腿时由本仓补写者接管 |
 | `ingest.raw` | `tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`） | **补写者** | 本仓的摄取归档入口落地时接管；此前 core 的 `POST /api/ingest/raw` 是过渡写者 |
-| `sync_jobs` | `tellurion:pkg/storage/sync_jobs.go:15`（`CreateSyncJob`）、`:107`（`UpdateSyncJobIfStatus`）、`:173`（`DeleteSyncJob`） | **补写者** | 同步编排状态归本仓；调度收编（worker/executor）时接管 |
-| `sync_schedules` | `tellurion:pkg/storage/sync_jobs.go:230`（`CreateSyncSchedule`）、`:326`（`UpdateSyncSchedule`）、`:346`（`DeleteSyncSchedule`） | **补写者** | 同上 |
+| `sync_jobs` | ~~`tellurion:pkg/storage/sync_jobs.go:15`（`CreateSyncJob`）、`:107`（`UpdateSyncJobIfStatus`）、`:173`（`DeleteSyncJob`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-10，X1c）** | 本仓 `internal/sync.NewPGStore` 独占读写（`FOR UPDATE SKIP LOCKED` 领取、`FinishJob` 写终态）；`/api/sync/jobs*` 是唯一入口 |
+| `sync_schedules` | ~~`tellurion:pkg/storage/sync_jobs.go:230`（`CreateSyncSchedule`）、`:326`（`UpdateSyncSchedule`）、`:346`（`DeleteSyncSchedule`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-10，X1c）** | 本仓 `internal/sync` 的 Scheduler（30s 扫 due + `EnqueueFromSchedule` 单事务入队并推进 `next_run_at`） |
 
 > **未取证项**：本表只钉「core 有字面写点」与「本仓无写者」两件事；**各写点在运行期是否仍被调用**（例如某个 executor 已被 feature flag 关掉）不在本单取证范围，写「未取证」，不把「有字面 SQL」冒充「线上仍在写」。
 > **护栏关系**：`internal/repoguard` 只约束**写语句的 schema**（本仓只许 `market.` / `ingest.` / `pg_catalog` / `information_schema` / 临时表），**不约束表覆盖**——K3 的 10 张属于「写者缺口」，不是「越界写」，两者不能互相冒名。

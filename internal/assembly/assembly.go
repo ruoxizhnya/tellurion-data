@@ -114,11 +114,19 @@ func New(reg *ingest.Registry, sink PointWriter, clock func() time.Time) (*Write
 // 「传输 = nil（该门 disabled）」登记，于是 `DeclarationFor` 可用而 `Fetch`
 // 不可用。
 //
-// 写端点只需要声明（闸门要锚点列名），不需要取数——传输实现仍在 core
-// （`internal/ingest/transport.go` 头注释 + AGENTS.md §3），本仓不许自己造。
+// 写端点只需要声明（闸门要锚点列名），不需要取数——它等价于
+// `Registry(ingest.Transports{})`。
 func DeclarationsRegistry() (*ingest.Registry, error) {
+	return Registry(ingest.Transports{})
+}
+
+// Registry 用给定传输登记 12 个 connector。
+//
+// 传输为零值 ⇒ 全部门 disabled（`Fetch` 返回 `ErrUnsupported`）；这仍是
+// 合法的装配形态——HTTP 投点只需要声明。作业层要真正取数时才必须传入传输。
+func Registry(transports ingest.Transports) (*ingest.Registry, error) {
 	reg := ingest.NewRegistry()
-	if err := ingest.RegisterConnectors(reg, ingest.Transports{}); err != nil {
+	if err := ingest.RegisterConnectors(reg, transports); err != nil {
 		return nil, err
 	}
 	return reg, nil
@@ -226,9 +234,9 @@ func (i Inserter) BulkInsert(ctx context.Context, dataType string, points []inge
 
 // Pipeline 装出一条完整的作业链（取数 → 归一 → 校验 → 闸门 → 去重 → 写面）。
 //
-// 它今天没有生产调用方：传输仍在 core。落它不是为了「先占个位」，而是让
-// HTTP 投点这条入口与作业那条入口**共用同一个写侧次序**这件事成为可测的
-// 事实（见 `TestWriteAndPipelineAgreeOnTheSameBatch`）。
+// 生产调用方是 `internal/sync` 的 worker（`docs/TASKS.md` X1c 的「调度」那一半）。
+// 它同时让 HTTP 投点这条入口与作业那条入口**共用同一个写侧次序**这件事成为
+// 可测的事实（见 `TestWriteAndPipelineAgreeOnTheSameBatch`）。
 func Pipeline(reg *ingest.Registry, sink PointWriter, clock func() time.Time) *ingest.ETLPipeline {
 	pipeline := ingest.NewETLPipeline(reg, NewInserter(sink))
 	if clock != nil {

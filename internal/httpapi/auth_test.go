@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 12 条路由与
+// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 23 条路由与
 // servedPolicy 必须双向一一对应。漏登策略 / 表里写了不存在的路由都会红。
 func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	srv := New(nil)
@@ -24,6 +24,10 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	// 逐条点名，不是只数条数：加一条没登记策略的路由要红，删一条路由也要红，
 	// 而「条数刚好对上但内容换了」这种漂移只有清单能拦住。
 	want := []string{
+		"DELETE /api/sync/schedules/{id}",
+		"GET /api/sync/jobs",
+		"GET /api/sync/jobs/{id}",
+		"GET /api/sync/schedules",
 		"GET /api/v1/stocks/{symbol}",
 		"GET /api/v1/trading/calendar",
 		"GET /datasets/resolve",
@@ -34,8 +38,15 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"GET /ohlcv/{symbol}",
 		"GET /readyz",
 		"GET /stocks",
+		"POST /api/sync/jobs",
+		"POST /api/sync/jobs/{id}/cancel",
+		"POST /api/sync/jobs/{id}/retry",
+		"POST /api/sync/schedules",
+		"POST /api/sync/schedules/{id}/run",
+		"POST /api/sync/schedules/{id}/toggle",
 		"POST /api/v1/ohlcv/bulk",
 		"POST /ingest/points",
+		"PUT /api/sync/schedules/{id}",
 	}
 	got := append([]string(nil), routes...)
 	sort.Strings(got)
@@ -108,11 +119,6 @@ func TestServedPolicyLegacyReadRoutes(t *testing.T) {
 // 不再重新拍一次角色。
 func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 	want := map[string]string{
-		// Admin
-		"POST /api/sync/schedules":            "admin",
-		"PUT /api/sync/schedules/:id":         "admin",
-		"DELETE /api/sync/schedules/:id":      "admin",
-		"POST /api/sync/schedules/:id/toggle": "admin",
 		// ReadOnlyPOST
 		"POST /screen": "any",
 		// Trader
@@ -133,10 +139,6 @@ func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 		"POST /sync/factors/all":                         "trader",
 		"POST /api/sync/factor-attribution/:factor_name": "trader",
 		"POST /api/sync/factor-ic/:factor_name":          "trader",
-		"POST /api/sync/jobs":                            "trader",
-		"POST /api/sync/jobs/:id/cancel":                 "trader",
-		"POST /api/sync/jobs/:id/retry":                  "trader",
-		"POST /api/sync/schedules/:id/run":               "trader",
 		"POST /api/v1/cache/warm":                        "trader",
 	}
 	got := LegacyREV17Entries()
@@ -178,26 +180,42 @@ func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 // TestLegacyREV17DecisionsMatchOldService 用旧服务的行为用例做对拍：
 // 同一路由 + 同一角色，新旧策略必须得出同一结论（放行 / 403）。
 // 不跑 HTTP——旧端点尚未迁入本仓，这里钉的是**策略结论**一致。
+//
+// 作业层 8 条已落地（2026-11-10），它们改用 servedPolicy 的 `{id}` 形状对拍；
+// 结论必须与 REV-17 那时逐条相同（迁移不重拍角色）。
 func TestLegacyREV17DecisionsMatchOldService(t *testing.T) {
 	cases := []struct {
 		name, key, role string
 		allowed         bool
+		served          bool
 	}{
-		{"证据链写门 viewer", "POST /api/ingest/raw", "viewer", false},
-		{"证据链写门 trader", "POST /api/ingest/raw", "trader", true},
-		{"全市场同步 viewer", "POST /sync/ohlcv/all", "viewer", false},
-		{"全市场同步 trader", "POST /sync/ohlcv/all", "trader", true},
-		{"作业创建 trader", "POST /api/sync/jobs", "trader", true},
-		{"排程新增 trader", "POST /api/sync/schedules", "trader", false},
-		{"排程新增 admin", "POST /api/sync/schedules", "admin", true},
-		{"排程删除 admin", "DELETE /api/sync/schedules/:id", "admin", true},
-		{"选股 viewer（只读 POST）", "POST /screen", "viewer", true},
+		{"证据链写门 viewer", "POST /api/ingest/raw", "viewer", false, false},
+		{"证据链写门 trader", "POST /api/ingest/raw", "trader", true, false},
+		{"全市场同步 viewer", "POST /sync/ohlcv/all", "viewer", false, false},
+		{"全市场同步 trader", "POST /sync/ohlcv/all", "trader", true, false},
+		{"选股 viewer（只读 POST）", "POST /screen", "viewer", true, false},
+		{"作业创建 trader", "POST /api/sync/jobs", "trader", true, true},
+		{"作业取消 viewer", "POST /api/sync/jobs/{id}/cancel", "viewer", false, true},
+		{"作业重试 trader", "POST /api/sync/jobs/{id}/retry", "trader", true, true},
+		{"排程新增 trader", "POST /api/sync/schedules", "trader", false, true},
+		{"排程新增 admin", "POST /api/sync/schedules", "admin", true, true},
+		{"排程删除 admin", "DELETE /api/sync/schedules/{id}", "admin", true, true},
+		{"排程开关 trader", "POST /api/sync/schedules/{id}/toggle", "trader", false, true},
+		{"排程立即跑 trader", "POST /api/sync/schedules/{id}/run", "trader", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rule, ok := LegacyREV17Entries()[tc.key]
+			var (
+				rule kithttp.Rule
+				ok   bool
+			)
+			if tc.served {
+				rule, ok = ServedPolicyEntries()[tc.key]
+			} else {
+				rule, ok = LegacyREV17Entries()[tc.key]
+			}
 			if !ok {
-				t.Fatalf("missing legacy policy for %q", tc.key)
+				t.Fatalf("missing policy for %q (served=%t)", tc.key, tc.served)
 			}
 			if got := allowedByRule(rule, tc.role); got != tc.allowed {
 				t.Fatalf("%s as %s = %t, want %t", tc.key, tc.role, got, tc.allowed)

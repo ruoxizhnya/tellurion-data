@@ -1,6 +1,6 @@
 # 0003 · connector 搬入本仓，传输以窄 port 留在 core
 
-- **状态**：已裁决（X1c，2026-10-24）
+- **状态**：部分被 [0007](0007-本仓自持传输与调度.md) 替代（2026-11-10，裁决 B：传输实现已归本仓；connector 声明与窄接口的形状仍有效）
 - **场景**：12 个 connector 的**声明与归一化**必须在数据服务内（注册门要在这里执法），但其中 4 个 Tushare 门依赖 `tellurion:pkg/data.TushareClient`——那不是 connector 逻辑，是 HTTP 客户端 + 配额闸 + `ingest.raw` 归档，属**传输层**。本仓禁止 import core 的实现包（`AGENTS.md` §3），而工单禁区写着「不重写现有 connector 语义」。
 - **决策**：
   1. connector 的取数编排、字段映射、声明全部搬入 `internal/ingest`；

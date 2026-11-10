@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-10
-verified-by: G3 ⑤ + X1c/X1d 退役后复核（2026-11-10：core 写点仅剩 ⑰ 的 `market.index_daily`、`cmd/data`/`pkg/data` 已删、对拍 md5 一致；同时发现 core 退役把传输实现一并删掉而本仓禁区不许自持传输 ⇒ 生产取数链无执行者，登记待裁）。此前：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
+verified-by: X1c 传输与调度落地（2026-11-10，裁决 B）：`internal/transport/tushare` 10 方法 + `internal/sync` 作业队列/cron/Worker/Scheduler + 11 条 HTTP 端点 + `cmd/dataservice` 装配；Docker PostgreSQL 16.15 真库端到端（作业失败终态可读、排程增改跑关删、降级启动自愈）全过，并修掉 `FinishJob` 的真库 42P08 缺陷（附 opt-in PG 腿与破坏验证）。此前：G3 ⑤ + X1c/X1d 退役后复核（core 写点仅剩 ⑰ 的 `market.index_daily`、`cmd/data`/`pkg/data` 已删、对拍 md5 一致；发现 core 退役把传输实现一并删掉而本仓禁区不许自持传输 ⇒ 生产取数链无执行者，登记待裁）。更早：SVC-DATA-G1/G2/G4 真库腿补齐（便携 PostgreSQL 16.2 @ 55432：/readyz 200→503→200 同一进程自愈、迁移重放、回填、真库 409）
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -111,6 +111,27 @@ verified-by: G3 ⑤ + X1c/X1d 退役后复核（2026-11-10：core 写点仅剩 �
 - **本仓侧取数链是「声明齐全、传输为零」**：`internal/assembly/assembly.go:121` 用 `ingest.Transports{}`（Tushare / Mootdx / Eastmoney / AlphaVantageKey 四个字段全零）注册；`internal/ingest/transport.go` 只留 `TushareTransport` / `MootdxTransport` 接口；`internal/assembly.Pipeline` **零生产调用方**。⇒ **今天没有任何生产进程抓行情/做同步**：读面由 G3 的 7 条兼容端点供数，写面只剩 `POST /ingest/points` 等人投点。
 - **这是两条既有口径的正面冲突，不是普通实现缺口**：`tellurion:docs/design/qt-decoupling/cross-repo-dispatch-plan-wave2-2026-10-25.md:197` 的禁区写着「不许在本仓实现传输（仍在 core，按 `Transports` 注入）」；而 core 退役单按 ④ 把含传输的 `pkg/data` 整目录删了。⇒ 二选一：**A** core 恢复并持有传输 + 同步执行器（经 HTTP 向本仓投点）；**B** 改禁区、授权本仓自持传输与调度。**待主任裁决；本笔不改代码、不把 X1c/X1d 标 ✅。**
 - **G3 ⑤ 当前状态（2026-11-10 复核）**：① core 侧 `market.*` / `ingest.*` 写点 = **0**（唯一命中 `pkg/storage/index_daily.go:31` 的 `market.index_daily`，属裁决 ⑰ 的 core owner，不在退役集合）；② `cmd/data` / `pkg/data` **已删**；③ 新旧行数/校验对拍已在本文 G3 施工记录（`stocks` md5 `40f25781e835b1ff1e2d0e8d6a729fe5` 双侧一致）；④ **`X1d` 未关闭**——生产 `SET SCHEMA` 与 `visible_at` 回填仍未执行，且执行者是运维 ⇒ **G3 保持 🔶**。
+
+**施工记录（2026-11-10，X1c 传输与调度落地：裁决 B；`go build/vet/test ./...` 全绿）**
+
+> **裁决 B（主任，2026-11-10）**：改禁区，授权**本仓自持传输与调度**。理由见上一条冲突记录——core 删了 `pkg/data/**` 后，方案 A（core 恢复传输）等于把刚删的 91 个文件再写回来，且与本仓「消灭第二写者」的 X1d 目标反向。这条裁决**推翻**了 `cross-repo-dispatch-plan-wave2-2026-10-25.md:197` 的「不许在本仓实现传输」与 ADR-0003 的传输节（改写见 ADR-0007）。
+
+| 步 | 结果 | 证据 |
+|---|---|---|
+| 1 · Tushare 传输 | ✅ `internal/transport/tushare`（3 文件）：`ingest.TushareTransport` 10 个方法全实现（stocks / daily OHLCV qfq / fundamentals / daily_basic / moneyflow 四档 / 宏观 9 指标） | 18 个 httptest 单测 PASS：qfq = 当日价 × 当日因子 ÷ 区间最新因子、vol 手→股 / amount 千元→元、资金流万元→元、`shibor_lpr` 一次请求共用、`fx_daily` 按年分段（1000 行上限）、`cn_pmi` 列名大小写不敏感；5xx 重试与非 0 API code 分诊 |
+| 2 · 作业队列 | ✅ `internal/sync`（package `syncjob`）：`ingest.sync_jobs` 队列（`FOR UPDATE SKIP LOCKED` 领取）+ `ingest.sync_schedules` 排程（自研 5 段 cron，无第三方库）+ 进程内 Worker（2s 轮询）与 Scheduler（30s 扫 due） | cron 单测覆盖步长 / 周末 / 月界 / 闰日 / 周日 7 / DOM-DOW 或 / 非法表达式；Worker 成功 / 失败 / 空队列；Scheduler 入队与推进 |
+| 3 · HTTP 作业层 | ✅ 11 条端点（`docs/api-schema.md` §4）：作业建/列/查/取消/重试，排程建/列/改/删/开关/立即跑；`servedPolicy` 11 条与 `legacyREV17` 迁出 8 条（角色结论不变） | `TestRouteTableEqualsServedPolicy`（23 条逐条点名）、`TestLegacyREV17DecisionsMatchOldService` 新旧对拍 PASS |
+| 4 · 进程装配 | ✅ `cmd/dataservice`：`TUSHARE_TOKEN` 有值才装真传输（否则全门 disabled、作业在行上响亮失败）；worker / scheduler 在 schema 就绪后才启动（降级启动不灌日志） | `TestComposeRootWiresTheWriteFace` 钉住装配链 9 段（含 `WithSync(queue)` 与 `startJobsWhenReady`） |
+| 5 · 真库端到端 | ✅ PostgreSQL 16.15（Docker `postgres:16-alpine` @ `127.0.0.1:55432`，库 `tellurion_data_test`）实测：`/readyz` 200；创建作业 202 → worker 领取 → `failed` + 可读 `error_message`（`ingest: all adapters for ohlcv_daily are disabled (chain [tushare mootdx])`）；排程建（默认 `is_active=false`）→ PUT 激活（`next_run_at=18:00`）→ `/run` 202 → 作业失败终态 → toggle 关闭 → DELETE 204；`?status=failed&limit=5` 过滤生效 | 上述均为真实命令输出 |
+| 6 · 降级启动自愈 | ✅ 先停 PG 起进程：`/health` 200、`/readyz` 503、`/api/sync/jobs` 503 `dependency_unavailable`；拉起 PG 后 10s 内 DDL 重放成功、`/readyz` 与作业端点翻 200，worker / scheduler 随后启动（同一进程，不重启） | 服务日志：`schema not applied yet …` → 3 次重试 → `schema applied after retry; data endpoints are ready` → `worker … started` |
+
+**本笔修掉的真库缺陷（假 store 看不到，端到端一跑即红）**：`FinishJob` 的 SQL 把同一个 `$2` 同时用在 `status = $2`（列推 varchar）与 `CASE WHEN $2 = 'succeeded'`（字面量推 text），PG 报 `42P08 inconsistent types deduced for parameter $2` ⇒ **作业失败却写不进终态，永久停在 running**。修法是两处显式 `$2::text`；新增 opt-in PG 腿 `internal/sync/sync_test.go:TestPGStoreFinishJobWritesTerminalState`（无 `DATABASE_URL` 即 skip，设置了连不上 fail-loud）。**破坏验证**：把 `::text` 去掉 ⇒ 该腿红（原样报 42P08）；逐字节还原后绿。同笔还修掉「初始 DDL 成功时仍启 10s 重试循环、日志误报 `schema applied after retry`」的噪音（只在首次失败时起重试）。
+
+**仍未落（不假装完成）**：
+- **`ingest.raw` 归档不搬**：core 旧传输顺手写 raw 证据链，本仓的 `Transports` 是窄接口（无归档 sink）⇒ 归档面属后续单；当前生产取数**不留 raw**。
+- **Mootdx 传输未实现**（`Transports.Mootdx` 仍为空接口）：`ohlcv_daily` 链里 mootdx 恒 disabled，A 股日线实际只有 Tushare 一条腿；东财 / Juchao / Xueqiu / Alpha Vantage / Yahoo 的传输同样未搬。**只有 Tushare 一门是通的**。
+- **X1d 两项运维动作未做**：生产 `SET SCHEMA` 与 `visible_at` 回填（需主任/运维执行；本机便携 PG 的 `pg_hba.conf` 损坏，恢复字节写回受权限拦截，待批准）。
+- **重试不自展**：worker 失败后写 `failed` 终态，不自动按 `retry_count` 重排（`POST /api/sync/jobs/{id}/retry` 是显式动作）；`scheduled_at` 由排程写入。
 
 **施工记录（2026-10-24，G9 四步串行；`go build/vet/test ./...` 全绿）**
 

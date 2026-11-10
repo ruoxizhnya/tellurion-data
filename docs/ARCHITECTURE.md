@@ -39,7 +39,7 @@ core / analytics / strategy / agent
 | 供给 Serving | `Provider` / `OHLCV` / `Quote` / **`SeriesSpec`** | 消费者需求变 | `internal/serving` | `pkg/marketdata`（`Provider` 多实现 + Redis 缓存装饰器 + `aggregate.go` + `board.go`）+ `cmd/data` 的读 handlers |
 | 派生 Derived | `Factor` / `ICEntry` / `ZScore` | 因子定义变 | `internal/derived` | `pkg/data/factor*.go` + `pkg/storage/cache.go`（`factor_cache` / `factor_returns` / `ic_analysis` 的写）+ `pkg/mining` |
 | 证据 Evidence | `Citation` / `Provenance` | 可追溯性要求变 | `internal/evidence` | ⚠️ **不在数据服务的搬迁清单上**：今天住在 core 的 HTTP 层（`cmd/analysis/handlers_evidence.go`，`GET /api/evidence/:content_hash`）。见下面「两条没闭合的口子」② |
-| 同步编排 Sync | `SyncJob` / `Schedule` / `WorkerPool` / `Backpressure` | 调度策略变 | `internal/sync` | `pkg/sync`（`queue.go` / `worker.go`）+ `cmd/data/main.go` 的作业注册 + `sync_jobs` / `sync_schedules` 表 |
+| 同步编排 Sync | `SyncJob` / `Schedule` / `WorkerPool` / `Backpressure` | 调度策略变 | `internal/sync` | **2026-11-10 起已在本仓**：`internal/sync`（package `syncjob`，队列 + cron + Worker + Scheduler）、`internal/transport/tushare`（传输）、`cmd/dataservice` 的装配；core 侧 `pkg/sync` 与 `cmd/data` 已随 `a96d836` 删除 |
 | 文本降维 Reduction | `NewsItem` / `Hotness` / `DecayHalfLife` / `WeightSeries` | NLP 模型 / 规则变 | **不给包**（下表说明） | 无实现 |
 
 **Reduction 这一行故意留空**。ADR-027 §2.6.2 判它是**第七个上下文且唯一物理独立**（第五个服务），但 `tellurion:docs/design/qt-decoupling/repo-inventory.md` §1 的十二仓表里没有它的仓位——该篇 §1.2 R1 把这条列为**待裁 U6**，倾向「先作 `tellurion-data` 内的独立包，做文本降维时再升格」，代价是「§2.6.2 的『资源特征不同 / 失败可隔离』两条拿不到，且 ADR-027 的五服务拓扑在文档上缺一角」。**在本表里替 U6 预先分配一个包**（如 `internal/reduction`）等于用一份服务仓文档裁决另一个仓的拓扑，所以这里只登记义务：真要做文本降维时，它要么进本仓一个**与上面六个平级、且不被 `serving` 直接调用**的包（失败隔离靠调用方向保证），要么立第 13 仓并同步改 §0/§1 的「12 仓」口径。
@@ -85,7 +85,7 @@ contracts（协议类型） + kit（logging/http/db）
 ## 5.1 鉴权（2026-10-25）
 
 - 机制：kit `v0.1.4` 的 `auth/httpadapter`（Bearer → `Parse` → `kind=access` → 角色 any-of + 启动闸）；本仓只写策略表（`internal/httpapi/policy.go`）。`v0.1.4`（kit `KT-11`）起，`role=service` 的 token 不再要求 subject 可解析为 `int64`——这是 `sub=service:core` 能真走到本仓策略表的前置。
-- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）已逐条移植为 `legacyREV17`，等端点迁入时直接挂闸；**G3（2026-11-10）已把 `POST /api/v1/ohlcv/bulk` 落地并移入 `servedPolicy`，`legacyREV17` 余 27 条**。
+- 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）已逐条移植为 `legacyREV17`，等端点迁入时直接挂闸；**G3（2026-11-10）已把 `POST /api/v1/ohlcv/bulk` 落地并移入 `servedPolicy`；X1c（2026-11-10）把 8 条作业/排程策略落地并移入 `servedPolicy` ⇒ `legacyREV17` 余 19 条、`servedPolicy` 23 条路由**（作业读 = `service`+viewer/trader/admin，作业变更 = trader|admin，排程管理 = admin）。
 - 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。无 secret + 回环 = 开放；无 secret + 非回环 = **拒绝启动**。
 - 裁决落 [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)。
 
@@ -96,6 +96,8 @@ contracts（协议类型） + kit（logging/http/db）
 - [`adr/0003-connector搬入本仓传输以窄-port-留在-core.md`](adr/0003-connector搬入本仓传输以窄-port-留在-core.md)
 - [`adr/0004-写面归属-store-与幂等内容比对.md`](adr/0004-写面归属-store-与幂等内容比对.md)
 - [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)
+- [`adr/0006-跨仓写入经HTTP投点与装配层归属.md`](adr/0006-跨仓写入经HTTP投点与装配层归属.md)
+- [`adr/0007-本仓自持传输与调度.md`](adr/0007-本仓自持传输与调度.md)
 
 ## 7. 非目标（明确不做）
 
@@ -117,8 +119,8 @@ contracts（协议类型） + kit（logging/http/db）
 **施工状态（2026-10-24 实测，`go build/vet/test ./...` 全绿）**
 
 - **X1a ✅（2026-10-25）**：contracts `v0.6.0` 新增 `dataprotocol` 包（`UnifiedDataPoint` 七字段 + `ToJSON` / `DeduplicateKey` + 15 个 `DataType*` 常量），本仓 `require v0.6.0` 后**删掉 `internal/ingest/point.go` 的逐字段镜像**，改 `type UnifiedDataPoint = dataprotocol.UnifiedDataPoint`；构造器（注入 `IngestTime`，契约不读时钟）与包内 `DeduplicateKey` 委托留本侧。守卫见 `internal/ingest/protocol_test.go`。
-- **X1b 🔶 取数面 + 写面代码已落，写面装配已接到 HTTP 投点（2026-10-25 H4 ②）**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）、`internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）；**2026-10-24 G4**：`internal/ingest` 落 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate`，`internal/store` 落写面 `BulkInsert`（A 集表、`ON CONFLICT DO NOTHING` + 内容比对）；**2026-10-25 H4 ②**：新增 `internal/assembly`（投影唯一处 + `DeclarationsRegistry()` 零传输声明面 + `Pipeline()`），`POST /ingest/points` 经它落库，`cmd/dataservice` 在 `DATABASE_URL` 有值时装出写面（为空 503）。**仍未落**：同步作业的**调度与取数**仍在 core（`sync_jobs` → worker → executor；core 的 `capital_flow` / `top_list` 两条改成「取数在 core、落库投点在本仓」，其余同步腿仍由 core 直写 `public`）；作业侧的 `Pipeline()` **今天没有本仓生产调用方**（传输仍在 core，ADR-0003）；~~`/factors/{name}@{hash}` 仅路由恒 404~~ **已撤（裁-14，2026-10-25）**——因子读面只在 core，本仓路由表不含 `/factors/*`。
-- **X1c 🔶 connector 已搬入，传输留在 core**：`internal/ingest` 有 `Registry`（漏声明 / 非法 / 形态矛盾即拒收）与 **12 connector 的取数/归一化实现**；声明真源 = 每个 connector 的 `Declarations()`，过渡期 `Catalog()` 双真相**已删除**。**未落**：传输实现（Tushare/Eastmoney/Mootdx 的 HTTP/SDK 客户端）仍在 core，经 `ingest.Transports` 注入；core 侧的旧 `pkg/data/source` 尚未删（跨仓切换）。
+- **X1b 🔶 取数面 + 写面代码已落，写面装配已接到 HTTP 投点（2026-10-25 H4 ②）**：`internal/serving`（`Resolve` / `Snapshot`、六分量 hash、强幂等缓存、回显同源校验）、`internal/normalize`（`Aggregate` 1m→15m/1d、`VisibleAsOf` PIT）；**2026-10-24 G4**：`internal/ingest` 落 `ETLPipeline` / `Registry.Fetch` / `ValidatePoints` / `GatePoints` / `Deduplicate`，`internal/store` 落写面 `BulkInsert`（A 集表、`ON CONFLICT DO NOTHING` + 内容比对）；**2026-10-25 H4 ②**：新增 `internal/assembly`（投影唯一处 + `DeclarationsRegistry()` 零传输声明面 + `Pipeline()`），`POST /ingest/points` 经它落库，`cmd/dataservice` 在 `DATABASE_URL` 有值时装出写面（为空 503）。**仍未落**：同步作业的**调度与取数**仍在 core（`sync_jobs` → worker → executor；core 的 `capital_flow` / `top_list` 两条改成「取数在 core、落库投点在本仓」，其余同步腿仍由 core 直写 `public`）；作业侧的 `Pipeline()` **今天没有本仓生产调用方**（传输仍在 core，ADR-0003）；~~`/factors/{name}@{hash}` 仅路由恒 404~~ **已撤（裁-14，2026-10-25）**——因子读面只在 core，本仓路由表不含 `/factors/*`。**2026-11-10 订正**：「同步作业的调度与取数仍在 core」已不成立（core `cmd/data` / `pkg/data` 已删，见 X1c），调度与 Tushare 传输已归本仓。
+- **X1c ✅（2026-11-10，裁决 B）传输与调度自持**：`internal/transport/tushare` 实现 `ingest.TushareTransport` 10 个方法；`internal/sync`（package `syncjob`）持有 `ingest.sync_jobs` 队列、`ingest.sync_schedules` 排程（自研 5 段 cron）、进程内 Worker（2s 轮询 + `FOR UPDATE SKIP LOCKED`）与 Scheduler（30s 扫 due）；11 条 HTTP 端点（`/api/sync/jobs*`、`/api/sync/schedules*`）按 REV-17 档位挂闸；`cmd/dataservice` 在 `TUSHARE_TOKEN` 非空时装真传输，worker / scheduler 在 schema 就绪后启动。执行链与 `POST /ingest/points` 共用 `assembly.Pipeline`（单源）。**未落（如实）**：`ingest.raw` 原始归档未搬；Mootdx / 东财 / Juchao / Xueqiu / Alpha Vantage / Yahoo 传输未搬——**只有 Tushare 一门是通的**；worker 失败不自动重试。决策见 ADR-0007。
 - **X1d 🔶 DDL 归属 + 写面已落，物理搬迁未做（2026-10-24）**：`internal/schema` 持有 `market` / `ingest` 的建表、`visible_at` 加列（A 集 12 张 × 目标/今天两侧）与哨兵防重放的回填腿；`store.BulkInsert` 走 `schema.GateClassFor` 三集合门（B/C 集拒写，缺 `visible_at` 整批拒收），见 `db-schema.md` §6。**未落**：D4 物理 `SET SCHEMA` 搬迁（core 内联 DDL 仍是运行期事实）、生产库 `visible_at` 回填（D2 只在测试库经 tagged 套件执行，见 `docs/TASKS.md`）、以及 core 侧仍在写 `market` / `ingest` 的那些同步腿——第二写者**尚未真正消灭**，见 `docs/TASKS.md` 未落项。
 - **X0 ⬜**（`dataset_snapshot_hash` 尚无消费方落库）。
 - **G3 只读兼容面 🔶（2026-11-10）**：core `pkg/marketdata/http_provider.go` 的 7 条旧读路由由本仓补齐（`internal/serving/legacy.go` 端口 → `internal/store/reference.go` 实现 → `internal/httpapi/legacy_read.go` handler），core 零改；只读、不参与快照哈希。**推翻 K1 字面口径（本仓不补齐旧读面），待主任追认**。切读/停写与 core 旧实现退役仍未完成（见 `docs/TASKS.md` SVC-DATA-G3 的「未执行」）。

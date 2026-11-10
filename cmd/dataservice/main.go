@@ -34,9 +34,12 @@ import (
 
 	"tellurion-data/internal/assembly"
 	"tellurion-data/internal/httpapi"
+	"tellurion-data/internal/ingest"
 	"tellurion-data/internal/schema"
 	"tellurion-data/internal/serving"
 	"tellurion-data/internal/store"
+	"tellurion-data/internal/sync"
+	"tellurion-data/internal/transport/tushare"
 )
 
 func main() {
@@ -141,13 +144,13 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 	// 降级启动（G4 ⑤）：DDL 失败不退出进程。数据端点由 availability 门
 	// 立即回 503（不逐个等连接超时），后台重试成功后自愈。
 	var schemaReady atomic.Bool
+	retryCtx, stopRetry := context.WithCancel(context.Background())
 	if err := applySchema(ctx, pool); err != nil {
 		log.Printf("data-service: schema not applied yet (data endpoints stay 503, retry every %s): %v", schemaRetryInterval, err)
+		go retrySchema(retryCtx, pool, &schemaReady)
 	} else {
 		schemaReady.Store(true)
 	}
-	retryCtx, stopRetry := context.WithCancel(context.Background())
-	go retrySchema(retryCtx, pool, &schemaReady)
 
 	opts := store.Options{MarketSchema: os.Getenv("DATA_MARKET_SCHEMA")}
 	st, err := store.New(store.PoolQuerier(pool), opts)
@@ -168,36 +171,90 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		return nil, nil, err
 	}
 
-	// 写面装配：声明来自零传输的注册表（闸门要知道每个 data_type 的锚点列），
-	// 落库走 `store.Writer`。传输仍在 core，所以这里**不装取数链**——
-	// 只装「别人把点投进来」这一半（`internal/assembly` 头注释）。
+	// 写面装配：声明来自注册表（闸门要知道每个 data_type 的锚点列名），
+	// 落库走 `store.Writer`。
 	writer, err := store.NewWriter(store.PoolWriteDB(pool), opts)
 	if err != nil {
 		stopRetry()
 		pool.Close()
 		return nil, nil, err
 	}
-	declarations, err := assembly.DeclarationsRegistry()
+
+	// 取数链：`TUSHARE_TOKEN` 有值才装真传输；否则注册表只有声明，作业会被
+	// connector 判成 disabled 并在作业行上响亮失败（不会静默写 0 行）。
+	transports := ingest.Transports{}
+	if token := strings.TrimSpace(os.Getenv("TUSHARE_TOKEN")); token != "" {
+		transports.Tushare = tushare.NewDefault(token)
+	}
+	registry, err := assembly.Registry(transports)
 	if err != nil {
 		stopRetry()
 		pool.Close()
 		return nil, nil, err
 	}
-	points, err := assembly.New(declarations, writer, nil)
+	points, err := assembly.New(registry, writer, nil)
 	if err != nil {
 		stopRetry()
 		pool.Close()
 		return nil, nil, err
 	}
 
+	// 作业层（X1c 的「调度」那一半）：队列在 `ingest.sync_jobs` /
+	// `ingest.sync_schedules`，worker 与 scheduler 都在本进程内。
+	queue := syncjob.NewPGStore(pool, nil)
+	workerID, err := hostnameOr("data-1")
+	if err != nil {
+		stopRetry()
+		pool.Close()
+		return nil, nil, err
+	}
+	jobCtx, stopJobs := context.WithCancel(context.Background())
+	worker := &syncjob.Worker{
+		Store:  queue,
+		Runner: syncjob.NewRunner(assembly.Pipeline(registry, writer, nil)),
+		ID:     workerID,
+		Logger: log.Default(),
+	}
+	scheduler := &syncjob.Scheduler{Store: queue, Logger: log.Default()}
+	// 只在 schema 就绪后启动作业循环：降级启动时 sync_* 表可能还不存在，
+	// 立刻轮询只会每 2s 往日志里灌一条「relation does not exist」。
+	go startJobsWhenReady(jobCtx, &schemaReady, worker, scheduler)
+
 	server := httpapi.New(agg, authorizer,
 		httpapi.WithPoints(points),
 		// G3 只读兼容面：core 旧读链的 7 条路由，读同一批表（只读）。
 		httpapi.WithLegacyReader(st),
+		httpapi.WithSync(queue),
 		httpapi.WithReadiness(readinessCheck(pool)),
 		httpapi.WithAvailability(schemaReady.Load),
 	)
-	return server, func() { stopRetry(); pool.Close() }, nil
+	return server, func() { stopJobs(); stopRetry(); pool.Close() }, nil
+}
+
+// startJobsWhenReady 等 schema 就绪后启动 worker 与 scheduler。
+//
+// 两段式而不是直接起：降级启动（PG 不可达 / DDL 未跑完）时队列表可能不存在，
+// 立刻轮询只会制造噪音；DDL 就绪后同一进程自愈启动，不需要重启。
+func startJobsWhenReady(ctx context.Context, ready *atomic.Bool, worker *syncjob.Worker, scheduler *syncjob.Scheduler) {
+	for !ready.Load() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+	go worker.Run(ctx)
+	go scheduler.Run(ctx)
+}
+
+// hostnameOr 取主机名作 worker ID 前缀；取不到用 fallback。
+func hostnameOr(fallback string) (string, error) {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		return fallback, nil
+	}
+	// 多实例部署时同主机多进程会撞 ID；拼 pid 让日志可分辨。
+	return fmt.Sprintf("%s-%d", host, os.Getpid()), nil
 }
 
 // retrySchema 在降级启动后重放本仓 DDL，成功即翻 availability 并退出。

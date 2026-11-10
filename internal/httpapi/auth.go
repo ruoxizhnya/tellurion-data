@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +11,26 @@ import (
 	"github.com/ruoxizhnya/tellurion-kit/auth"
 	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 )
+
+// principalKey 是调用方身份在请求 context 里的键（运维审计用，例如
+// `sync_schedules.created_by`）。
+type principalKey struct{}
+
+// withPrincipal 把放行后的身份挂进 context；无身份（开放访问）不动请求。
+func withPrincipal(r *http.Request, principal string) *http.Request {
+	if principal == "" {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), principalKey{}, principal))
+}
+
+// subjectFromContext 取请求的调用方身份；未鉴权 / 开放访问返回空串。
+func subjectFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(principalKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // 鉴权闸的失败分类。实现只负责把 kit 的判定映射到这两个哨兵。
 var (
@@ -105,7 +126,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				}})
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withPrincipal(r, principal))
 		case errors.Is(err, ErrUnauthenticated):
 			writeJSON(w, http.StatusUnauthorized, errorBody{Error: errPayload{Code: "unauthenticated", Message: "authentication required"}})
 		case errors.Is(err, ErrForbidden):

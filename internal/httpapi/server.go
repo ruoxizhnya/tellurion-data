@@ -23,6 +23,7 @@ import (
 	"tellurion-data/internal/assembly"
 	"tellurion-data/internal/serving"
 	"tellurion-data/internal/store"
+	"tellurion-data/internal/sync"
 )
 
 // maxIngestBodyBytes 是投点请求体的字节上限。它与
@@ -38,6 +39,7 @@ type Server struct {
 	agg        *serving.Aggregator
 	points     *assembly.Writer
 	legacy     serving.LegacyReader
+	sync       syncjob.Store
 	authorizer Authorizer
 	readiness  func(context.Context) error
 	available  func() bool
@@ -134,6 +136,22 @@ func (s *Server) routes() []routeSpec {
 		{"GET /api/v1/trading/calendar", s.handleLegacyCalendar},
 		{"GET /api/v1/stocks/{symbol}", s.handleLegacyStock},
 		{"POST /api/v1/ohlcv/bulk", s.handleLegacyBulk},
+
+		// ── 作业层（`sync.go`）──
+		// 队列即 `ingest.sync_jobs`；worker/scheduler 由 `cmd/dataservice` 启动。
+		// `/api/sync/jobs` 的 GET 是新增只读面（core 旧服务只有 POST），
+		// 排程的 GET 同理——「建了却看不见」的队列不可运维。
+		{"POST /api/sync/jobs", s.handleCreateSyncJob},
+		{"GET /api/sync/jobs", s.handleListSyncJobs},
+		{"GET /api/sync/jobs/{id}", s.handleGetSyncJob},
+		{"POST /api/sync/jobs/{id}/cancel", s.handleCancelSyncJob},
+		{"POST /api/sync/jobs/{id}/retry", s.handleRetrySyncJob},
+		{"POST /api/sync/schedules", s.handleCreateSchedule},
+		{"GET /api/sync/schedules", s.handleListSchedules},
+		{"PUT /api/sync/schedules/{id}", s.handleUpdateSchedule},
+		{"DELETE /api/sync/schedules/{id}", s.handleDeleteSchedule},
+		{"POST /api/sync/schedules/{id}/toggle", s.handleToggleSchedule},
+		{"POST /api/sync/schedules/{id}/run", s.handleRunScheduleNow},
 	}
 }
 
@@ -378,6 +396,14 @@ var sentinelCodes = []struct {
 	// G4：PG 不可达是 503（可等待恢复），不是 500。哨兵来自 `internal/store`
 	// 的连接层分诊（`classifyDependency`），只包连接失败，不包 SQL 语义错误。
 	{store.ErrDependencyUnavailable, http.StatusServiceUnavailable, "dependency_unavailable"},
+	// 作业层分诊：不存在 ⇒ 404；状态不允许 ⇒ 409；参数坏 ⇒ 400。
+	// 三条与「快照不存在」分开登记，是因为调用方的处置不同：改 ID、等状态、
+	// 改内容，三种动作不能混成一个 not_found / conflict 的大口袋。
+	{syncjob.ErrJobNotFound, http.StatusNotFound, "job_not_found"},
+	{syncjob.ErrScheduleNotFound, http.StatusNotFound, "schedule_not_found"},
+	{syncjob.ErrJobNotCancellable, http.StatusConflict, "job_not_cancellable"},
+	{syncjob.ErrJobNotRetryable, http.StatusConflict, "job_not_retryable"},
+	{syncjob.ErrInvalidParams, http.StatusBadRequest, "invalid_parameter"},
 }
 
 func writeError(w http.ResponseWriter, err error) {
