@@ -38,23 +38,22 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `stock_fundamentals` | 基本面**宽表**（PE/PB/PS/ROE…），带 `available_date` —— 它是**生成列** `COALESCE(ann_date, trade_date)`，即"披露日缺失时退化成报告期截止日"。这条兜底正是 §3 红线 3 点名的形状，且让任何"`available_date` 非空"式判据恒真 ⇒ 见 §6.3 的单独一条 |
 | `fundamentals_detail` | 基本面**逐字段行存 + PIT**（契约 C1，与宽表并存不复用） |
 
-### 1.3 因子
+### 1.3 因子（不属本仓）
 
-| 真实表 | 内容 |
+> **归属现状（2026-11-11 订正）**：本仓 `internal/schema/schema.go` 的 `TableNames()` 实测 **22 张表**，全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**。下表列的是因子域的历史/目标说明，**不是本仓物理表清单**；这些表的物理 DDL 与写者今天都在 `tellurion`（core）的 `public` schema。
+
+| 表 | 内容与今天的 owner |
 |---|---|
-| `factor_definitions` | 因子定义（库中公式 + `version_hash`） |
-| `factor_cache` | 因子值结果（按 symbol/date 缓存） |
-| `factor_returns` | 因子分组收益（`factor_name` × `trade_date` × `quintile`，写者 `tellurion:pkg/storage/cache.go`） |
-| `ic_analysis` | 因子 IC 分析结果（`factor_name` × `trade_date`，写者 `tellurion:pkg/storage/cache.go`） |
-| `factor_hypothesis` | 因子假设登记与内置种子 —— **⚠️ owner 已改判（2026-10-25，U8 裁决）= `tellurion-agent` 仓的 `ai.*` 域**，**不再属本仓因子域**；core 侧写者 `tellurion:pkg/storage/factor_hypothesis.go` 属过渡期实现 |
-| `factor_registrations` / `factor_registration_audit` / `factor_mining_records` | 因子注册与审计 / 挖掘留痕（D8，同族治理账本：登记记「谁把哪一版接进来」，挖掘留痕记「这一版凭什么进库」；写者同为数据服务挖掘入口） |
+| `factor_definitions` | 因子定义（库中公式 + `version_hash`）；DDL/写者在 core（`tellurion:pkg/storage/postgres.go`、`factor_definition.go`） |
+| `factor_cache` | 因子值缓存；owner = **core**，按 ADR-037 在消费点按需求值，**不新增 DB 写者**（当前零写者） |
+| `factor_returns` | 因子分组收益；owner = **core**（ADR-038），物理在 core `public`，写方法在 `tellurion:pkg/storage/cache.go`，但**非测试零调用**；本仓不认领 |
+| `ic_analysis` | 因子 IC 分析结果；owner = **core**（ADR-038），物理在 core `public`，读写方法均**零调用**；本仓不认领 |
+| `factor_hypothesis` | 因子假设登记；**owner = `tellurion-agent` 的 `ai.factor_hypothesis`**（U8 裁决 + 代码实测），core 的 `public.factor_hypothesis` 已退役 |
+| `factor_registrations` / `factor_registration_audit` / `factor_mining_records` | 因子注册审计 / 挖掘留痕；DDL 与写者在 core（`tellurion:pkg/storage/factor_registration.go`、`mining.go`） |
 
-> **SPEC-R-02 认领**：`factor_returns` / `ic_analysis` / `factor_hypothesis` 属本仓**因子域**（与 `factor_cache` / `factor_definitions` 同域），唯一 owner = `tellurion-data`。当前 DDL 文本实体在 `tellurion:pkg/storage/postgres.go`（core 内联 DDL 为唯一真相），X1d 按 schema 迁移时随因子域一并搬走；在此之前 core 的写入属过渡期实现，不回写归属。
+> **SPEC-R-02（2026-11-11 订正）**：因子域**不再认领为本仓所有**。`ADR-037` 判 `factor_cache` owner=core、消费点按需求值；裁-14 与 `dataflow` 不变量 7 判 data 不提供因子读面。`factor_hypothesis` 已归 `tellurion-agent`；`factor_returns` / `ic_analysis` 由 **ADR-038** 裁决归 core（与因子值同源），在任何情况下都**不迁入本仓、不新增写者**。
 >
-> **⚠️ 上面这条 SPEC-R-02 认领已被 U8 裁决部分推翻（2026-10-25，主任口径）**：`factor_hypothesis` 的 owner **改判为 `tellurion-agent` 仓的 `ai.*` 域**（它是 ADR-023 的实验日志，不是仪器域数据）。**本仓只保留 `factor_returns` / `ic_analysis` 的因子域认领**。
-> **依据（实测）**：agent 仓 `pkg/aistore/schema.go` 的 `Tables` 清单**已含 `ai.factor_hypothesis`**（QT-17 迁移时随 core `public.factor_hypothesis` 一起搬，schema 前缀只改 `public` → `ai`）⇒ **事实上的 owner 已经是 agent**；本条 SPEC-R-02 认领是**过期快照**，不改会让 X1d 的 schema 清单与 agent 的 `ai.*` 表名单各写一次（撞车）。
-> **落地动作**：① 本表 `factor_hypothesis` 行已改判（见上）；② SPEC-R-02 的结案表出订正条；③ `tellurion-agent` 的 `ai.*` 表名单**已含**该表（实测在册），**本轮无需再动**。
-> **裁决全文**：`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑪。
+> **历史**：2026-10-25 U8 已把 `factor_hypothesis` 改判给 agent；原 SPEC-R-02 的"唯一 owner = data"是过期快照，已被 ADR-037 与裁-14 取代。
 
 ### 1.4 专题数据
 
