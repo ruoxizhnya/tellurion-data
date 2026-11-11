@@ -286,7 +286,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | 表 | 归属 | 写者 | 本仓读方 |
 |---|---|---|---|
 | `market.index_daily` | **core**（DDL 与读写都在 core，裁决 ⑰） | core `pkg/storage/index_daily.go:31` | 无（本仓不建、不读） |
-| `stock_fundamentals` | **core**（DDL 与写点仍在 core，裸表名 ⇒ `public.stock_fundamentals`） | core | `GET /fundamental/{symbol}` 读 `market.stock_fundamentals`（PIT）。`DATA_MARKET_SCHEMA=market` 时二者**不是同一张表**——已知限制，收编属 K3 |
+| `stock_fundamentals` | **core**（DDL 与写点都在 core，裸表名 ⇒ `public.stock_fundamentals`） | core | **本仓不读**（2026-11-12 归属裁决）：基本面读面是 core 的 `GET /api/fundamental/{symbol}`，空态 404 `fundamental_not_found`；本仓不补空表、不冒充读面 |
 
 ### 9.4 结论
 

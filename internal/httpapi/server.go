@@ -136,10 +136,12 @@ func (s *Server) routes() []routeSpec {
 		{"GET /api/evidence/{content_hash}", s.handleGetEvidence},
 
 		// ── G3 只读兼容面（`legacy_read.go`）──
-		// core 的 `pkg/marketdata/http_provider.go` 仍打这 7 条旧路由；旧 cmd/data
+		// core 的 `pkg/marketdata/http_provider.go` 仍打这 6 条旧路由；旧 cmd/data
 		// 已退役，不在本服务补上就整条读链 404。只读、不参与快照哈希。
+		// `GET /fundamental/{symbol}` 已于 2026-11-12 删除：`stock_fundamentals`
+		// 是 core 自己的表（DDL/写者/读者都在 core），本服务不补空表、不冒充
+		// 读面（归属裁决，见 core 的 handlers_fundamental.go）。
 		{"GET /ohlcv/{symbol}", s.handleLegacyOHLCV},
-		{"GET /fundamental/{symbol}", s.handleLegacyFundamental},
 		{"GET /stocks", s.handleLegacyStocks},
 		{"GET /index/{code}/constituents", s.handleLegacyConstituents},
 		{"GET /api/v1/trading/calendar", s.handleLegacyCalendar},

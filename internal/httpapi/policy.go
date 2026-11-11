@@ -34,12 +34,13 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /api/evidence/{content_hash}": {Roles: []string{"service", "viewer", "trader", "admin"}},
 
 	// ── G3 只读兼容面（2026-11-10，`legacy_read.go`）──
-	// core 旧读链的 7 条路由。读档位与 `/datasets/*` 一致；
+	// core 旧读链的只读路由。读档位与 `/datasets/*` 一致；
 	// `POST /api/v1/ohlcv/bulk` 是**只读 POST**（请求体只承载查询参数，不写库），
 	// 沿 REV-17 的 any-authenticated 档——它此前就在 `legacyREV17` 里，落地后
 	// 必须移出（守卫测试禁止同一路由同时出现在两张表）。
+	// `GET /fundamental/{symbol}` 已于 2026-11-12 删除（归属裁决：基本面是
+	// core 自己的表，本服务不再提供 market 读面）。
 	"GET /ohlcv/{symbol}":            {Roles: []string{"service", "viewer", "trader", "admin"}},
-	"GET /fundamental/{symbol}":      {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /stocks":                    {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /index/{code}/constituents": {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /api/v1/trading/calendar":   {Roles: []string{"service", "viewer", "trader", "admin"}},

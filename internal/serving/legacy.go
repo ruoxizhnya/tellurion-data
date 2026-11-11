@@ -31,8 +31,6 @@ type LegacyReader interface {
 	LatestTradeDate(ctx context.Context) (time.Time, bool, error)
 	// Stock 按代码取单只；found=false 表示库里没有（不是错误）。
 	Stock(ctx context.Context, symbol string) (market.Stock, bool, error)
-	// Fundamental 返回 asOf 当日**已可用**的最新一期财报（available_date 口径）。
-	Fundamental(ctx context.Context, symbol string, asOf time.Time) (market.Fundamental, bool, error)
 	// IndexConstituents 返回 indexCode 在 asOf 当日生效的成分（in_date/out_date 半开区间）。
 	IndexConstituents(ctx context.Context, indexCode string, asOf time.Time) ([]market.IndexConstituent, error)
 }

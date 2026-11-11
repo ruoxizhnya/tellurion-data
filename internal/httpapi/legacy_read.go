@@ -14,11 +14,18 @@ import (
 
 // 本文件是 **G3 只读兼容面**（SVC-DATA-G3，2026-11-10）。
 //
-// 背景：core 的 `pkg/marketdata/http_provider.go` 仍按旧 cmd/data 的 7 条路由
-// 取数（`/ohlcv/{symbol}`、`/fundamental/{symbol}`、`/stocks`、
-// `/index/{code}/constituents`、`/api/v1/trading/calendar`、
-// `/api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`）。旧服务已随 core 的
-// 数据面退役删除，这些路由在本服务里**不存在**，读链实际是 404。
+// 背景：core 的 `pkg/marketdata/http_provider.go` 仍按旧 cmd/data 的只读路由
+// 取数（`/ohlcv/{symbol}`、`/stocks`、`/index/{code}/constituents`、
+// `/api/v1/trading/calendar`、`/api/v1/stocks/{symbol}`、
+// `POST /api/v1/ohlcv/bulk`）。旧服务已随 core 的数据面退役删除，这些路由在
+// 本服务里**不存在**，读链实际是 404。
+//
+// 注意 `GET /fundamental/{symbol}` **不在**这组里（2026-11-12 归属裁决）：
+// `stock_fundamentals` 是 core 自己的表（DDL 在 `pkg/storage/postgres.go`，
+// 写者/读者都在 core）。本服务此前把它读成 `market.stock_fundamentals`，
+// 而那张表从未建立 —— 空态被冒成 500。裁决后由 core 的
+// `GET /api/fundamental/{symbol}` 读回 `public.stock_fundamentals`，本服务
+// 删除该读路径，不补空表。
 //
 // 主任裁决（2026-11-10）：由本服务补上这组**只读兼容端点**，core 零改。它
 // 推翻了 K1「data 不补齐 core 的 5 条旧读面」的字面口径，理由写在
@@ -64,29 +71,6 @@ func (s *Server) handleLegacyOHLCV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ohlcv": bars})
-}
-
-// handleLegacyFundamental 是 `GET /fundamental/{symbol}?date=YYYYMMDD`。
-// 没有可用记录 ⇒ 404（core 侧把 404 当「无财报」，不是错误）。
-func (s *Server) handleLegacyFundamental(w http.ResponseWriter, r *http.Request) {
-	if !s.legacyReady(w, s.legacy) {
-		return
-	}
-	asOf, err := parseCompactDateParam(r.URL.Query(), "date")
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	f, found, err := s.legacy.Fundamental(r.Context(), r.PathValue("symbol"), asOf)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if !found {
-		writeNotFound(w, "no fundamental record available on or before the requested date")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"fundamental": f})
 }
 
 // handleLegacyStocks 是 `GET /stocks[?exchange=]`。

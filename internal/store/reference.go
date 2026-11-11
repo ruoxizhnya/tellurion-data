@@ -12,9 +12,9 @@ import (
 //
 // 表归属（如实登记，见 `docs/TASKS.md` SVC-DATA-G3 与 K3）：
 //   - `stocks` / `index_constituents` 的 DDL 在本仓 `internal/schema`；
-//   - `stock_fundamentals` 的 DDL **仍是 core 的迁移**（`tellurion:pkg/storage`），
-//     本仓只读。在 `DATA_MARKET_SCHEMA` 指向新 schema 的部署里这张表尚不存在，
-//     `/fundamental/{symbol}` 会 500 —— 这是 K3 收编前必须知道的限制，不是静默降级。
+//   - `stock_fundamentals` 不归本仓（2026-11-12 归属裁决）：它的 DDL 在 core 的
+//     `pkg/storage/postgres.go`，写者/读者都在 core。本仓**不再读它**，也不补
+//     空表；基本面读面是 core 的 `/api/fundamental/{symbol}`。
 
 // Stocks 实现 `serving.LegacyReader`：股票列表（exchange 为空 = 全市场）。
 func (s *Store) Stocks(ctx context.Context, exchange string) ([]market.Stock, error) {
@@ -107,44 +107,6 @@ func (s *Store) Stock(ctx context.Context, symbol string) (market.Stock, bool, e
 		return market.Stock{}, false, fmt.Errorf("store: read stock %s: %w", symbol, err)
 	}
 	return stock, found, nil
-}
-
-// Fundamental 实现 `serving.LegacyReader`：asOf 当日已可用的最新一期。
-//
-// PIT 口径与 core 的 `pkg/storage` 一致：可用日 = `available_date`
-// （`COALESCE(ann_date, trade_date)` 的生成列；老行可能为空，故再 COALESCE
-// 一次到 trade_date）。数值列一律用指针承接 NULL——「没披露」和「是 0」在
-// 估值因子里是两回事（core 的 P2-10）。
-func (s *Store) Fundamental(ctx context.Context, symbol string, asOf time.Time) (market.Fundamental, bool, error) {
-	sql := `SELECT ts_code, COALESCE(available_date, trade_date) AS available,
-			ann_date, pe, pb, ps, roe, roa, debt_to_equity, gross_margin, net_margin,
-			revenue, net_profit, total_assets, total_liab
-		FROM ` + s.table("stock_fundamentals") + `
-		WHERE ts_code = $1 AND COALESCE(available_date, trade_date) <= $2
-		ORDER BY COALESCE(available_date, trade_date) DESC, end_date DESC NULLS LAST
-		LIMIT 1`
-
-	var (
-		f       market.Fundamental
-		found   bool
-		annDate *time.Time
-	)
-	err := s.scanAll(ctx, sql, []any{symbol, utcDate(asOf)}, func(rows Rows) error {
-		if err := rows.Scan(&f.Symbol, &f.Date, &annDate,
-			&f.PE, &f.PB, &f.PS, &f.ROE, &f.ROA, &f.DebtToEquity,
-			&f.GrossMargin, &f.NetMargin, &f.Revenue, &f.NetProfit,
-			&f.TotalAssets, &f.TotalLiab); err != nil {
-			return err
-		}
-		f.Date = utcDate(f.Date)
-		f.AnnDate = annDate
-		found = true
-		return nil
-	})
-	if err != nil {
-		return market.Fundamental{}, false, fmt.Errorf("store: read fundamental %s: %w", symbol, err)
-	}
-	return f, found, nil
 }
 
 // IndexConstituents 实现 `serving.LegacyReader`：asOf 当日生效的成分。

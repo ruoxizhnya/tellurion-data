@@ -21,8 +21,6 @@ import (
 type fakeLegacy struct {
 	bars         map[string][]market.OHLCV
 	stocks       []market.Stock
-	fundamental  market.Fundamental
-	hasFund      bool
 	constituents []market.IndexConstituent
 	calendar     []time.Time
 	latestDate   time.Time
@@ -60,10 +58,6 @@ func (f *fakeLegacy) Stock(_ context.Context, symbol string) (market.Stock, bool
 	return market.Stock{}, false, nil
 }
 
-func (f *fakeLegacy) Fundamental(_ context.Context, _ string, _ time.Time) (market.Fundamental, bool, error) {
-	return f.fundamental, f.hasFund, nil
-}
-
 func (f *fakeLegacy) IndexConstituents(_ context.Context, _ string, _ time.Time) ([]market.IndexConstituent, error) {
 	return f.constituents, nil
 }
@@ -82,8 +76,6 @@ func newFakeLegacy() *fakeLegacy {
 		stocks: []market.Stock{
 			{Symbol: "000001.SZ", Name: "平安银行", Exchange: "SZ", Status: "active"},
 		},
-		fundamental: market.Fundamental{Symbol: "000001.SZ", Date: day},
-		hasFund:     true,
 		constituents: []market.IndexConstituent{
 			{IndexCode: "000300.SH", Symbol: "000001.SZ", InDate: day},
 		},
@@ -114,7 +106,10 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, dest any) {
 	}
 }
 
-// TestLegacyReadEndpointsShape 逐条钉住 7 条只读兼容端点的成功形状。
+// TestLegacyReadEndpointsShape 逐条钉住 6 条只读兼容端点的成功形状。
+//
+// `GET /fundamental/{symbol}` 已于 2026-11-12 删除（归属裁决：基本面是 core
+// 自己的表，读面在 core 的 `/api/fundamental/{symbol}`）。
 func TestLegacyReadEndpointsShape(t *testing.T) {
 	h := legacyTestServer(newFakeLegacy())
 
@@ -129,20 +124,6 @@ func TestLegacyReadEndpointsShape(t *testing.T) {
 		decodeBody(t, rec, &got)
 		if len(got.OHLCV) != 1 || got.OHLCV[0].Symbol != "000001.SZ" {
 			t.Fatalf("unexpected ohlcv: %+v", got.OHLCV)
-		}
-	})
-
-	t.Run("fundamental", func(t *testing.T) {
-		rec := doLegacy(t, h, http.MethodGet, "/fundamental/000001.SZ?date=20261102", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
-		}
-		var got struct {
-			Fundamental market.Fundamental `json:"fundamental"`
-		}
-		decodeBody(t, rec, &got)
-		if got.Fundamental.Symbol != "000001.SZ" {
-			t.Fatalf("unexpected fundamental: %+v", got.Fundamental)
 		}
 	})
 
@@ -231,15 +212,12 @@ func TestLegacyReadEndpointsShape(t *testing.T) {
 	})
 }
 
-// TestLegacyReadNotFound 钉住两条 404：core 把「无财报 / 无该票」当缺省而非错误。
+// TestLegacyReadNotFound 钉住 404：core 把「无该票」当缺省而非错误。
 func TestLegacyReadNotFound(t *testing.T) {
-	fake := newFakeLegacy()
-	fake.hasFund = false
-	h := legacyTestServer(fake)
+	h := legacyTestServer(newFakeLegacy())
 
 	for name, target := range map[string]string{
-		"fundamental": "/fundamental/999999.SZ?date=20261102",
-		"stock":       "/api/v1/stocks/999999.SZ",
+		"stock": "/api/v1/stocks/999999.SZ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := doLegacy(t, h, http.MethodGet, target, "")
@@ -259,7 +237,6 @@ func TestLegacyReadBadParams(t *testing.T) {
 	cases := map[string]string{
 		"ohlcv missing start":   "/ohlcv/000001.SZ?end_date=20261231",
 		"ohlcv bad end":         "/ohlcv/000001.SZ?start_date=20260101&end_date=nope",
-		"fundamental missing":   "/fundamental/000001.SZ",
 		"constituents bad date": "/index/000300.SH/constituents?date=nope",
 		"calendar missing end":  "/api/v1/trading/calendar?start=2026-11-01",
 	}

@@ -37,7 +37,6 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"GET /api/v1/trading/calendar",
 		"GET /datasets/resolve",
 		"GET /datasets/{hash}",
-		"GET /fundamental/{symbol}",
 		"GET /health",
 		"GET /index/{code}/constituents",
 		"GET /ohlcv/{symbol}",
@@ -88,13 +87,12 @@ func TestServedPolicyWriteRouteRolesAreNarrow(t *testing.T) {
 }
 
 // TestServedPolicyLegacyReadRoutes 钉住 G3 只读兼容面的档位：
-// 6 条 GET 认 service/viewer/trader/admin；`POST /api/v1/ohlcv/bulk` 是只读
+// 5 条 GET 认 service/viewer/trader/admin；`POST /api/v1/ohlcv/bulk` 是只读
 // POST，沿用 REV-17 的 any-authenticated（匿名仍拒）。
 func TestServedPolicyLegacyReadRoutes(t *testing.T) {
 	entries := ServedPolicyEntries()
 	for _, key := range []string{
 		"GET /ohlcv/{symbol}",
-		"GET /fundamental/{symbol}",
 		"GET /stocks",
 		"GET /index/{code}/constituents",
 		"GET /api/v1/trading/calendar",
