@@ -382,7 +382,9 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 		t.Fatalf("failed 终态 = %+v", got)
 	}
 
-	// 成功终态：progress 翻到 100，result 是 JSONB 而不是字符串。
+	// 成功终态：progress 翻到 100，result 是 JSONB 而不是字符串；
+	// 三个计数列按 `jobCounts` 口径落库（UI 队列渲染 processed/total，
+	// 不写就永远 0/0）。fetched=3、persisted=2、skipped=1 ⇒ 3 / 3。
 	job2, err := NewJob("ohlcv_daily", nil, 1)
 	if err != nil {
 		t.Fatalf("NewJob: %v", err)
@@ -393,14 +395,18 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM ingest.sync_jobs WHERE id = $1`, job2.ID)
 	})
-	if err := store.FinishJob(ctx, job2.ID, StatusSucceeded, map[string]any{"fetched": 1}, ""); err != nil {
+	if err := store.FinishJob(ctx, job2.ID, StatusSucceeded, map[string]any{"fetched": 3, "persisted": 2, "skipped": 1}, ""); err != nil {
 		t.Fatalf("FinishJob(succeeded): %v", err)
 	}
 	got2, err := store.GetJob(ctx, job2.ID)
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
-	if got2.Status != StatusSucceeded || got2.ProgressPercent != 100 || got2.Result["fetched"] != float64(1) {
+	if got2.Status != StatusSucceeded || got2.ProgressPercent != 100 || got2.Result["fetched"] != float64(3) {
 		t.Fatalf("succeeded 终态 = %+v", got2)
+	}
+	if got2.TotalItems != 3 || got2.ProcessedItems != 3 || got2.FailedItems != 0 {
+		t.Fatalf("计数列 = total:%d processed:%d failed:%d，want 3/3/0",
+			got2.TotalItems, got2.ProcessedItems, got2.FailedItems)
 	}
 }

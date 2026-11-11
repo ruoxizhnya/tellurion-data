@@ -126,8 +126,45 @@ func (s *pgStore) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
 	return &job, nil
 }
 
+// jobCounts 从结案结果里折出作业计数。
+//
+// 口径（与 `ingest.ProcessResult` 同义）：
+//   - total_items = fetched（取到的行数，含被跳过/重复的行）；
+//   - processed_items = persisted + skipped（已处理完的行：入库 + 判定跳过）；
+//   - failed_items = 0（成功终态；失败终态没有 per-item 计数）。
+//
+// 为什么写这三个列：`Job` 的 JSON 一直带着它们，UI 的作业队列渲染
+// `processed_items/total_items`；不写就永远是 0/0，等于界面在撒谎。
+// 旧实现只在成功时写 progress_percent=100，这三列从未被任何语句赋值。
+func jobCounts(result map[string]any) (total, processed, failed int) {
+	if result == nil {
+		return 0, 0, 0
+	}
+	total = intField(result, "fetched")
+	processed = intField(result, "persisted") + intField(result, "skipped")
+	if processed > total {
+		processed = total
+	}
+	return total, processed, 0
+}
+
+// intField 读 result 里的整型字段（JSON 解码出的数字可能是 float64）。
+func intField(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
 // FinishJob 写终态。
 func (s *pgStore) FinishJob(ctx context.Context, id, status string, result map[string]any, errMessage string) error {
+	total, processed, failed := jobCounts(result)
 	var payload []byte
 	if result != nil {
 		var err error
@@ -152,8 +189,11 @@ func (s *pgStore) FinishJob(ctx context.Context, id, status string, result map[s
 		    result = $3::jsonb,
 		    error_message = $4,
 		    completed_at = NOW(),
+		    total_items = $5,
+		    processed_items = $6,
+		    failed_items = $7,
 		    progress_percent = CASE WHEN $2::text = 'succeeded' THEN 100 ELSE progress_percent END
-		WHERE id = $1`, id, status, resultArg, errArg)
+		WHERE id = $1`, id, status, resultArg, errArg, total, processed, failed)
 	if err != nil {
 		return fmt.Errorf("syncjob: finish job %s: %w", id, err)
 	}

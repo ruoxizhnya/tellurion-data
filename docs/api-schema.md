@@ -62,6 +62,8 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > - `index_constituents`：`params` 必须给 `index_code`（如 `000300.SH`），`start_date` / `end_date` 空 = `Now` 往前 120 天；只落**最新一期快照**（整期替换当前行，口径见 `db-schema.md` §9.6）。
 > - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这三类作业以 `misconfigured` 失败（不会静默写 0 行）。
 
+> **`Job` 的计数三列（2026-11-12）**：`total_items` = `fetched`；`processed_items` = `persisted + skipped`；成功终态 `failed_items` = 0。三列随结案（`FinishJob`）与 `result` 一起落库，**运行中不逐条更新**——因此队列渲染的 `processed/total` 在作业到达终态前可能仍是 `0/0`；要实时进度看 `GET /api/sync/jobs/{id}/progress`（SSE）的 `progress_percent`。旧实现从未给这三列赋值，导致成功作业也显示 `0/0`。
+
 
 内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。`POST /ingest/points` 走的是**同一条链的后半段**（从 `ValidatePoints` 起），投影与次序在 `internal/assembly`——两条入口共享一条链，不是两份实现（ADR-0006）。
 
