@@ -34,15 +34,15 @@ verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `
 - **⑥ 边界**：数据形状与读端口归本仓；消费口径归 agent。
 - **重开条件**：下游出现 point-in-time 上市/退市窗口的真实需求（回测票池按日在市、退市偏差维），届时由本仓提供；`market.stocks.delist_date` 已存在。
 
-### DATA-INGEST-RAW · `ingest.raw` 归档面 [P2] ⏸
+### DATA-INGEST-RAW · `ingest.raw` 归档面（证据链） [P2] ✅（2026-11-12，ADR-0010）
 
-- **① 目标**：决定原始字节是否需要留存与回放。
-- **② 上下文**：`ingest.raw` 表零写者、零读者、无保留期；本仓 `Transports` 是**解析后**窄接口，没有 raw 字节通道；core 退役时已随 `pkg/data` 删除写点。
-- **③ 要求**：若重开——传输接口加 raw sink + 保留期/脱敏/容量口径 + 至少一个回放消费者。
-- **④ 约束与非目标**：零消费者时不建通道。
-- **⑤ 验收**：有真实回放消费者且保留期成文。
-- **⑥ 边界**：本仓传输与 schema；合规口径归运维。
-- **重开条件**：出现原始报文回放需求，或合规要求原始留存。
+- **① 目标**：为证据链（UI A-06）提供**可查阅**的原始报文归档：`POST /api/ingest/raw` 单写者写入（原始报文 → 脱敏 → 内容哈希 → 落库），`GET /api/evidence/{content_hash}` 取单条、`GET /api/evidence` 按时间/来源列最近 N 条；`core` 只做读反代。
+- **② 上下文**：core `cmd/analysis/main.go` 的注释早已写明「证据坐标改由数据服务仓的归档面提供」；设计原文（ADR-022 §5）要求 `GET /api/evidence/{content_hash}` 返回 `ingest.raw` 中的唯一原始记录（不可变），UI A-06 对 404 的语义是「未摄取，不编造引用」——**两处都只要求可查阅，没有回放语义**。此前本表零写者、零读面，`policy.go` 里 `POST /api/ingest/raw` 还是「权限表有、路由表无」的僵尸条目。
+- **③ 要求（已落地）**：`internal/evidence`（脱敏 → 规范化 JSON → sha256；保留期解析拒 0/负数）+ `internal/store.EvidenceStore`（Put/Get/List/PurgeExpired，不存在映射 404）+ 3 条 HTTP 端点 + `idx_ingest_raw_fetched_at`；保留期默认 365 天、`EVIDENCE_RETENTION_DAYS` 覆盖、启动期非法值拒起；脱敏键集合与清理口径见 `docs/db-schema.md` §9.5。
+- **④ 约束与非目标**：**不做回放**；core 不建第二份证据存储；不恢复 core 的 `POST /api/ingest/raw`（写面只在 data）；不靠删断言或造数据换绿。
+- **⑤ 验收**：HTTP 用例覆盖 201/400/404/503、脱敏先于哈希、`limit` 上限 100；PG 腿覆盖写读一致、重复写幂等、不存在 404、列表排序/过滤、过期清理；破坏验证三条——清空脱敏键集合应红、保留期 0/负数应红、读不存在 id 应 404 而非 500。
+- **⑥ 边界**：本仓归档面 + core 读反代 + UI e2e 真写入；归属裁决见 `docs/adr/0010-证据归档面归本仓.md`。
+- **重开条件**：**已出现证据链读取消费者（已满足：UI A-06 / evidence-probe）**。若将来出现回放/重放消费者，另立 ADR，不在本表上顺手扩。
 
 ### DATA-TRANSPORT-MULTI · 传输多门（除 Tushare 外的门均未真接线）[P2] ⏸
 

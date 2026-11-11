@@ -38,7 +38,7 @@ core / analytics / strategy / agent
 | 规范化 Normalization | `TradingCalendar` / `CorporateAction` / `PITAlignment` / `Board` | 数据口径变 | `internal/normalize` | **本仓**：`internal/normalize`（`Aggregate` / `VisibleAsOf`）+ `internal/ingest`（`ETLPipeline` / `ValidatePoints` / `GatePoints` / `Deduplicate`）；core `pkg/data/source/etl.go` 已删 |
 | 供给 Serving | `Provider` / `OHLCV` / `Quote` / **`SeriesSpec`** | 消费者需求变 | `internal/serving` | **本仓**：`internal/serving`（`Resolve` / `Snapshot` / `legacy.go` 兼容端口）+ `internal/httpapi` 的读 handlers；core `pkg/marketdata` 只剩 HTTP 客户端 |
 | 派生 Derived | `Factor` / `ICEntry` / `ZScore` | 因子定义变 | **不迁入本仓**（ADR-037：owner=core，消费点按需求值） | core：`pkg/storage/cache.go`（`factor_cache` / `factor_returns` / `ic_analysis` 的写）+ `pkg/backtest/cache/factor_cache.go` + `pkg/mining`（**仍在 core**，因子读面不在本仓；`pkg/data/factor*.go` 已随 `a96d836` 删除） |
-| 证据 Evidence | `Citation` / `Provenance` | 可追溯性要求变 | `internal/evidence` | ⚠️ **不在数据服务的搬迁清单上**：今天住在 core 的 HTTP 层（`cmd/analysis/handlers_evidence.go`，`GET /api/evidence/:content_hash`）。见下面「两条没闭合的口子」② |
+| 证据 Evidence | `Citation` / `Provenance` | 可追溯性要求变 | `internal/evidence` | **本仓（2026-11-12 起，ADR-0010）**：`internal/evidence`（脱敏 / 规范化哈希 / 保留期）+ `internal/store/evidence.go`（`ingest.raw` 读写+清理）+ `internal/httpapi/evidence.go`（`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`）；core 只保留 `GET /api/evidence/{content_hash}` 读反代（`x-served-by: data-service`），不持有第二份存储 |
 | 同步编排 Sync | `SyncJob` / `Schedule` / `WorkerPool` / `Backpressure` | 调度策略变 | `internal/sync` | **2026-11-10 起已在本仓**：`internal/sync`（package `syncjob`，队列 + cron + Worker + Scheduler）、`internal/transport/tushare`（传输）、`cmd/dataservice` 的装配；core 侧 `pkg/sync` 与 `cmd/data` 已随 `a96d836` 删除 |
 | 文本降维 Reduction | `NewsItem` / `Hotness` / `DecayHalfLife` / `WeightSeries` | NLP 模型 / 规则变 | **不给包**（下表说明） | 无实现 |
 
@@ -53,7 +53,7 @@ core / analytics / strategy / agent
 **两条没闭合的口子（本次对表实测，不在本节里假装解决）**
 
 - ① `core:pkg/data/source` 一个包同时装着**采集与规范化**两个上下文（`adapter.go`/`registry.go`/`declarations.go` 是采集契约，`etl.go`/`unified.go` 是规范化）。整包平移过来的结果是"目录看起来分好了、边界一个没立"——X1b 建包时**必须把这两块拆开**，断言 1 才有东西可断。同类混装还在 `core:pkg/data` 顶层（`factor*.go` 派生 与 `tushare*.go` 采集同目录）。
-- ② §2.6.2 给规范化的领域语言点名列了 `Board`，但 `Board` 的代码今天物理在**供给**包（`pkg/marketdata/board.go`）；`PITAlignment` 今天**没有独立承载物**——可见性全靠列 + 读路径比较（`pkg/storage/fundamentals.go:121` 的 `available_date <= $2`），它的形状要等 `db-schema.md` §6 那条加列之后才存在。建仓时逐个定"跟语言走还是跟调用方走"，**别只搬有现成归属的那几个**。证据上下文（表中第 5 行）的处境同一条：它的**读面**今天物理在 `cmd/analysis`，而 ADR-027 §2.6 的构件图把「evidence API」算在 data-service 里——要么随 X1 把这条读面连同 `ingest.raw` 的 owner 一起搬进本仓，要么在本表把它标成「不属本仓」并回改 ADR-027 的构件图。**别留一张看起来已有归属、实际代码在别的进程里的表**。
+- ② §2.6.2 给规范化的领域语言点名列了 `Board`，但 `Board` 的代码今天物理在**供给**包（`pkg/marketdata/board.go`）；`PITAlignment` 今天**没有独立承载物**——可见性全靠列 + 读路径比较（`pkg/storage/fundamentals.go:121` 的 `available_date <= $2`），它的形状要等 `db-schema.md` §6 那条加列之后才存在。建仓时逐个定"跟语言走还是跟调用方走"，**别只搬有现成归属的那几个**。证据上下文（表中第 5 行）已于 **2026-11-12 随 ADR-0010 收口**：归档写读面与 `ingest.raw` owner 都在本仓，core 只留 `GET /api/evidence/{content_hash}` 读反代；ADR-027 的构件图（evidence API 算在 data-service）由此成立，无需回改。**别留一张看起来已有归属、实际代码在别的进程里的表**。
 
 ## 3. 组件职责
 
