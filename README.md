@@ -1,5 +1,7 @@
 # tellurion-data
 
+> 5 分钟了解本服务：[SERVICE.md](SERVICE.md)
+
 > module: `tellurion-data` ｜ 状态：**X1c / X1d 已落地（2026-11-10）** —— `internal/ingest` / `internal/normalize` / `internal/serving` / `internal/store` / `internal/schema` / `internal/transport/tushare` / `internal/sync` 已落地；HTTP 面（**23 路由** + 鉴权闸：`GET /health`、`GET /readyz`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，**7 条 G3 只读兼容端点** `GET /ohlcv/{symbol}`、`GET /fundamental/{symbol}`、`GET /stocks`、`GET /index/{code}/constituents`、`GET /api/v1/trading/calendar`、`GET /api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`，以及 **11 条作业/排程端点** `/api/sync/jobs*`、`/api/sync/schedules*`）与取数存储 port 已接线，REV-17 策略已移植（路由真相源见 `docs/api-schema.md` §1，收口记录见 `docs/archive/tasks-archive-2026-11.md`）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
