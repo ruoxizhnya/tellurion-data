@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-11
-verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
+verified-by: 2026-11-11 全面审查 W7 台账立单（A5 授权）——新立 2 条六字段单（`DATA-GRACEFUL-SHUTDOWN` 活跃 / `DATA-FUNDAMENTALS-READ-PUBLIC` 立单复核时实测前提已被主任 2026-11-12 归属裁决〔data `a454726` 删 `/fundamental` 读面 + core `c85abff` 建 `GET /api/fundamental/:symbol`〕取代，已标 ✅ 作废、不施工），证据坐标引 ODR-069/072（`tellurion-docs:docs/archive/odr/`）；本轮只立单不修复，不改 2026-11-12 已收口条目。此前 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -93,6 +93,29 @@ verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `
 
 - **② 上下文**：表在 schema 内但无 writer；原 `pkg/marketdata` 的有库用例依赖它，已由 `tellurion` 侧形状镜像夹具替代。
 - **重开条件**：出现市场宽度/情绪类指标需求。
+
+### DATA-GRACEFUL-SHUTDOWN · 裸 `ListenAndServe` 无信号处理 + ClaimJob 无 lease/回收 [P1] ⬜
+
+- **① 目标**：给 data-service 优雅停机（SIGTERM 排空）+ 作业领取的 lease/心跳/stale 回收，让停服不丢在途作业、崩溃不留卡死 job。
+- **② 上下文**：审查发现 W5-F2（ODR-072）。`cmd/dataservice/main.go:86` 裸 `ListenAndServe` 无 `signal.Notify`（core/agent/broker/orch 已有信号处理）；`internal/sync/pg_store.go:107-127` 的 `ClaimJob` 只领 `pending`，无 lease/心跳/stale 回收 ⇒  worker 崩溃后 job 永卡 `running`。
+- **③ 要求**：① `signal.Notify(SIGTERM/SIGINT)` + `server.Shutdown` 排空在途请求；② ClaimJob 加 lease（领取超时）+ 心跳续租 + stale 回收（对齐 orchestration 的 `ReapExpired` 形状）；③ 停机时正在跑的同步作业有明确终态（不静默丢）；④ 与 `X-PROBE-NAMING` 撞 main.go 按单号串行。
+- **④ 约束与非目标**：不改作业报文形状；不引入 MQ；回收口径写死（lease 时长/心跳间隔）。
+- **⑤ 验收**：SIGTERM 真栈排空（A4 演练，E1）；崩溃 worker 的 job 被回收重领；破坏验证 = 删 lease ⇒ 卡死 job 用例红。
+- **⑥ 边界**：本仓停机与作业回收；其余三仓同族缺口归各自 `*-GRACEFUL-SHUTDOWN`。
+- **owner**：待定
+
+### DATA-FUNDAMENTALS-READ-PUBLIC · `/fundamental` 读 `market` schema 但表在 `public`，恒 500（D6=b）[P2] ✅（2026-11-12 作废·前提被主任归属裁决取代，非本单施工）
+
+> **作废注记（2026-11-11 W7 立单复核时实测）**：本单立单前提（data `/fundamental` 恒 500，按 D6=b 改读 `public` 止血）**已被主任 2026-11-12 的归属裁决取代**——data 侧 `GET /fundamental/{symbol}` 读面**整条删除**（commit `a454726`），基本面读面归 core（commit `c85abff`，`tellurion:cmd/analysis/handlers_fundamental.go:42` 挂 `GET /api/fundamental/:symbol`，空态 404 `fundamental_not_found`）。代码取证：本仓 `internal/httpapi/server.go:141-143`、`legacy_read.go:23-27`、`policy.go:41` 均明写「`GET /fundamental/{symbol}` 已于 2026-11-12 删除（归属裁决）」。**没有 data `/fundamental` 端点可止血**，D6=b 方案作废；W2-F11 由主任以「归属裁决归 core + 删 data 端点」收口（比 D6=b 更干净，不留跨 schema 例外）。下方原六字段保留作追溯，**不再施工**。矩阵残留行（core `data-service-contract-and-ownership.md:43` 因子派生表 owner）归 `tellurion-docs:DOC-P3-MATRIX-TABLE-GRAIN` 跨仓指针。
+
+- **① 目标**：把 `/fundamental` 兼容读面指向表实际所在的 `public` schema（低成本止血），消除「`DATA_MARKET_SCHEMA=market` 且表未建 ⇒ 500」，并登记跨 schema 例外与退出条件。
+- **② 上下文**：审查发现 W2-F11（ODR-069）+ 裁决 D6=b。`internal/store/reference.go:14-16,95` 按 `DATA_MARKET_SCHEMA`（=market）读 `stock_fundamentals`，但该表 DDL 仍是 core 迁移、实际在 `public` ⇒ `/fundamental` 500。本仓 AGENTS §1 G3 已登记此限制。D6=b：读改 `public` 止血 + 登记 I-1 例外 + 留退出任务（表正式迁 market 时改回）。
+- **③ 要求**：① `/fundamental` 读 `public.stock_fundamentals`（写死或独立 env，不随 `DATA_MARKET_SCHEMA` 漂）；② 登记跨 schema 只读例外（I-1）+ 退出条件；③ 真栈 `/fundamental` 200（表有数据时）；④ 不改 core 的 DDL 归属。
+- **④ 约束与非目标**：不把 `stock_fundamentals` DDL 搬进本仓（owner 仍是 core）；不改其余兼容读面；不静默吞 500。
+- **⑤ 验收**：真栈 `/fundamental` 200（E1）；破坏验证 = 改回 market schema ⇒ 500 用例红。
+- **⑥ 边界**：本仓兼容读面；表 DDL 归属与正式迁移归 core + `OPS-X1D-PROD-MIGRATION`。
+- **owner**：待定
+- **重开条件**：`stock_fundamentals` 正式迁 `market` schema 时，本止血单改回随 `DATA_MARKET_SCHEMA`。
 
 ## 二、跨仓指针（不在本仓，勿双写）
 
