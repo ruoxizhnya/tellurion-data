@@ -12,7 +12,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 >
 > ✅ **G3 只读兼容面已于 2026-11-10 在真 PG 上端到端跑通**（PostgreSQL 16.15 @ 5432，测试库 `tellurion_data_test`，空 `JWT_SECRET` 回环开放）：7 条端点全部返回预期形状（含 `/stocks/{symbol}` 404、bulk 未知票 `ohlcv: []` 不影响整体 200）；`/fundamental` 的 PIT 正确排除未来期；`stocks` 的 HTTP 回执与同库直读 SQL **md5 完全一致 `40f25781e835b1ff1e2d0e8d6a729fe5`**（2 行），`ohlcv` 行数/`sum(close)=21.2`/`sum(volume)=3469134` 双侧一致。证据与命令见 `docs/TASKS.md` `SVC-DATA-G3` 施工记录。
 
-> ✅ **证据归档面已于 2026-11-12 落地（ADR-0010）**：`ingest.raw` 的唯一写者与读面都在本仓。写面 `POST /api/ingest/raw`（原始报文 → 脱敏 → 内容哈希 → 落库），读面 `GET /api/evidence/{content_hash}`（单条，不存在 404 `evidence_not_found`）与 `GET /api/evidence?source=&dataset=&limit=&offset=`（最近 N 条，`limit` 上限 100）。core 只保留 `GET /api/evidence/{content_hash}` 反代（`x-served-by: data-service`），不持有第二份证据存储。**不做回放**：设计原文只要求「按内容哈希查阅一条不可变归档」。
+> ✅ **证据归档面已于 2026-11-12 落地（ADR-0010）**：`ingest.raw` 的唯一写者与读面都在本仓。写面 `POST /api/ingest/raw`（原始报文 → 脱敏 → 内容哈希 → 落库），读面 `GET /api/evidence/{content_hash}`（单条，不存在 404 `evidence_not_found`）与 `GET /api/evidence?source=&dataset=&limit=&offset=`（最近 N 条，`limit` 上限 100）。core 只保留 `GET /api/evidence/{content_hash}` 反代（登记为本仓入口，不标 `x-served-by`——core 合同测试里该标记表示「本仓无此路由」），不持有第二份证据存储。**不做回放**：设计原文只要求「按内容哈希查阅一条不可变归档」。
 >
 > **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一读入口**，connector 与存储不直接对外；写面两条：`POST /ingest/points`（有界批次）与 `POST /api/ingest/raw`（单条原始报文，8 MiB 上限），两者都只接受有界输入。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
