@@ -103,6 +103,11 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 		"store.NewReferenceWriter(store.PoolWriteDB(pool), opts)",
 		"runner.Reference = &syncjob.ReferenceRunner{",
 		"httpapi.WithPoints(points)",
+		// 证据归档面（ADR-0009）：漏了它 `/api/ingest/raw` 与 `/api/evidence`
+		// 会 503，而 core 的反代会把 503 原样透给证据页。
+		"store.NewEvidenceStore(store.PoolEvidenceDB(pool))",
+		"httpapi.WithEvidence(evidenceArchive)",
+		"go startEvidencePurgeWhenReady(jobCtx, &schemaReady, evidenceArchive, retentionDays)",
 		"httpapi.WithReadiness(readinessCheck(pool))",
 		// 作业层（X1c 的调度那一半）同样只在本跳接线：队列没挂上则
 		// `/api/sync/jobs` 全 503，worker/scheduler 不起则作业永远 pending。

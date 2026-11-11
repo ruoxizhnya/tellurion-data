@@ -34,6 +34,7 @@ import (
 	kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
 	"tellurion-data/internal/assembly"
+	"tellurion-data/internal/evidence"
 	"tellurion-data/internal/httpapi"
 	"tellurion-data/internal/ingest"
 	"tellurion-data/internal/schema"
@@ -134,6 +135,13 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 		return httpapi.New(nil, authorizer), nil, nil
 	}
 
+	// 保留期口径在启动期校验：0 / 负数 / 非整数一律拒起，不允许「关掉保留期」
+	// 隐式生效（`docs/db-schema.md` §9）。
+	retentionDays, err := evidence.RetentionDays(os.Getenv("EVIDENCE_RETENTION_DAYS"))
+	if err != nil {
+		return nil, nil, err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), schemaStartupTimeout)
 	defer cancel()
 
@@ -175,6 +183,14 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 	// 写面装配：声明来自注册表（闸门要知道每个 data_type 的锚点列名），
 	// 落库走 `store.Writer`。
 	writer, err := store.NewWriter(store.PoolWriteDB(pool), opts)
+	if err != nil {
+		stopRetry()
+		pool.Close()
+		return nil, nil, err
+	}
+
+	// 证据归档面（ADR-0009）：`ingest.raw` 的唯一写者与读面都在本进程。
+	evidenceArchive, err := store.NewEvidenceStore(store.PoolEvidenceDB(pool))
 	if err != nil {
 		stopRetry()
 		pool.Close()
@@ -244,9 +260,12 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 	// 立刻轮询只会每 2s 往日志里灌一条「relation does not exist」。
 	var jobsRunning atomic.Bool
 	go startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)
+	// 保留期清理与作业循环同一条 ctx：进程关停时一起停。
+	go startEvidencePurgeWhenReady(jobCtx, &schemaReady, evidenceArchive, retentionDays)
 
 	server := httpapi.New(agg, authorizer,
 		httpapi.WithPoints(points),
+		httpapi.WithEvidence(evidenceArchive),
 		// G3 只读兼容面：core 旧读链的 7 条路由，读同一批表（只读）。
 		httpapi.WithLegacyReader(st),
 		httpapi.WithSync(queue),
@@ -279,6 +298,35 @@ func startJobsWhenReady(ctx context.Context, ready, running *atomic.Bool, worker
 	running.Store(true)
 	go worker.Run(ctx)
 	go scheduler.Run(ctx)
+}
+
+// evidencePurgeInterval 是过期证据的清理周期。保留期口径见
+// `internal/evidence` / `docs/db-schema.md` §9；清理是维护活，独立于读面。
+const evidencePurgeInterval = 24 * time.Hour
+
+// startEvidencePurgeWhenReady 等 schema 就绪后先清一次过期记录，此后每 24h 一次。
+// 与作业循环同款两段式：降级启动时 `ingest.raw` 可能还不存在。
+func startEvidencePurgeWhenReady(ctx context.Context, ready *atomic.Bool, archive *store.EvidenceStore, retentionDays int) {
+	for !ready.Load() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+	for {
+		cutoff := evidence.RetentionCutoff(time.Now().UTC(), retentionDays)
+		if n, err := archive.PurgeExpired(ctx, cutoff); err != nil {
+			log.Printf("data-service: evidence purge failed (retention %d days): %v", retentionDays, err)
+		} else if n > 0 {
+			log.Printf("data-service: purged %d expired ingest.raw records (retention %d days)", n, retentionDays)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(evidencePurgeInterval):
+		}
+	}
 }
 
 // registeredTypes 返回注册表声明的数据类型（= 可接的 job_type），升序。

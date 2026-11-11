@@ -21,6 +21,9 @@ func IngestStatements() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ingest_raw_source_dataset ON ingest.raw(source, dataset)`,
 		`CREATE INDEX IF NOT EXISTS idx_ingest_raw_as_of ON ingest.raw(as_of DESC)`,
+		// 证据读面按接收时间倒序列最近 N 条（`GET /api/evidence`），
+		// 保留期清理也按 fetched_at 扫描——两处共用这一条索引。
+		`CREATE INDEX IF NOT EXISTS idx_ingest_raw_fetched_at ON ingest.raw(fetched_at DESC)`,
 
 		// 同步作业队列
 		`CREATE TABLE IF NOT EXISTS ingest.sync_jobs (

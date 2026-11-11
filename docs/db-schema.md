@@ -70,7 +70,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
-| `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 |
+| `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 + **证据归档面已落地（2026-11-12，ADR-0010）**：写者 `store.EvidenceStore`（`POST /api/ingest/raw`），读方 `GET /api/evidence[/{content_hash}]`；落库前脱敏、保留期见 §9.5 |
 | `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 便携演练见 `docs/archive/x1d-local-replay-2026-11-10.md`；系统实例 `127.0.0.1:5432` 同日按新结构整库重建，见 `docs/archive/system-pg-init-2026-11-10.md`） |
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
@@ -215,7 +215,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `index_constituents` | `tellurion:pkg/storage/cache.go:383`（`SaveIndexConstituentBatch`） | **补写者** | 前视风险在成分变更时点，归 resolve 的 `as_of`（§6.2 对表 D 组）；本仓补写者按同一语义 |
 | `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。**2026-11-10 已施工**：本仓 DDL、`TableNames()` 条目、C 集豁免三处删除，并加守卫 `TestIndexDaily_IsNotOwnedByThisRepo`（本仓 statements 出现该表即红）——从「建表但不认领写权」收紧为「连表都不建」，因为两套 DDL 形状不同、先建表者定形 |
 | `market_activity` | `tellurion:pkg/storage/market_activity.go:35`（`saveMarketActivitySQL`） | **补写者** | B 集：写者是 core 的 `daily_basic` 同步腿（不经 `BulkInsert`）；收编那条腿时由本仓补写者接管 |
-| `ingest.raw` | `tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`） | **补写者** | 本仓的摄取归档入口落地时接管；此前 core 的 `POST /api/ingest/raw` 是过渡写者 |
+| `ingest.raw` | ~~`tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-12，ADR-0010）** | 本仓 `store.EvidenceStore` 独占写读（`POST /api/ingest/raw` / `GET /api/evidence[/{content_hash}]`）；落库前脱敏、保留期清理见 §9.5；core 只做读反代 |
 | `sync_jobs` | ~~`tellurion:pkg/storage/sync_jobs.go:15`（`CreateSyncJob`）、`:107`（`UpdateSyncJobIfStatus`）、`:173`（`DeleteSyncJob`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-10，X1c）** | 本仓 `internal/sync.NewPGStore` 独占读写（`FOR UPDATE SKIP LOCKED` 领取、`FinishJob` 写终态）；`/api/sync/jobs*` 是唯一入口 |
 | `sync_schedules` | ~~`tellurion:pkg/storage/sync_jobs.go:230`（`CreateSyncSchedule`）、`:326`（`UpdateSyncSchedule`）、`:346`（`DeleteSyncSchedule`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-10，X1c）** | 本仓 `internal/sync` 的 Scheduler（30s 扫 due + `EnqueueFromSchedule` 单事务入队并推进 `next_run_at`） |
 
@@ -228,7 +228,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 1. **出厂值是 `market`**：`deploy/compose.yaml` 的 `DATA_MARKET_SCHEMA: market`；`cmd/dataservice/main.go` 只把它交给 `store.Options.MarketSchema`。
 2. **它只决定本仓 SQL 的表名前缀，不决定 DDL 落点**：`applySchema` 固定执行 `schema.Statements()`，`market` / `ingest` 是 DDL 里的字面量；空值在 `internal/store` 的标识符拼装处回落为 `public`（注释写明是兼容 D4 之前的过渡值）。
-3. ~~core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`~~ **（2026-11-08 起不再成立）**：core 的数据面写点已随 `a96d836` 全部删除；本机实例 2026-11-10 已执行 `SET SCHEMA`，`public` 侧 22 张同名表归零。今天 `DATA_MARKET_SCHEMA=market` 与 core 之间只剩 `market.index_daily`（裁决 ⑰：core 自带 schema 前缀，DDL 也在 core，本仓不建不读）。`ingest.raw` 在 core 侧零写点，本仓也仍是零写者（见 §9）。
+3. ~~core 用裸表名写、core 仓内没有 `search_path` ⇒ 落 `public.*`~~ **（2026-11-08 起不再成立）**：core 的数据面写点已随 `a96d836` 全部删除；本机实例 2026-11-10 已执行 `SET SCHEMA`，`public` 侧 22 张同名表归零。今天 `DATA_MARKET_SCHEMA=market` 与 core 之间只剩 `market.index_daily`（裁决 ⑰：core 自带 schema 前缀，DDL 也在 core，本仓不建不读）。`ingest.raw` 在 core 侧零写点，本仓的归档面于 2026-11-12 落地（ADR-0010，见 §9.5）。
 
 **物理 `SET SCHEMA` 搬迁的前置 = core 停写**（不是「本仓 DDL 先建好」）：
 
@@ -245,7 +245,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 > `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 22 张**）。
 > core `cmd/data` / `pkg/data` 已于 `a96d836`（2026-11-08）整体删除；`Test-Path cmd/data` / `Test-Path pkg/data` 均为 False。
 
-### 9.1 有本仓写者的表（16 张）
+### 9.1 有本仓写者的表（17 张）
 
 | 表 | 本仓写者 | 本仓读方 |
 |---|---|---|
@@ -265,10 +265,11 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /api/sync/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
+| `ingest.raw` | `store.EvidenceStore.Put`（`POST /api/ingest/raw`；单写者 = 本仓；`ON CONFLICT (content_hash) DO NOTHING`，冲突内容比对） | `GET /api/evidence/{content_hash}`、`GET /api/evidence`；保留期清理 `PurgeExpired`（§9.5） |
 
 > 参考数据的解析契约（`stock_basic` / `trade_cal` 字段形状、缺列 fail-closed）由 `internal/sync/reference_contract_test.go` + `testdata/*.json` 钉住；2026-11-11 已用 `TUSHARE_TOKEN` 线上核对（L 5580 行 / D 343 行 / `trade_cal` 4 列），**未**走过生产部署后的作业级写入。
 
-### 9.2 零写者的表（5 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
+### 9.2 零写者的表（4 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
 
 | 表 | 本仓写者 | 本仓读方 | 处置（2026-11-10） |
 |---|---|---|---|
@@ -276,8 +277,9 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.splits` | 无 | 无 | ⏸ 挂起：同上 |
 | `market.index_constituents` | 无 | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定 | ⏸ 挂起：Tushare `index_weight` 只给周期快照权重，`in_date/out_date` 区间需多期快照推导；当前无消费者驱动。重开 = 确定指数集与来源后另立单 |
 | `market.market_activity` | 无 | 无 | ⏸ 挂起：B 集（`as_of` 语义）；`daily_basic` 传输可取数但写面被 `writeExcludedTypes` 排除，补 B 集写者属另一设计。重开 = B 集读消费者出现 |
-| `ingest.raw` | 无 | 无 | ⏸ 挂起：core `pkg/storage/ingest_raw.go` 已删（`a96d836`）；本仓传输是窄接口、无归档 sink。重开 = 出现回放/审计取证消费者，且单内给出保留期/脱敏/容量上限 |
 | `ingest.data_migrations` | 仅 `schema.BackfillStatements()` 哨兵（`-tags backfill`，运维执行） | 回填 guard | 不是日常写者，不计入上表 |
+
+> `ingest.raw` 已移出本表：2026-11-12 起由本仓证据归档面接管（ADR-0010，见 §9.1 与 §9.5）。
 
 ### 9.3 与本仓相关但不属 22 张的两张表
 
@@ -289,7 +291,36 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 ### 9.4 结论
 
 - **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
-- **零写者已从 7 张降到 5 张（2026-11-10 终扫）**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008）；剩余 `dividends` / `splits` / `index_constituents` / `market_activity` / `ingest.raw` 全部登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
-- **读方覆盖**：7 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `sync_jobs` / `sync_schedules`）；其余 15 张中 10 张 A 集只写不读、4 张挂起零写零读、1 张回填哨兵。
+- **零写者已从 7 张降到 4 张（2026-11-12 证据归档面落地后再降 1）**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008），`ingest.raw` 由证据归档面接管（ADR-0010）；剩余 `dividends` / `splits` / `index_constituents` / `market_activity` 全部登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
+- **读方覆盖**：9 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `ingest.raw` / `sync_jobs` / `sync_schedules`）；其余 13 张中 10 张 A 集只写不读、3 张挂起零写零读、1 张回填哨兵。
 - **X1d 物理 `SET SCHEMA` + `visible_at` 回填已在本机实例执行（2026-11-10）**：22 张目标表搬迁、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑通过（`docs/archive/x1d-local-replay-2026-11-10.md`）；未接触远端/生产库。
+
+### 9.5 `ingest.raw` 证据归档面口径（2026-11-12，ADR-0010）
+
+**归属与写者**：`ingest.raw` 的唯一写者是 data 服务（`store.EvidenceStore.Put`，入口 `POST /api/ingest/raw`）。core 只保留 `GET /api/evidence/{content_hash}` 读反代，**不持有第二份证据存储**；出现第二个写者 = 边界已腐化（§1.5 红线）。
+
+**表结构与索引**：DDL 在 `internal/schema/ingest.go`（`content_hash` 主键）；读面按 `fetched_at DESC, content_hash DESC` 排序，2026-11-12 补索引 `idx_ingest_raw_fetched_at (fetched_at DESC)`，与保留期清理共用。
+
+**内容哈希（内容寻址）**：`content_hash` = **脱敏后** payload 的规范化 JSON 的 sha256（小写 hex，64 位）。规范化 = `json.Decoder.UseNumber` 解码 → `json.Marshal`（map 键字典序）。先脱敏再哈希，保证引用方拿到的哈希能读回同一条记录。同 hash 重复写为 no-op；同 hash 异内容 → 500，不覆盖。
+
+**落库前脱敏**：递归遍历 payload；键名归一（小写、去掉 `-` 与 `_`）后命中下列集合的值替换为 `"[REDACTED]"`（数组/嵌套对象递归，非字符串值同样替换）：
+
+```
+token, accesstoken, refreshtoken, secret, clientsecret, password, passwd,
+apikey, authorization, cookie, setcookie, credential, credentials,
+session, sessionid, privatekey
+```
+
+规则实现与测试在 `internal/evidence`（`RedactedKeyNames()` 导出集合，`TestRedactMasksSensitiveFields` 钉住）；改集合必须同批改本节与测试。
+
+**保留期（必须落地，不允许「以后再说」）**：
+
+- 默认 **365 天**；`EVIDENCE_RETENTION_DAYS` 可覆盖。
+- 口径：`fetched_at < now - N 天` 的记录视为过期。
+- **0 / 负数 / 非整数在启动期直接拒起**（`evidence.RetentionDays` + `cmd/dataservice` 装配）；不允许用 0 隐式关掉清理。
+- 清理：`store.EvidenceStore.PurgeExpired`，在 schema 就绪后立即执行一次，此后每 **24h** 一次；只打删除条数日志，不参与读面判定。
+- 容量上限：单条请求体 ≤ 8 MiB；分页读面 `limit` ≤ 100。超出保留期的归档不再可查（这是明确的运维口径，不是缺陷）。
+
+**不做回放**：归档面只提供「按内容哈希查阅一条不可变记录」。设计原文（ADR-022 §5）与 UI A-06 消费契约都只要求可查阅；回放/重放消费者若将来出现，另立 ADR，不在本表上顺手扩。
+
 

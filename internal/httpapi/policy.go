@@ -24,6 +24,15 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /datasets/{hash}":  {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"POST /ingest/points":   {Roles: []string{"service", "admin"}},
 
+	// ── 证据归档面（2026-11-12，`evidence.go`）──
+	// `ingest.raw` 的唯一写者 = data（ADR-0009）。写档位**沿用 REV-17 的
+	// `trader|admin`**（迁移不重拍角色）；此前它只在 legacyREV17 里
+	// 「权限表有、路由表无」，现在与真实路由对齐。
+	// 读面按数据面读档位开放：证据副本可能含业务数据，但落库前已按字段规则脱敏。
+	"POST /api/ingest/raw":             {Roles: []string{"trader", "admin"}},
+	"GET /api/evidence":                {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/evidence/{content_hash}": {Roles: []string{"service", "viewer", "trader", "admin"}},
+
 	// ── G3 只读兼容面（2026-11-10，`legacy_read.go`）──
 	// core 旧读链的 7 条路由。读档位与 `/datasets/*` 一致；
 	// `POST /api/v1/ohlcv/bulk` 是**只读 POST**（请求体只承载查询参数，不写库），
@@ -76,7 +85,8 @@ var legacyREV17 = map[string]kithttp.Rule{
 	"POST /screen": {AnyAuthenticated: true},
 
 	// ── Trader：其余全部变更端点 ──
-	"POST /api/ingest/raw":                           {Roles: []string{"trader", "admin"}},
+	// `POST /api/ingest/raw` 已于 2026-11-12 落地本仓归档面，移入 servedPolicy
+	//（此前是「权限表有、路由表无」的僵尸条目）。
 	"POST /api/ingest/equitydeep":                    {Roles: []string{"trader", "admin"}},
 	"POST /sync/stocks":                              {Roles: []string{"trader", "admin"}},
 	"POST /sync/ohlcv":                               {Roles: []string{"trader", "admin"}},

@@ -39,6 +39,7 @@ type Server struct {
 	agg        *serving.Aggregator
 	points     *assembly.Writer
 	legacy     serving.LegacyReader
+	evidence   EvidenceArchive
 	sync       syncjob.Store
 	runtime    SyncRuntime
 	authorizer Authorizer
@@ -126,6 +127,13 @@ func (s *Server) routes() []routeSpec {
 		// 写面唯一的一条：已归一的点位投进来，闸门 + 幂等 + A 集门都在
 		// `internal/assembly` / `internal/store` 那一侧。
 		{"POST /ingest/points", s.handleIngestPoints},
+
+		// ── 证据归档面（`evidence.go`）──
+		// `ingest.raw` 的唯一写者是本服务；core 只做 `GET /api/evidence/{hash}`
+		// 反代（ADR-0009）。读面按时间列最近 N 条，分页上限 100。
+		{"POST /api/ingest/raw", s.handleIngestRaw},
+		{"GET /api/evidence", s.handleListEvidence},
+		{"GET /api/evidence/{content_hash}", s.handleGetEvidence},
 
 		// ── G3 只读兼容面（`legacy_read.go`）──
 		// core 的 `pkg/marketdata/http_provider.go` 仍打这 7 条旧路由；旧 cmd/data
@@ -410,6 +418,7 @@ var sentinelCodes = []struct {
 	{serving.ErrEmptyCalendar, http.StatusConflict, "empty_calendar"},
 	{serving.ErrEmptyDataVersion, http.StatusConflict, "empty_data_version"},
 	{serving.ErrSnapshotNotFound, http.StatusNotFound, "snapshot_not_found"},
+	{serving.ErrEvidenceNotFound, http.StatusNotFound, "evidence_not_found"},
 	{serving.ErrSnapshotMismatch, http.StatusInternalServerError, "snapshot_mismatch"},
 	// G4：PG 不可达是 503（可等待恢复），不是 500。哨兵来自 `internal/store`
 	// 的连接层分诊（`classifyDependency`），只包连接失败，不包 SQL 语义错误。

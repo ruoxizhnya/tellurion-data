@@ -25,6 +25,8 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	// 而「条数刚好对上但内容换了」这种漂移只有清单能拦住。
 	want := []string{
 		"DELETE /api/sync/schedules/{id}",
+		"GET /api/evidence",
+		"GET /api/evidence/{content_hash}",
 		"GET /api/sync/jobs",
 		"GET /api/sync/jobs/{id}",
 		"GET /api/sync/jobs/{id}/progress",
@@ -41,6 +43,7 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"GET /ohlcv/{symbol}",
 		"GET /readyz",
 		"GET /stocks",
+		"POST /api/ingest/raw",
 		"POST /api/sync/jobs",
 		"POST /api/sync/jobs/{id}/cancel",
 		"POST /api/sync/jobs/{id}/retry",
@@ -125,7 +128,6 @@ func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 		// ReadOnlyPOST
 		"POST /screen": "any",
 		// Trader
-		"POST /api/ingest/raw":                           "trader",
 		"POST /api/ingest/equitydeep":                    "trader",
 		"POST /sync/stocks":                              "trader",
 		"POST /sync/ohlcv":                               "trader",
@@ -192,8 +194,8 @@ func TestLegacyREV17DecisionsMatchOldService(t *testing.T) {
 		allowed         bool
 		served          bool
 	}{
-		{"证据链写门 viewer", "POST /api/ingest/raw", "viewer", false, false},
-		{"证据链写门 trader", "POST /api/ingest/raw", "trader", true, false},
+		{"证据链写门 viewer", "POST /api/ingest/raw", "viewer", false, true},
+		{"证据链写门 trader", "POST /api/ingest/raw", "trader", true, true},
 		{"全市场同步 viewer", "POST /sync/ohlcv/all", "viewer", false, false},
 		{"全市场同步 trader", "POST /sync/ohlcv/all", "trader", true, false},
 		{"选股 viewer（只读 POST）", "POST /screen", "viewer", true, false},

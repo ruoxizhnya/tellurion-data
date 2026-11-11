@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-11-11
-verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补 3 条作业层自省读面）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
+last-verified: 2026-11-12
+verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
 ---
 
 # API Schema — tellurion-data
@@ -12,12 +12,14 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 >
 > ✅ **G3 只读兼容面已于 2026-11-10 在真 PG 上端到端跑通**（PostgreSQL 16.15 @ 5432，测试库 `tellurion_data_test`，空 `JWT_SECRET` 回环开放）：7 条端点全部返回预期形状（含 `/stocks/{symbol}` 404、bulk 未知票 `ohlcv: []` 不影响整体 200）；`/fundamental` 的 PIT 正确排除未来期；`stocks` 的 HTTP 回执与同库直读 SQL **md5 完全一致 `40f25781e835b1ff1e2d0e8d6a729fe5`**（2 行），`ohlcv` 行数/`sum(close)=21.2`/`sum(volume)=3469134` 双侧一致。证据与命令见 `docs/TASKS.md` `SVC-DATA-G3` 施工记录。
 
-> **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一读入口**，connector 与存储不直接对外；写面只有投点这一条，且**只接受有界批次**。
+> ✅ **证据归档面已于 2026-11-12 落地（ADR-0010）**：`ingest.raw` 的唯一写者与读面都在本仓。写面 `POST /api/ingest/raw`（原始报文 → 脱敏 → 内容哈希 → 落库），读面 `GET /api/evidence/{content_hash}`（单条，不存在 404 `evidence_not_found`）与 `GET /api/evidence?source=&dataset=&limit=&offset=`（最近 N 条，`limit` 上限 100）。core 只保留 `GET /api/evidence/{content_hash}` 反代（`x-served-by: data-service`），不持有第二份证据存储。**不做回放**：设计原文只要求「按内容哈希查阅一条不可变归档」。
+>
+> **契约地位**：HTTP，对外唯一数据面。**aggregator 是唯一读入口**，connector 与存储不直接对外；写面两条：`POST /ingest/points`（有界批次）与 `POST /api/ingest/raw`（单条原始报文，8 MiB 上限），两者都只接受有界输入。
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
 > `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
-> `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
+> `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；**`POST /api/ingest/raw` 沿用 REV-17 的 `trader` / `admin`（迁移不重拍角色），`GET /api/evidence[/{content_hash}]` = `service` + viewer / trader / admin**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；
 > 无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配 `JWT_SECRET` 或声明容器只在回环发布）。
 
@@ -30,6 +32,9 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 | GET | `/datasets/resolve?universe=&index_code=&from=&to=&freq=&adjustment=&as_of=` | 解析票池 + 窗口 + 频率 + 复权口径 + 可见时点 ⇒ `{dataset_hash, metadata}`（`metadata` 回显六分量） |
 | GET | `/datasets/{hash}` | 按 hash 取数据（同一 hash 两次结果必须**字节一致**） |
 | POST | `/ingest/points` | **写面**：投送一批**已归一**的点位（`{data_type, points[]}`）⇒ 闸门 + 去重 + A 集门 + 内容比对落库；返回 `{data_type, received, persisted, skipped}` |
+| POST | `/api/ingest/raw` | **证据写面（单写者）**：`{source, dataset, key, as_of?, payload, content_hash?}` ⇒ 脱敏 → 规范化 → sha256 → `ingest.raw`；201 返回完整 `RawIngest`（含 `content_hash`）。同 hash 同内容幂等，同 hash 异内容 500 |
+| GET | `/api/evidence/{content_hash}` | **证据读面**：按 64 位小写 hex 取一条 `RawIngest`；格式非法 400 `invalid_parameter`，不存在 404 `evidence_not_found` |
+| GET | `/api/evidence[?source=&dataset=&limit=&offset=]` | **证据读面（列表）**：按 `fetched_at` 倒序 ⇒ `{items:[RawIngest], limit, offset}`；`limit` 缺省 20、上限 100，越界 400 |
 | GET | `/ohlcv/{symbol}?start_date=YYYYMMDD&end_date=YYYYMMDD` | **G3 只读兼容**（core 旧读链）：日线 ⇒ `{ohlcv:[OHLCV]}` |
 | GET | `/fundamental/{symbol}?date=YYYYMMDD` | **G3 只读兼容**：`date` 当日已可用的最新一期财报 ⇒ `{fundamental: Fundamental}`；无记录 404 `not_found` |
 | GET | `/stocks[?exchange=]` | **G3 只读兼容**：股票列表 ⇒ `{stocks:[Stock], latest_date}`；`latest_date` = 库内日线最新交易日（`YYYY-MM-DD`，空库为 `null`）。core 的 `/api/stocks/count` 由它派生，**不新增 count 端点**（2026-11-12 裁） |
@@ -67,10 +72,17 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 >
 > 数字载荷以 `json.Number` 解码后交给写面（`UseNumber`），不在 HTTP 层折成 `float64`。
 
+> **证据归档面（2026-11-12，ADR-0010）三条口径**：
+> 1. **内容寻址与不可变**：`content_hash` = 脱敏后 payload 的规范化 JSON（`UseNumber` 解码 → `json.Marshal`，map 键排序）的 sha256 小写 hex。先脱敏再哈希，保证「引用的哈希」与「库里能读到的内容」一致。同 hash 重复写是 no-op；同 hash 异内容 500（不覆盖）。
+> 2. **落库前脱敏**：键名归一（小写、去 `-`/`_`）命中 `token / accesstoken / refreshtoken / secret / clientsecret / password / passwd / apikey / authorization / cookie / setcookie / credential / credentials / session / sessionid / privatekey` 的值替换为 `"[REDACTED]"`；嵌套对象与数组递归处理。规则在 `internal/evidence`，同步口径见 `docs/db-schema.md` §9.5。
+> 3. **保留期**：默认 365 天，`EVIDENCE_RETENTION_DAYS` 可覆盖；0 / 负数 / 非整数在**启动期拒起**。清理按 `fetched_at < now-Nd`，启动后立即一次、此后每 24h 一次。
+> 请求体额外字段一律 400（`DisallowUnknownFields`）；`fetched_at` 由服务端填，不接受投送。
+
 > **实现状态（2026-10-25，裁-14 落账）**：
 > - `/datasets/resolve`、`/datasets/{hash}`：已实现（`internal/httpapi` + `internal/serving`）。
 > - `/factors/{name}@{hash}`：**已撤掉**（裁-14，2026-10-25）。路由表里不存在它 ⇒ ServeMux 默认 404；不再有 `factor_not_found` 文案。原因：生产方与读端点都在 core（`pkg/data/factor_formula.go` / `factor_equitydeep.go` → `SaveFactorCacheBatch`；读面 `cmd/data/handlers_factor.go`），SPEC 把 C 类派生计算列为本仓非目标；常驻 404 比没有路由更坏——调用方会把 404 读成「该数据集没有该因子」。**因子读面明确由 core 提供**。上移触发条件（任一成立再启动整体迁移）：① C 类生产需要横向扩容；② 出现第二个不接受 core API 的消费方。
 > - `POST /ingest/points`：已实现（H4 ②，2026-10-25）。**调用方今天只有 core 的两条作业**（`capital_flow` / `top_list`，见 ADR-0006）。**同步作业层已于 X1c（2026-11-10，裁决 B）迁入本仓**：`/api/sync/jobs` + `/api/sync/schedules` 共 11 条端点，由本进程内 Worker（2s 轮询）与 Scheduler（30s 扫 due）执行取数链；`POST /ingest/points` 仍是「别人取数、本仓落库」的接缝，两者共用同一条 `register → fetch → gate → dedup → bulk insert`。
+> - **证据归档面（2026-11-12，ADR-0010）**：`POST /api/ingest/raw` + `GET /api/evidence[/{content_hash}]` 已实现（`internal/httpapi/evidence.go` + `internal/evidence` + `internal/store/evidence.go`）。`ingest.raw` 从「零写者」移入有写者表（`docs/db-schema.md` §9.1）；core 只保留 `GET /api/evidence/{content_hash}` 反代，**不持有第二份证据存储**。回放能力不在本次范围（设计原文只要求可查阅归档）。
 > - **作业层语义（X1c，2026-11-10）**：状态只有 `pending / running / succeeded / failed / cancelled`五档；`job_type` 就是 data_type，不设第二套命名；失败原因写 `error_message`（截断 4000 字符）并在 `GET /api/sync/jobs/{id}` 可见；`result` 是 `{data_type, source, fetched, persisted, skipped, duration_ms}`。**worker 不自动重试**——失败即终态，重排是显式 `POST .../retry`。`TUSHARE_TOKEN` 为空时传输未装，作业会在行上响亮失败（`all adapters for <type> are disabled`），不会静默写 0 行。
 > - **G3 只读兼容面（2026-11-10）**：上述 7 条已实现（`internal/httpapi/legacy_read.go` + `serving.LegacyReader` + `internal/store/reference.go`）。它们只按表读、按 core 旧字段名编码，**不带 `as_of`/`dataset_hash` 语义**，也不参与快照哈希——任何新调用方都该用 `/datasets/*`。**这组端点是主任裁决对 K1（2026-11-08 补裁 #11「本仓不补齐 core 的 5 条旧读面」）字面口径的推翻**，追认状态见 `docs/TASKS.md` SVC-DATA-G3 施工记录。**已知限制**：`stock_fundamentals` 的 DDL 仍是 core 的迁移（本仓只读），在 `DATA_MARKET_SCHEMA=market` 且该表未建时 `/fundamental/{symbol}` 会 500（K3 收编前不静默降级）。
 
@@ -78,8 +90,8 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 
 > **鉴权策略表（2026-10-25，裁-15 + H4 ②）**：
 > - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。**G3（2026-11-10）**：6 条只读兼容 GET = `service` + viewer / trader / admin；`POST /api/v1/ohlcv/bulk` = any-authenticated（只读 POST，沿用 REV-17 口径，匿名仍拒）。**X1c 作业层（2026-11-10）**：`GET /api/sync/jobs`、`GET /api/sync/jobs/{id}`、`GET /api/sync/schedules` = `service` + viewer / trader / admin；`POST /api/sync/jobs`、`{id}/cancel`、`{id}/retry`、`schedules/{id}/run` = trader | admin；`POST /api/sync/schedules`、`PUT`、`DELETE`、`{id}/toggle` = admin（沿用 REV-17「排程管理 admin、其余变更 trader」的档位，迁移不重拍）。
-> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`；8 条作业/排程策略已于 X1c（2026-11-10）落地并移入 `servedPolicy`（`{id}` 形状、角色结论不变）⇒ `legacyREV17` 余 19 条**。core `cmd/data` 已于 `a96d836`（2026-11-08）删除，这 19 条今天**没有任何进程提供服务**；保留这张表是为了端点迁入时「同一路由、同一角色」不再重新拍板。守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表。
-> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 23 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 七条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）；作业层 HTTP 行为由 `internal/httpapi/sync_test.go` 覆盖（202/400/404/409/503、空数组、坏 cron、`run` 立即入队）。
+> - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`；8 条作业/排程策略已于 X1c（2026-11-10）落地并移入 `servedPolicy`（`{id}` 形状、角色结论不变）；`POST /api/ingest/raw` 已于 2026-11-12 随证据归档面落地并移入 `servedPolicy`（角色仍为 `trader|admin`）⇒ `legacyREV17` 余 18 条**。core `cmd/data` 已于 `a96d836`（2026-11-08）删除，这 18 条今天**没有任何进程提供服务**；保留这张表是为了端点迁入时「同一路由、同一角色」不再重新拍板。守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表。
+> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 26 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 七条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）；作业层 HTTP 行为由 `internal/httpapi/sync_test.go` 覆盖（202/400/404/409/503、空数组、坏 cron、`run` 立即入队）；证据归档面由 `internal/httpapi/evidence_test.go` 覆盖（201/400/404/503、脱敏先于哈希、分页上限）。
 > - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点调用方**：2026-11-08 起 core 已无投点作业（`INGEST_WRITE_*` 随之删除）；作业层 worker 在本仓进程内直接走 `assembly.Pipeline` → `store.BulkInsert`，不经 HTTP 投点。
 
 ### 1.1 服务探针与请求治理（G1，2026-11-07）—— ✅ 代码已落，真实 PG 腿当晚已跑
@@ -107,13 +119,15 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 
 **错误码闭合表**：§2 那张表就是**完整清单**——表里没有的码视为缺陷。代码侧唯一分诊点是
 `internal/httpapi/server.go` 的 `sentinelCodes`（读面）与 `internal/assembly.WireError`（写面），
-未登记错误一律 500 `internal`。读面 9 个哨兵逐条在表里（含 `ErrEmptyDataVersion → 409
+未登记错误一律 500 `internal`。读面 10 个哨兵逐条在表里（含 `ErrEmptyDataVersion → 409
 empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其中一条的码字与状态码，
 防止有人把冲突类错误顺手改成 500。
 
-**分页（统一策略：整段返回 + 声明上界，本轮不引 cursor）**：本仓**没有集合类读端点**——
+**分页（统一策略：整段返回 + 声明上界，本轮不引 cursor）**：本仓集合类读端点只有 `GET /api/evidence`，
+它以 `limit` / `offset` 分页：`limit` 缺省 20、上限 100，`offset` 必须 ≥ 0；越界一律 400，不静默截断。
 `/datasets/resolve` 与 `/datasets/{hash}` 各自只返回**一个**数据集（`{dataset_hash, metadata}` / 一个
-`Dataset`），不存在「翻页」。声明上界：`POST /ingest/points` ≤ 10000 点 / ≤ 8 MiB（超限 413）。
+`Dataset`），不存在「翻页」。声明上界：`POST /ingest/points` ≤ 10000 点 / ≤ 8 MiB（超限 413）；
+`POST /api/ingest/raw` ≤ 8 MiB（超限按解码失败 400 `invalid_parameter`，不写半条）。
 将来新增任何列表端点，必须**要么**给 `limit` / `cursor`，**要么**在本文写明整段返回的条数上界与超限行为；
 不允许「返回全部且不声明」。（`GET /rules` 式整段返回的判据可参照 `tellurion-risk:docs/api-schema.md` §1。）
 
@@ -177,6 +191,8 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 | `store.ErrContentConflict` | ✅（`internal/store/write.go`） | 同主键已存在且内容不同（含**换源**） | 409 `content_conflict` + **整批回滚**；不许重试成覆盖，走受控修正流程（ADR-0004/0006） |
 | `store.ErrDependencyUnavailable` | ✅ 2026-11-07（G4，`internal/store/availability.go`） | PG 拨号失败 / SQLSTATE `08` 连接异常 / 连接或语句超时 / 查询中途断开 | 503 `dependency_unavailable`；**可退避重试**，恢复后同一进程自愈。只包连接层，坏 SQL 仍是 500 |
 | `store.ErrInvalidPoint` | ✅（`internal/store/write.go`） | 载荷字段类型不对（如数值列给了字符串） | 400 `invalid_point`；单行折跳计入 `skipped`，与整批拒收分得开 |
+| `serving.ErrEvidenceNotFound` | ✅ 2026-11-12（ADR-0010） | 按 `content_hash` 取证据归档，库里没有这一条 | 404 `evidence_not_found`；「未摄取」是明确状态，UI 据此标注「未摄取，不编造引用」，**不许 500** |
+| `evidence.ErrHashCollision` | ✅ 2026-11-12（ADR-0010） | 同 `content_hash` 已存在且 payload 不同（哈希实现错误或投毒） | 500 `internal`（未登记哨兵走 500）；不覆盖旧值，不重试成成功 |
 | 未登记的失败 | —— | 上面都没命中 | 500 `internal`：**不把未知失败伪装成 4xx**（分诊表在 `assembly.WireError`，新增哨兵必须同批登记，否则红在 `TestWireErrorCoversEveryWriteFailure`） |
 
 ### 2.1 失败语义四类（G4 ①）

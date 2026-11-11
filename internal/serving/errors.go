@@ -30,6 +30,9 @@ var (
 	ErrUnexpectedSymbol = errors.New("serving: bar source returned a symbol outside the requested universe")
 	// ErrSnapshotNotFound 是按 hash 取数据集时不存在（404）。
 	ErrSnapshotNotFound = errors.New("serving: dataset snapshot not found")
+	// ErrEvidenceNotFound 是按 content_hash 取证据归档时不存在（404）。
+	// 「未摄取」是明确状态，不是 500：UI 据此标注「未摄取，不编造引用」。
+	ErrEvidenceNotFound = errors.New("serving: evidence record not found")
 	// ErrSnapshotMismatch 是内容与 hash 不符（500 + 告警）。
 	ErrSnapshotMismatch = errors.New("serving: dataset snapshot content does not match its hash")
 )
