@@ -14,6 +14,7 @@
 | SVC-DATA-G1 | 服务就绪门 G1：版本化接口 · 错误模型 · 幂等 · 分页/限流（ADR-036） | 2026-11-07 | —（原文未记） | [原文](#SVC-DATA-G1) |
 | SVC-DATA-G2 | 服务就绪门 G2：自有 schema 的唯一 writer 与可重放迁移（ADR-036） | 2026-11-07 | —（原文未记） | [原文](#SVC-DATA-G2) |
 | SVC-DATA-G4 | 服务就绪门 G4：失败语义 · 超时重试 · 健康就绪分离 · runbook（ADR-036） | 2026-11-07 | —（原文未记） | [原文](#SVC-DATA-G4) |
+| DATA-FACTOR-OWNER-DOC | 因子域 owner 回归 core：`db-schema` §1.3 / SPEC-R-02 与 `ARCHITECTURE` 派生行订正（DDD 审查 C2） | 2026-11-11 | `1b5d9fd` | [原文](#DATA-FACTOR-OWNER-DOC) |
 
 ---
 
@@ -641,5 +642,22 @@
 | QT-40 | X1 数据服务：统一协议 + aggregator + `dataset_snapshot_hash` | 已迁入本仓「一、本仓任务」（2026-10-21；core `tellurion:docs/TASKS.md` 留同号指针） |
 | QT-08 | 本仓 CI / AGENTS / 台账由该单一并补齐 | `tellurion:docs/TASKS.md` |
 | SPEC-R-02 | 五张无主表 owner 认领——`factor_hypothesis` / `factor_returns` / `ic_analysis` 归本仓因子域（已补 `docs/db-schema.md` §1.3） | `tellurion:docs/TASKS.md` §九 |
+
+---
+
+## 2026-11-11 收口（DDD 边界审查 C2）
+
+> 本节收 2026-11-10 之后收口、未进入上面「原文归档」的单；上面那份是 2026-11-10 及以前原文件的逐字快照，不改写。**上面指针表里「SPEC-R-02 … 归本仓因子域」那一行已被本单取代**，保留原文仅为历史可追溯。
+
+<a id="DATA-FACTOR-OWNER-DOC"></a>
+### DATA-FACTOR-OWNER-DOC · 因子域 owner 回归 core：`db-schema` §1.3 / SPEC-R-02 与 `ARCHITECTURE` 派生行订正 [P1] ✅（2026-11-11）
+
+- **① 目标**：撤掉本仓文档里「因子域唯一 owner = `tellurion-data`」的过期认领，按实测与 ADR 改写成真实归属。
+- **② 上下文**：DDD 边界审查 2026-11-11 的 C2（13 条落点表见 `tellurion:docs/TASKS.md` §三）。实测事实：本仓 `internal/schema/schema.go` 的 `TableNames()` 为 **22 张表**，全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**；`tellurion-docs:docs/adr/adr-037-factor-value-ownership.md` 判 `factor_cache` owner = core（消费点按需求值），`adr-038-factor-derived-tables-ownership.md` 判 `factor_returns` / `ic_analysis` 归 core 且不迁入本仓；`factor_hypothesis` 已按 2026-10-25 U8 裁决归 `tellurion-agent` 的 `ai.*`。
+- **③ 要求**：① `docs/db-schema.md` §1.3 表头改「因子（不属本仓）」，逐行标注今天 owner 与零写者事实；SPEC-R-02 认领段落改写为「不再认领」并给出 ADR-037 / ADR-038 / 裁-14 依据；② `docs/ARCHITECTURE.md` §2.1 的 `Derived` 行把本仓包路径改为「不迁入本仓（ADR-037）」；③ 删掉已删文件 `factor_hypothesis.go` 的过期引用。
+- **④ 约束与非目标**：只改文档事实陈述；不动 `internal/schema` 的任何 DDL 与 `TableNames()`，不新增 `factor_*` 表，不建因子读面（`dataflow` 不变量 7 / 裁-14）。
+- **⑤ 验收**：`docs/db-schema.md` §1.3 不再出现「唯一 owner = tellurion-data」；`docs/ARCHITECTURE.md` 的 Derived 行不再把 `internal/derived` 写成本仓目标包；两处均点名 ADR-037 / ADR-038。
+- **⑥ 边界**：本仓 `docs/db-schema.md` 与 `docs/ARCHITECTURE.md`；因子域代码与 DDL 归 `tellurion`（core），`factor_hypothesis` 归 `tellurion-agent`。
+- **收口（2026-11-11）**：commit `1b5d9fd`（`docs/db-schema.md` +14/−15、`docs/ARCHITECTURE.md` ±1）。
 
 ---
