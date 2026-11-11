@@ -7,6 +7,42 @@ import (
 	"time"
 )
 
+// TestLiveDailyOHLCV 是可选的线上日线腿（默认 skip），与 e2e 夹具同口径：
+// 同一批标的（600519.SH / 600000.SH）、同一区间起点，证明真实链路仍能取到
+// 夹具覆盖的那段日线。CI 不跑它；夹具的可重复性见
+// `tellurion-ui:e2e/fixtures/market_e2e.sql` 的头注释。
+func TestLiveDailyOHLCV(t *testing.T) {
+	if os.Getenv("TUSHARE_ONLINE") != "1" {
+		t.Skip("set TUSHARE_ONLINE=1 to hit api.tushare.pro")
+	}
+	token := os.Getenv("TUSHARE_TOKEN")
+	if token == "" {
+		t.Skip("TUSHARE_TOKEN is required")
+	}
+
+	c := NewDefault(token)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	for _, symbol := range []string{"600519.SH", "600000.SH"} {
+		rows, err := c.FetchDailyOHLCV(ctx, symbol, "20240102", "20240131")
+		if err != nil {
+			t.Fatalf("FetchDailyOHLCV(%s): %v", symbol, err)
+		}
+		if len(rows) < 10 {
+			t.Fatalf("%s daily rows = %d, want >= 10 (~20 trading days in Jan 2024)", symbol, len(rows))
+		}
+		for _, r := range rows {
+			if r.Symbol != symbol {
+				t.Fatalf("row symbol = %q, want %q", r.Symbol, symbol)
+			}
+			if r.Close <= 0 {
+				t.Fatalf("non-positive close: %+v", r)
+			}
+		}
+	}
+}
+
 // TestLiveReferenceShapes 是可选的线上形状核对（默认 skip）。
 //
 // 跑法：`$env:TUSHARE_ONLINE="1"; go test ./internal/transport/tushare -run TestLiveReferenceShapes -v`
