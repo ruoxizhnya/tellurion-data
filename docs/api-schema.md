@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-11
-verified-by: 代码-文档对齐审计 —— 23 条路由逐条核对；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
+verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补 3 条作业层自省读面）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
 ---
 
 # API Schema — tellurion-data
@@ -32,7 +32,7 @@ verified-by: 代码-文档对齐审计 —— 23 条路由逐条核对；传输/
 | POST | `/ingest/points` | **写面**：投送一批**已归一**的点位（`{data_type, points[]}`）⇒ 闸门 + 去重 + A 集门 + 内容比对落库；返回 `{data_type, received, persisted, skipped}` |
 | GET | `/ohlcv/{symbol}?start_date=YYYYMMDD&end_date=YYYYMMDD` | **G3 只读兼容**（core 旧读链）：日线 ⇒ `{ohlcv:[OHLCV]}` |
 | GET | `/fundamental/{symbol}?date=YYYYMMDD` | **G3 只读兼容**：`date` 当日已可用的最新一期财报 ⇒ `{fundamental: Fundamental}`；无记录 404 `not_found` |
-| GET | `/stocks[?exchange=]` | **G3 只读兼容**：股票列表 ⇒ `{stocks:[Stock]}` |
+| GET | `/stocks[?exchange=]` | **G3 只读兼容**：股票列表 ⇒ `{stocks:[Stock], latest_date}`；`latest_date` = 库内日线最新交易日（`YYYY-MM-DD`，空库为 `null`）。core 的 `/api/stocks/count` 由它派生，**不新增 count 端点**（2026-11-12 裁） |
 | GET | `/index/{code}/constituents[?date=YYYYMMDD]` | **G3 只读兼容**：当日生效成分（缺省 = 今天）⇒ `{constituents:[IndexConstituent]}` |
 | GET | `/api/v1/trading/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` | **G3 只读兼容**：交易日轴 ⇒ `{trading_days:["YYYY-MM-DD"]}` |
 | GET | `/api/v1/stocks/{symbol}` | **G3 只读兼容**：单只股票 ⇒ `{stock: Stock}`；无该票 404 `not_found` |
@@ -40,6 +40,9 @@ verified-by: 代码-文档对齐审计 —— 23 条路由逐条核对；传输/
 | POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` 即 data_type（单一真相），`params` 用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验） |
 | GET | `/api/sync/jobs[?status=&job_type=&limit=]` | **作业层**：`{jobs:[Job]}`（缺省最近 50 条，`status` ∈ pending/running/succeeded/failed/cancelled） |
 | GET | `/api/sync/jobs/{id}` | **作业层**：单条作业；不存在 404 `job_not_found` |
+| GET | `/api/sync/jobs/{id}/progress` | **作业层 SSE**：连上先重放当前 Job 快照，此后每 500ms 推一条 `data: {Job}`，终态（succeeded/failed/cancelled）推完即关；不存在 ⇒ 在 SSE 头写出**之前** 404 `job_not_found` |
+| GET | `/api/sync/workers` | **作业层自省**：`{num_workers, worker_ids, registered_types, is_running}`；`registered_types` = 注册表声明的 data_type（即可接的 `job_type`）；运行态未注入 ⇒ 503 |
+| GET | `/api/sync/scheduler/stats` | **作业层自省**：`{active_schedules, total_entries, next_runs:[{schedule_id,name,next_run}]}`；`total_entries` = 已激活且已算出 `next_run_at` 的排程数，`next_runs` 最多 10 条 |
 | POST | `/api/sync/jobs/{id}/cancel` | **作业层**：只对 pending/running 生效；终态 409 `job_not_cancellable` |
 | POST | `/api/sync/jobs/{id}/retry` | **作业层**：只对 failed/cancelled 生效（回到 pending、`retry_count+1`）；其余 409 `job_not_retryable` |
 | POST | `/api/sync/schedules` | **排程**：`{name, job_type, cron_expression, params, is_active}` ⇒ 201；**`is_active` 未给即 false**（不主动跑生产取数），`next_run_at` 仅在激活时计算 |

@@ -110,18 +110,21 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 - 接口形状 → `docs/api-schema.md`
 - 本文件只讲**流向与顺序**，不重复字段定义。
 
-### 5.1 待裁的跨仓边（2026-11-11 审计，未改动任何一侧）
+### 5.1 跨仓死链的处置结论（2026-11-12 裁，已落地）
 
-core `cmd/analysis/handlers_proxy.go` 仍无条件注册下列反代（`data_service.url` 缺省值 `http://data-service:8081`），但本仓路由表里没有对应端点：
+core `cmd/analysis/handlers_proxy.go` 曾无条件注册下列反代（`data_service.url` 缺省值 `http://data-service:8081`），但本仓路由表里没有对应端点。按**领域归属**逐条裁定，不是按「补一行最快」：
 
-| core 对外路由 | core 转发到 | 本仓现状 |
-| --- | --- | --- |
-| `POST /api/screen` | `data /screen` | 不存在（`legacyREV17` 里的档位只作历史记录，不挂路由） |
-| `GET /api/stocks/count` | `data /stocks/count` | 不存在（只有 `GET /stocks`） |
-| `GET /api/factors/:factor_name` | `data /factors/:factor_name` | 不存在（裁-14 已撤） |
-| `GET /api/sync/jobs/:id/progress`、`/api/sync/workers` | `data /api/sync/*` | 不存在（本仓只有 jobs / schedules 共 11 条） |
-| `POST /api/v1/ohlcv/bulk` | `data /api/v1/ohlcv/bulk` | ✅ 存在 |
+| core 对外路由 | 转发到 | 领域归属 | 结论 |
+| --- | --- | --- | --- |
+| `GET /api/sync/workers` | `data /api/sync/workers` | data（队列消费者在本进程） | ✅ **data 补正式读面**：`{num_workers, worker_ids, registered_types, is_running}`，运行态未注入 503 |
+| `GET /api/sync/jobs/:id/progress` | `data /api/sync/jobs/{id}/progress` | data（作业状态在本进程） | ✅ **data 补正式读面**：SSE，500ms 一条，终态关闭；不存在在 SSE 头之前 404 |
+| `GET /api/sync/scheduler/stats`（审计新发现） | 同上 | data（cron 在本进程） | ✅ **data 补正式读面**：`{active_schedules,total_entries,next_runs}` |
+| `POST /api/screen` | `data /screen` | core（分析语义，因子/筛选） | **core 本地供数**；data 不提供该语义，`legacyREV17` 里的档位只是历史记录 |
+| `GET /api/stocks/count` | `data /stocks/count` | data 已有读面可派生 | **不新增端点**：`GET /stocks` 增加 `latest_date`，count/by_status 由调用方派生 |
+| `POST /api/ingest/raw` | `data /api/ingest/raw` | data 唯一写面 | data 的实际写面是 `POST /ingest/points`；**不得为一个路径名造第二个写入口**，两边对齐到同一真实路径 |
+| `GET /api/factors/:factor_name` | `data /factors/:factor_name` | core（因子读面只在 core） | 维持裁-14 退役，路由不存在（不是恒 404 占位） |
+| `POST /api/v1/ohlcv/bulk` | `data /api/v1/ohlcv/bulk` | data | ✅ 存在 |
 
-判定：**core 侧代码偏离**（未随裁-14 与本仓 23 条路由表更新），不建议 data 单方面补路由；处置需 core 仓决策（删除反代或在 core 本地供数）。
+本仓本次新增 3 条读面后共 **26 条路由**（`docs/api-schema.md` §1 为准）。守卫 `TestRouteTableEqualsServedPolicy` 逐条点名，漏登记策略或留幽灵路由都会红。
 
 另：core `docs/openapi.yaml` 的 `/api/sync/{path}` 仍按旧 per-dataset 子路径（`/api/sync/stocks`、`/api/sync/ohlcv/all`、`/api/sync/fundamentals`、`/api/sync/calendar`、`/api/sync/dividends`、`/api/sync/splits`、`/api/sync/ingest/*`）描述，与本仓 X1c 的 `/api/sync/jobs|schedules` 不一致；同属待裁的跨仓契约分歧，未改动 core。

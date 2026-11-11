@@ -25,6 +25,7 @@ type fakeLegacy struct {
 	hasFund      bool
 	constituents []market.IndexConstituent
 	calendar     []time.Time
+	latestDate   time.Time
 	failSymbols  map[string]bool
 }
 
@@ -44,6 +45,10 @@ func (f *fakeLegacy) TradingDays(_ context.Context, _, _ time.Time) ([]time.Time
 
 func (f *fakeLegacy) Stocks(_ context.Context, _ string) ([]market.Stock, error) {
 	return f.stocks, nil
+}
+
+func (f *fakeLegacy) LatestTradeDate(_ context.Context) (time.Time, bool, error) {
+	return f.latestDate, !f.latestDate.IsZero(), nil
 }
 
 func (f *fakeLegacy) Stock(_ context.Context, symbol string) (market.Stock, bool, error) {
@@ -83,6 +88,7 @@ func newFakeLegacy() *fakeLegacy {
 			{IndexCode: "000300.SH", Symbol: "000001.SZ", InDate: day},
 		},
 		calendar:    []time.Time{day},
+		latestDate:  day,
 		failSymbols: map[string]bool{"BAD.SZ": true},
 	}
 }
@@ -146,11 +152,17 @@ func TestLegacyReadEndpointsShape(t *testing.T) {
 			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 		}
 		var got struct {
-			Stocks []market.Stock `json:"stocks"`
+			Stocks     []market.Stock `json:"stocks"`
+			LatestDate string         `json:"latest_date"`
 		}
 		decodeBody(t, rec, &got)
 		if len(got.Stocks) != 1 || got.Stocks[0].Name != "平安银行" {
 			t.Fatalf("unexpected stocks: %+v", got.Stocks)
+		}
+		// latest_date 是 2026-11-12 裁的派生字段：core 的 /api/stocks/count
+		// 靠它算「最近有数据的交易日」，不新增端点。
+		if got.LatestDate != "2026-11-02" {
+			t.Fatalf("latest_date = %q, want 2026-11-02", got.LatestDate)
 		}
 	})
 

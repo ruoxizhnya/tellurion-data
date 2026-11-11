@@ -42,9 +42,15 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	// 作业创建/取消/重试与「立即跑一次」= trader|admin。
 	// 新增的两条只读面（列表/详情）按数据面读档位开放——作业结果不含持仓，
 	// 但运维要能看见队列；完全不给读会让「作业卡住了」只能进库查。
-	"POST /api/sync/jobs":                  {Roles: []string{"trader", "admin"}},
-	"GET /api/sync/jobs":                   {Roles: []string{"service", "viewer", "trader", "admin"}},
-	"GET /api/sync/jobs/{id}":              {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"POST /api/sync/jobs":     {Roles: []string{"trader", "admin"}},
+	"GET /api/sync/jobs":      {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/sync/jobs/{id}": {Roles: []string{"service", "viewer", "trader", "admin"}},
+	// 作业层自省读面（2026-11-12 裁）：队列消费者与排程是「运维看得见」的
+	// 一部分，档位与作业列表一致（只读，不含持仓）。进度流是 SSE 长连接，
+	// 同样是只读。
+	"GET /api/sync/workers":                {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/sync/scheduler/stats":        {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"GET /api/sync/jobs/{id}/progress":     {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"POST /api/sync/jobs/{id}/cancel":      {Roles: []string{"trader", "admin"}},
 	"POST /api/sync/jobs/{id}/retry":       {Roles: []string{"trader", "admin"}},
 	"POST /api/sync/schedules":             {Roles: []string{"admin"}},

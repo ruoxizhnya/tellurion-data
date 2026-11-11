@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 23 条路由与
+// TestRouteTableEqualsServedPolicy 是本仓的鉴权守卫：实际注册的 26 条路由与
 // servedPolicy 必须双向一一对应。漏登策略 / 表里写了不存在的路由都会红。
 func TestRouteTableEqualsServedPolicy(t *testing.T) {
 	srv := New(nil)
@@ -27,7 +27,10 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"DELETE /api/sync/schedules/{id}",
 		"GET /api/sync/jobs",
 		"GET /api/sync/jobs/{id}",
+		"GET /api/sync/jobs/{id}/progress",
+		"GET /api/sync/scheduler/stats",
 		"GET /api/sync/schedules",
+		"GET /api/sync/workers",
 		"GET /api/v1/stocks/{symbol}",
 		"GET /api/v1/trading/calendar",
 		"GET /datasets/resolve",

@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -241,13 +242,22 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 	scheduler := &syncjob.Scheduler{Store: queue, Logger: log.Default()}
 	// 只在 schema 就绪后启动作业循环：降级启动时 sync_* 表可能还不存在，
 	// 立刻轮询只会每 2s 往日志里灌一条「relation does not exist」。
-	go startJobsWhenReady(jobCtx, &schemaReady, worker, scheduler)
+	var jobsRunning atomic.Bool
+	go startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)
 
 	server := httpapi.New(agg, authorizer,
 		httpapi.WithPoints(points),
 		// G3 只读兼容面：core 旧读链的 7 条路由，读同一批表（只读）。
 		httpapi.WithLegacyReader(st),
 		httpapi.WithSync(queue),
+		// 作业循环自省面（2026-11-12 裁）：worker 与注册表都在本进程内，
+		// 这三条读面只能在这里回答。`IsRunning` 走原子布尔而不是查库：
+		// 它回答的是「循环起了没有」，不是「有没有活干」。
+		httpapi.WithSyncRuntime(httpapi.SyncRuntime{
+			WorkerIDs:       func() []string { return []string{workerID} },
+			RegisteredTypes: func() []string { return registeredTypes(registry) },
+			IsRunning:       jobsRunning.Load,
+		}),
 		httpapi.WithReadiness(readinessCheck(pool)),
 		httpapi.WithAvailability(schemaReady.Load),
 	)
@@ -258,7 +268,7 @@ func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
 //
 // 两段式而不是直接起：降级启动（PG 不可达 / DDL 未跑完）时队列表可能不存在，
 // 立刻轮询只会制造噪音；DDL 就绪后同一进程自愈启动，不需要重启。
-func startJobsWhenReady(ctx context.Context, ready *atomic.Bool, worker *syncjob.Worker, scheduler *syncjob.Scheduler) {
+func startJobsWhenReady(ctx context.Context, ready, running *atomic.Bool, worker *syncjob.Worker, scheduler *syncjob.Scheduler) {
 	for !ready.Load() {
 		select {
 		case <-ctx.Done():
@@ -266,8 +276,23 @@ func startJobsWhenReady(ctx context.Context, ready *atomic.Bool, worker *syncjob
 		case <-time.After(time.Second):
 		}
 	}
+	running.Store(true)
 	go worker.Run(ctx)
 	go scheduler.Run(ctx)
+}
+
+// registeredTypes 返回注册表声明的数据类型（= 可接的 job_type），升序。
+//
+// 用链表的键而不是 connector 名：`job_type` 的取值是 data_type，两者不是
+// 同一套字面值。
+func registeredTypes(reg *ingest.Registry) []string {
+	chains := reg.Chains()
+	out := make([]string, 0, len(chains))
+	for dataType := range chains {
+		out = append(out, dataType)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // hostnameOr 取主机名作 worker ID 前缀；取不到用 fallback。

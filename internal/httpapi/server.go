@@ -40,6 +40,7 @@ type Server struct {
 	points     *assembly.Writer
 	legacy     serving.LegacyReader
 	sync       syncjob.Store
+	runtime    SyncRuntime
 	authorizer Authorizer
 	readiness  func(context.Context) error
 	available  func() bool
@@ -144,6 +145,11 @@ func (s *Server) routes() []routeSpec {
 		{"POST /api/sync/jobs", s.handleCreateSyncJob},
 		{"GET /api/sync/jobs", s.handleListSyncJobs},
 		{"GET /api/sync/jobs/{id}", s.handleGetSyncJob},
+		// 作业进度是 SSE 长连接（`sync_status.go`）：UI 的 EventSource 直接打这条。
+		{"GET /api/sync/jobs/{id}/progress", s.handleSyncJobProgress},
+		// 队列/排程的自省读面：worker 与 cron 是否真的在跑，只能从这里看。
+		{"GET /api/sync/workers", s.handleSyncWorkers},
+		{"GET /api/sync/scheduler/stats", s.handleSchedulerStats},
 		{"POST /api/sync/jobs/{id}/cancel", s.handleCancelSyncJob},
 		{"POST /api/sync/jobs/{id}/retry", s.handleRetrySyncJob},
 		{"POST /api/sync/schedules", s.handleCreateSchedule},
@@ -222,6 +228,18 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 		w.status = http.StatusOK
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap 暴露底层 ResponseWriter：SSE 进度端点要 Flush，且要用
+// `http.ResponseController` 取消写超时（长连接不能被 120s 的写上限切断）。
+// 没有 Unwrap，包一层访问日志就会把 Flush 能力弄丢。
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Flush 让 *statusWriter 直接满足 http.Flusher（SSE 需要）。
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

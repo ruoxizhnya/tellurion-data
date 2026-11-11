@@ -25,6 +25,10 @@ type LegacyReader interface {
 
 	// Stocks 返回股票列表；exchange 为空 = 全市场。
 	Stocks(ctx context.Context, exchange string) ([]market.Stock, error)
+	// LatestTradeDate 返回库内日线的最新交易日；found=false 表示还没有任何
+	// 可用日线。core 的 `/api/stocks/count` 用它派生 `latest_date`——
+	// 不新增端点，由已有读面算出来（2026-11-12 裁）。
+	LatestTradeDate(ctx context.Context) (time.Time, bool, error)
 	// Stock 按代码取单只；found=false 表示库里没有（不是错误）。
 	Stock(ctx context.Context, symbol string) (market.Stock, bool, error)
 	// Fundamental 返回 asOf 当日**已可用**的最新一期财报（available_date 口径）。

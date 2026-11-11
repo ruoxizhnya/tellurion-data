@@ -51,6 +51,33 @@ func (s *Store) Stocks(ctx context.Context, exchange string) ([]market.Stock, er
 	return out, nil
 }
 
+// LatestTradeDate 实现 `serving.LegacyReader`：库内日线的最新交易日。
+//
+// `MAX(trade_date)` 走 `(symbol, trade_date)` 主键的前缀之外的分支，但这是
+// 运维读面（低频），不值得为它加一条额外索引；`found=false`（空表）不报错。
+func (s *Store) LatestTradeDate(ctx context.Context) (time.Time, bool, error) {
+	sql := `SELECT MAX(trade_date) FROM ` + s.table("ohlcv_daily_qfq")
+
+	var (
+		day   *time.Time
+		found bool
+	)
+	err := s.scanAll(ctx, sql, nil, func(rows Rows) error {
+		if err := rows.Scan(&day); err != nil {
+			return err
+		}
+		found = day != nil
+		return nil
+	})
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("store: read latest trade date: %w", err)
+	}
+	if !found {
+		return time.Time{}, false, nil
+	}
+	return utcDate(*day), true, nil
+}
+
 // Stock 实现 `serving.LegacyReader`：按代码取单只，found=false 即库里没有。
 func (s *Store) Stock(ctx context.Context, symbol string) (market.Stock, bool, error) {
 	sql := `SELECT t.symbol, t.name, t.exchange, COALESCE(t.industry, ''),

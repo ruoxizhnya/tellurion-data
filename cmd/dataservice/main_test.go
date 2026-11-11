@@ -108,7 +108,10 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 		// `/api/sync/jobs` 全 503，worker/scheduler 不起则作业永远 pending。
 		"syncjob.NewPGStore(pool, nil)",
 		"httpapi.WithSync(queue)",
-		"go startJobsWhenReady(jobCtx, &schemaReady, worker, scheduler)",
+		"go startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)",
+		// 作业循环自省面（2026-11-12 裁）：漏了它 `/api/sync/workers` 与
+		// `/api/sync/scheduler/stats` 会 503，而「队列在跑」在别的套件里看不出来。
+		"httpapi.WithSyncRuntime(httpapi.SyncRuntime{",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("build() 的写面装配链少了这一段：%q\n（漏了它，投点端点会在运行时 503，而 internal/* 的套件全绿）", want)

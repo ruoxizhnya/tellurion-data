@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -263,6 +264,96 @@ func TestListSchedules_EmptyIsEmptyArray(t *testing.T) {
 	if len(body.Schedules) != 0 {
 		t.Fatalf("schedules = %v, want empty", body.Schedules)
 	}
+}
+
+// TestSyncWorkers_FailsClosedWhenRuntimeUnwired 钉住自省面的未接线形态：
+// 队列接了但运行态没注入（例如有人只装了 Store）⇒ 503，不是回半张表。
+func TestSyncWorkers_FailsClosedWhenRuntimeUnwired(t *testing.T) {
+	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodGet, "/api/sync/workers", "")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "dependency_unavailable")
+}
+
+// TestSyncWorkers_ReturnsRuntimeSnapshot 钉住 workers 读面的形状。
+func TestSyncWorkers_ReturnsRuntimeSnapshot(t *testing.T) {
+	h := New(nil,
+		WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{}))),
+		WithSync(newFakeSyncStore()),
+		WithSyncRuntime(SyncRuntime{
+			WorkerIDs:       func() []string { return []string{"data-1"} },
+			RegisteredTypes: func() []string { return []string{"ohlcv_daily", "stocks"} },
+			IsRunning:       func() bool { return true },
+		}),
+	).Routes()
+
+	rec := doJSON(t, h, http.MethodGet, "/api/sync/workers", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var body workerStatsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if body.NumWorkers != 1 || len(body.WorkerIDs) != 1 || body.WorkerIDs[0] != "data-1" {
+		t.Fatalf("workers = %+v", body)
+	}
+	if len(body.RegisteredTypes) != 2 || !body.IsRunning {
+		t.Fatalf("workers = %+v", body)
+	}
+}
+
+// TestSchedulerStats_CountsActiveWithNextRun 钉住 stats 口径：
+// total_entries = 已激活且已算出 next_run_at 的排程数。
+func TestSchedulerStats_CountsActiveWithNextRun(t *testing.T) {
+	store := newFakeSyncStore()
+	next := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
+	store.schedules[1] = syncjob.Schedule{ID: 1, Name: "daily", IsActive: true, NextRunAt: &next}
+	store.schedules[2] = syncjob.Schedule{ID: 2, Name: "paused", IsActive: false, NextRunAt: &next}
+
+	rec := doJSON(t, syncServer(store), http.MethodGet, "/api/sync/scheduler/stats", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var body schedulerStatsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if body.ActiveSchedules != 1 || body.TotalEntries != 1 {
+		t.Fatalf("stats = %+v", body)
+	}
+	if len(body.NextRuns) != 1 || body.NextRuns[0].ScheduleID != 1 {
+		t.Fatalf("next_runs = %+v", body.NextRuns)
+	}
+}
+
+// TestSyncJobProgress_ReplaysTerminalAndCloses 钉住 SSE：连上重放一条，
+// 终态推完即关（不挂住测试）。
+func TestSyncJobProgress_ReplaysTerminalAndCloses(t *testing.T) {
+	store := newFakeSyncStore()
+	store.jobs["j1"] = syncjob.Job{ID: "j1", Status: syncjob.StatusSucceeded}
+
+	rec := doJSON(t, syncServer(store), http.MethodGet, "/api/sync/jobs/j1/progress", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"j1"`) {
+		t.Fatalf("body = %q, want a data: line with the job id", rec.Body.String())
+	}
+}
+
+// TestSyncJobProgress_UnknownJobIs404：作业不存在时必须在 SSE 头之前就 404，
+// 否则 EventSource 拿到的是「200 空流」，前端会永远等下去。
+func TestSyncJobProgress_UnknownJobIs404(t *testing.T) {
+	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodGet, "/api/sync/jobs/nope/progress", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "job_not_found")
 }
 
 func TestCreateSchedule_ValidatesCron(t *testing.T) {

@@ -90,6 +90,10 @@ func (s *Server) handleLegacyFundamental(w http.ResponseWriter, r *http.Request)
 }
 
 // handleLegacyStocks 是 `GET /stocks[?exchange=]`。
+//
+// `latest_date` 是 2026-11-12 裁的**派生增加**：core 的 `/api/stocks/count`
+// 需要「最近有数据的交易日」，而该信息本就在本仓读面（日线最大值）里，
+// 不应为此新增一个端点。空库时为 null，不是 1970。
 func (s *Server) handleLegacyStocks(w http.ResponseWriter, r *http.Request) {
 	if !s.legacyReady(w, s.legacy) {
 		return
@@ -99,7 +103,16 @@ func (s *Server) handleLegacyStocks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"stocks": stocks})
+	body := map[string]any{"stocks": stocks}
+	if day, found, err := s.legacy.LatestTradeDate(r.Context()); err != nil {
+		writeError(w, err)
+		return
+	} else if found {
+		body["latest_date"] = day.Format("2006-01-02")
+	} else {
+		body["latest_date"] = nil
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleLegacyStock 是 `GET /api/v1/stocks/{symbol}`；不在库里 ⇒ 404。
