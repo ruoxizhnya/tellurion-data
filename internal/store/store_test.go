@@ -243,7 +243,8 @@ func TestResolveUniverse_ExplicitSymbolsAreNormalised(t *testing.T) {
 		AsOf:    day(2026, 1, 15),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"000001.SZ", "600519.SH"}, got)
+	assert.Equal(t, []string{"000001.SZ", "600519.SH"}, got.Symbols)
+	assert.True(t, got.PITEligible, "显式 symbols 由调用方给定，解析层不引入前视")
 	assert.Empty(t, db.lastSQL)
 }
 
@@ -256,7 +257,9 @@ func TestResolveUniverse_AliasExpandsWithAsOfFilter(t *testing.T) {
 		Name: "csi300", AsOf: day(2026, 1, 15),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"000001.SZ", "600519.SH"}, got)
+	assert.Equal(t, []string{"000001.SZ", "600519.SH"}, got.Symbols)
+	assert.False(t, got.PITEligible,
+		"index_constituents 只有当前快照，按历史 as_of 解析不等于可还原的 PIT 票池")
 	assert.Contains(t, db.lastSQL, "market.index_constituents")
 	assert.Contains(t, db.lastSQL, "in_date <= $2")
 	assert.Contains(t, db.lastSQL, "out_date IS NULL OR out_date > $2",

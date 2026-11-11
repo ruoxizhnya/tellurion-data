@@ -72,7 +72,7 @@ func (a *Aggregator) Resolve(ctx context.Context, req ResolveRequest) (ResolveRe
 		return ResolveResult{}, err
 	}
 
-	rawUniverse, err := a.universe.ResolveUniverse(ctx, UniverseRequest{
+	resolution, err := a.universe.ResolveUniverse(ctx, UniverseRequest{
 		Name:      strings.TrimSpace(req.Universe),
 		IndexCode: strings.TrimSpace(req.IndexCode),
 		Symbols:   req.Symbols,
@@ -82,7 +82,7 @@ func (a *Aggregator) Resolve(ctx context.Context, req ResolveRequest) (ResolveRe
 	if err != nil {
 		return ResolveResult{}, fmt.Errorf("serving: resolve universe: %w", err)
 	}
-	symbols, err := normalizeSymbols(rawUniverse)
+	symbols, err := normalizeSymbols(resolution.Symbols)
 	if err != nil {
 		return ResolveResult{}, err
 	}
@@ -152,7 +152,7 @@ func (a *Aggregator) Resolve(ctx context.Context, req ResolveRequest) (ResolveRe
 	if err != nil {
 		return ResolveResult{}, err
 	}
-	return ResolveResult{Hash: dataset.Hash, Metadata: dataset.Metadata}, nil
+	return ResolveResult{Hash: dataset.Hash, Metadata: dataset.Metadata, PITEligible: resolution.PITEligible}, nil
 }
 
 // Snapshot 按 hash 取回已物化的数据集（404 / 缓存串号 500 的判据在 Cache）。

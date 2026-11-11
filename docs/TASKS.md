@@ -75,10 +75,19 @@ verified-by: 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `
 - **② 上下文**：同 `DATA-DIVIDENDS`，零写者。
 - **重开条件**：复权因子改为自算、或以拆股事件驱动持仓调整。
 
-### DATA-INDEX-CONSTITUENTS · `index_constituents` 零写者 [P3] ⏸
+### DATA-INDEX-CONSTITUENTS · `index_constituents` 写者与当前快照读面 [P2] ✅（2026-11-12 重开并收口）
 
-- **② 上下文**：表在 schema 内但无 writer；指数成分历史是回测票池的另一来源。
-- **重开条件**：出现「按指数成分历史截断票池」的回测需求。
+- **① 目标**：给 `market.index_constituents` 一个真写者与一个自带口径的读面，让下游「按指数取当前成分」不再 409/空表；同时**如实标注**它只是当前快照，不能用于 PIT 回测。
+- **② 上下文（重开理由）**：原单按「零写者 P3 ⏸」挂起，重开条件是「出现按指数成分历史截断票池的回测需求」。该条件**未被满足**（core 的 `index_code` 展开与 P2 区间成分并集仍随 `SVC-CORE-DATA-RETIRE` 退役，见 `tellurion:pkg/backtest/engine.go:728-735`、`:761-764`），但**消费者已出现另一类**：
+  - UI **数据同步页** `tellurion-ui:web/src/pages/DataSync.vue`（`stores/sync` + `api/sync.ts`）走 `POST /api/sync/jobs`，其 `job_type` 联合类型已含 `index_constituents`（`tellurion-ui:docs/design/pages/data-sync.md:394`）——今天建这个作业只会得到一个「没人接」的作业；
+  - core 的读反代 `GET /index/{code}/constituents`（`tellurion:pkg/marketdata/http_provider.go:139-160`）被分析产物的基准成分使用（`tellurion:internal/analysisartifact/builder.go:156`）；
+  - 对外读面 `GET /datasets/resolve?universe=csi300&as_of=...` 会把 `csi300` 展开成成分（`tellurion-data:internal/store/universe.go` 的 `indexAliases`）。
+  三者都要这张表有数据，否则分别表现为：作业永远 pending/失败、基准成分空、`409 empty_universe`。
+- **③ 要求（已落地）**：① 取数 `tushare.Client.FetchIndexConstituents`（`index_weight`，月频快照；窗口内只取 `trade_date` 最新一期）；② 作业类型 `index_constituents` 进参考数据腿（`internal/sync/reference.go`），参数 `index_code` 必填、`start_date/end_date` 缺省为「以 `Now` 为终点回看 120 天」；③ 写者 `store.ReferenceWriter.ReplaceIndexConstituents`，同事务「删当前行（`out_date IS NULL`）+ 插新快照」，不碰历史区间行；④ 读面 `GET /index/{code}/constituents` 固定回 `pit_eligible: false` + `usage`；`GET /datasets/resolve` 顶层回 `pit_eligible`（指数/别名 = `false`，显式 `symbols` = `true`）；⑤ 字段与口径写进 `docs/db-schema.md` §9.6。
+- **④ 约束与非目标**：**不做**多期快照差分、不推导真实 `in_date/out_date` 区间、不提供 PIT 成分史（那是新单）；不改 core 的「`index_code` 展开退役」裁决；空响应必须失败（数据质量闸），不得静默写 0 行。
+- **⑤ 验收**：① `go test ./...` 全绿；② fixture 腿（不依赖配额）：`internal/transport/tushare/index_constituents_test.go` 覆盖「只取最新一期」、空集 fail-closed、缺列 fail-closed；③ 作业腿：`internal/sync/reference_test.go` 覆盖 `index_code` 必填与默认窗口/计数；④ 真库腿：`internal/store/reference_write_pg_test.go` 验证整期替换只删当前行、历史行不动；⑤ 线上真链路（opt-in）：`TUSHARE_ONLINE=1 go test ./internal/transport/tushare -run TestLiveIndexConstituents`，2026-11-12 实测通过（沪深300 成分 >= 250）；⑥ 破坏验证：把 `UniverseResolution.PITEligible` 恒置 `true` ⇒ `TestStore_ResolveUniverse*` 与 HTTP 的 `pit_eligible` 断言应红（已实做并还原）。
+- **⑥ 边界**：本仓取数/写面/读面口径与 `db-schema.md` §9.6；核心结论「仅供当前选股，不用于 PIT 回测」由调用方遵守（`pit_eligible` 是可判定字段，不是口头承诺）；契约形状引用 `github.com/ruoxizhnya/tellurion-contracts/domain/market.IndexConstituent`（`IndexCode` / `Symbol` / `InDate` / `OutDate` / `Weight`）。
+- **重开条件（下一单）**：真要做 PIT 票池时另立单——多期 `index_weight` 快照差分出区间、回填 `out_date`，并把 `pit_eligible` 改成按「该 as_of 是否落在已覆盖区间内」判定。
 
 ### DATA-MARKET-ACTIVITY · `market_activity` 零写者 [P3] ⏸
 

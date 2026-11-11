@@ -152,3 +152,81 @@ func TestReferenceWriter_UpsertTradingDaysNormalizesExchange(t *testing.T) {
 		}
 	}
 }
+
+// 整期快照替换：先把这些指数的「当前行」删掉，再插新快照。
+// 断言的是「删了什么、插了什么」——这两步只要有一半被删，读面就会把
+// 已调出的票算回票池。
+func TestReferenceWriter_ReplaceIndexConstituentsClearsCurrentRowsFirst(t *testing.T) {
+	w, db := newReferenceWriterForTest(t, "market")
+	snapshot := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	rows := []market.IndexConstituent{
+		{IndexCode: "000300.SH", Symbol: "600519.SH", InDate: snapshot, Weight: 3.2},
+		{IndexCode: "000300.SH", Symbol: "000001.SZ", InDate: snapshot, Weight: 1.1},
+		{IndexCode: "000905.SH", Symbol: "600000.SH", InDate: snapshot, Weight: 2.0},
+	}
+
+	written, err := w.ReplaceIndexConstituents(context.Background(), rows)
+	if err != nil {
+		t.Fatalf("ReplaceIndexConstituents: %v", err)
+	}
+	if written != 3 {
+		t.Fatalf("written = %d, want 3", written)
+	}
+	if !db.tx.committed || db.tx.rolledBack {
+		t.Fatalf("tx state: committed=%t rolledBack=%t", db.tx.committed, db.tx.rolledBack)
+	}
+
+	// 第一次 exec 是 DELETE（每个指数一条，按出现顺序去重），随后才是 INSERT。
+	if len(db.tx.execs) != 5 {
+		t.Fatalf("execs = %d, want 2 deletes + 3 inserts: %v", len(db.tx.execs), db.tx.execs)
+	}
+	for i := 0; i < 2; i++ {
+		if !strings.Contains(db.tx.execs[i], "DELETE FROM market.index_constituents") {
+			t.Fatalf("execs[%d] is not the snapshot delete: %s", i, db.tx.execs[i])
+		}
+		if !strings.Contains(db.tx.execs[i], "out_date IS NULL") {
+			t.Fatalf("delete must only target current rows: %s", db.tx.execs[i])
+		}
+	}
+	if db.tx.args[0][0] != "000300.SH" || db.tx.args[1][0] != "000905.SH" {
+		t.Fatalf("delete codes = %v, %v", db.tx.args[0][0], db.tx.args[1][0])
+	}
+	for i := 2; i < 5; i++ {
+		if !strings.Contains(db.tx.execs[i], "INSERT INTO market.index_constituents") {
+			t.Fatalf("execs[%d] is not the snapshot insert: %s", i, db.tx.execs[i])
+		}
+	}
+	// in_date 必须是快照日、out_date 在 SQL 里恒 NULL（当前成分）。
+	if got := db.tx.args[2][2]; got.(time.Time).Format("2006-01-02") != "2026-10-31" {
+		t.Fatalf("in_date arg = %v, want snapshot date", got)
+	}
+	if got := db.tx.args[2][3]; got != 3.2 {
+		t.Fatalf("weight arg = %v, want 3.2", got)
+	}
+}
+
+// 空行不写、不开事务；缺 index_code/symbol/in_date 的行拒写，且整批不落库。
+func TestReferenceWriter_ReplaceIndexConstituentsValidatesRows(t *testing.T) {
+	w, db := newReferenceWriterForTest(t, "market")
+	if written, err := w.ReplaceIndexConstituents(context.Background(), nil); err != nil || written != 0 {
+		t.Fatalf("empty input = (%d, %v), want (0, nil)", written, err)
+	}
+	if db.beginCalls != 0 {
+		t.Fatalf("empty input must not open a transaction (begin=%d)", db.beginCalls)
+	}
+
+	snapshot := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	for name, row := range map[string]market.IndexConstituent{
+		"empty index_code": {Symbol: "600519.SH", InDate: snapshot},
+		"empty symbol":     {IndexCode: "000300.SH", InDate: snapshot},
+		"zero in_date":     {IndexCode: "000300.SH", Symbol: "600519.SH"},
+	} {
+		_, err := w.ReplaceIndexConstituents(context.Background(), []market.IndexConstituent{row})
+		if err == nil {
+			t.Fatalf("%s: want error, got nil", name)
+		}
+	}
+	if db.beginCalls != 0 {
+		t.Fatalf("invalid rows must fail before opening a transaction (begin=%d)", db.beginCalls)
+	}
+}

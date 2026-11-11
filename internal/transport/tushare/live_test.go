@@ -111,3 +111,57 @@ func TestLiveReferenceShapes(t *testing.T) {
 		t.Fatalf("2026-11-09 must be a trading day: %+v", days)
 	}
 }
+
+// TestLiveIndexConstituents 是可选的线上真链路（默认 skip，需配额）。
+//
+// 跑法：`$env:TUSHARE_ONLINE="1"; go test ./internal/transport/tushare -run TestLiveIndexConstituents -v`
+// （需要 TUSHARE_TOKEN 且该账号有 `index_weight` 权限）。
+//
+// 断言的是**真实响应能被归一成「一期当前成分」**：窗口内只保留最大
+// trade_date、每行 in_date 等于该期、out_date 为零值（当前成分）。
+// 若账号无该接口权限，Tushare 返回空集，本腿会红——这正是我们要的
+// fail-closed：没有数据就说没有，不许静默成功。
+func TestLiveIndexConstituents(t *testing.T) {
+	if os.Getenv("TUSHARE_ONLINE") != "1" {
+		t.Skip("set TUSHARE_ONLINE=1 to hit api.tushare.pro")
+	}
+	token := os.Getenv("TUSHARE_TOKEN")
+	if token == "" {
+		t.Skip("TUSHARE_TOKEN is required")
+	}
+
+	c := NewDefault(token)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	end := time.Now().UTC()
+	start := end.AddDate(0, 0, -120)
+	rows, err := c.FetchIndexConstituents(ctx, "000300.SH", start, end)
+	if err != nil {
+		t.Fatalf("FetchIndexConstituents(000300.SH): %v", err)
+	}
+	if len(rows) < 250 {
+		t.Fatalf("CSI300 constituents = %d, want >= 250", len(rows))
+	}
+
+	snapshot := rows[0].InDate
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if row.IndexCode != "000300.SH" {
+			t.Fatalf("index_code = %q, want 000300.SH", row.IndexCode)
+		}
+		if row.Symbol == "" || row.Weight <= 0 {
+			t.Fatalf("row missing symbol/weight: %+v", row)
+		}
+		if !row.InDate.Equal(snapshot) {
+			t.Fatalf("mixed snapshot dates: %s vs %s", row.InDate, snapshot)
+		}
+		if !row.OutDate.IsZero() {
+			t.Fatalf("out_date = %s, want zero", row.OutDate)
+		}
+		if seen[row.Symbol] {
+			t.Fatalf("duplicate symbol in one snapshot: %s", row.Symbol)
+		}
+		seen[row.Symbol] = true
+	}
+}

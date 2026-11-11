@@ -3,9 +3,10 @@ package ingest
 // 参考数据（reference data）的取数窄口。
 //
 // 为什么单开一个口，而不是往 `TushareTransport` 里加方法：`stocks` /
-// `trading_calendar` 不是点位流——没有 `visible_at`、不进 `ingest.data_points`
-// 的 data_type 声明表。它们的落点是 C 集参照表，写面是 upsert（见
-// `store.ReferenceWriter`），而不是 `BulkInsert` 的闸门 + 幂等内容比对。
+// `trading_calendar` / `index_constituents` 不是点位流——没有 `visible_at`、
+// 不进 `ingest.data_points` 的 data_type 声明表。它们的落点是 C 集参照表，
+// 写面是 upsert/整期替换（见 `store.ReferenceWriter`），而不是 `BulkInsert`
+// 的闸门 + 幂等内容比对。
 // 把两类语义塞进同一条接口，调用方就分不清「哪条路要过 visible_at 门」。
 //
 // 依赖方向仍是 `transport → ingest`：本文件只放类型与接口，不 import 具体传输。
@@ -37,4 +38,6 @@ type ReferenceTransport interface {
 	FetchStocks(ctx context.Context, exchange, listStatus string) ([]market.Stock, error)
 	// FetchTradeCalendar 取 exchange 在 [start, end] 的日历；零值日期 = 不限。
 	FetchTradeCalendar(ctx context.Context, exchange string, start, end time.Time) ([]TradingDay, error)
+	// FetchIndexConstituents 取指数在 [start, end] 内最新一期成分（含权重）。
+	FetchIndexConstituents(ctx context.Context, indexCode string, start, end time.Time) ([]market.IndexConstituent, error)
 }

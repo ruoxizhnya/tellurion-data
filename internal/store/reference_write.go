@@ -182,6 +182,75 @@ func (w *ReferenceWriter) UpsertTradingDays(ctx context.Context, days []TradingD
 	return written, nil
 }
 
+// ReplaceIndexConstituents 以「整期快照」语义替换给定指数的**当前**成分。
+//
+// 为什么不是逐行 upsert：`market.index_constituents` 没有可用来判等的唯一键
+// （DDL 里 `in_date/out_date` 都可空，`id` 是代理键），而当前只有「指数 → 当前
+// 成分」一个口径。同一事务里：
+//   - 删掉这些指数 `out_date IS NULL` 的行（上一期当前快照）；
+//   - 插入新快照行（`in_date` = 快照日，`out_date` = NULL）。
+//
+// 不删 `out_date` 非空的行：那是将来补历史区间时要留的（本单不产生它）。
+// 留两期当前快照会让读面把已调出的票算回票池——本函数存在的理由就是把它
+// 换成「只有一期」。空 `index_code` / `symbol` 拒写，不静默丢掉。
+func (w *ReferenceWriter) ReplaceIndexConstituents(ctx context.Context, rows []market.IndexConstituent) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	codes := make([]string, 0, 1)
+	seen := map[string]struct{}{}
+	for i, row := range rows {
+		if strings.TrimSpace(row.IndexCode) == "" || strings.TrimSpace(row.Symbol) == "" || row.InDate.IsZero() {
+			return 0, fmt.Errorf("store: index constituent row %d has empty index_code/symbol or zero in_date", i)
+		}
+		if _, ok := seen[row.IndexCode]; ok {
+			continue
+		}
+		seen[row.IndexCode] = struct{}{}
+		codes = append(codes, row.IndexCode)
+	}
+
+	tx, err := w.db.BeginTx(ctx)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	deleteSQL := fmt.Sprintf(`DELETE FROM %s WHERE index_code = $1 AND out_date IS NULL`,
+		w.table("index_constituents"))
+	for _, code := range codes {
+		if _, err := tx.Exec(ctx, deleteSQL, code); err != nil {
+			return 0, fmt.Errorf("store: clear current index constituents %s: %w", code, err)
+		}
+	}
+
+	insertSQL := fmt.Sprintf(`INSERT INTO %s (index_code, symbol, in_date, out_date, weight)
+		VALUES ($1, $2, $3, NULL, $4)`, w.table("index_constituents"))
+	written := 0
+	for _, row := range rows {
+		if _, err := tx.Exec(ctx, insertSQL,
+			row.IndexCode,
+			row.Symbol,
+			utcDate(row.InDate),
+			nullIfZeroFloat(row.Weight),
+		); err != nil {
+			return 0, fmt.Errorf("store: insert index constituent %s/%s: %w", row.IndexCode, row.Symbol, err)
+		}
+		written++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	committed = true
+	return written, nil
+}
+
 // normalizeExchange 把缺省/大小写差异折成 DDL CHECK 认可的取值。
 func normalizeExchange(exchange string) string {
 	exchange = strings.ToUpper(strings.TrimSpace(exchange))

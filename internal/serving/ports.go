@@ -34,9 +34,22 @@ type UniverseRequest struct {
 	AsOf time.Time
 }
 
+// UniverseResolution 是票池解析结果。
+//
+// `PITEligible` 回答的是「这个票池能不能按 as_of 原样还原」：显式 symbols 由
+// 调用方给定、解析层不引入前视，为 true；`index_constituents` 当前只存一份
+// 「指数 → 当前成分」快照（Tushare `index_weight` 月频快照，`in_date` = 快照日、
+// `out_date` 恒 NULL），按历史 as_of 解析会拿今天的成分冒充过去（幸存者偏差），
+// 因此为 false。它在 `/datasets/resolve` 响应里以 `pit_eligible` 回给调用方，
+// 让「不能用于 PIT 回测」成为可判定的字段，而不是文档里的一句话。
+type UniverseResolution struct {
+	Symbols     []string
+	PITEligible bool
+}
+
 // UniverseResolver 解析票池（输入面，保留在本仓；不是取数面）。
 type UniverseResolver interface {
-	ResolveUniverse(ctx context.Context, req UniverseRequest) ([]string, error)
+	ResolveUniverse(ctx context.Context, req UniverseRequest) (UniverseResolution, error)
 }
 
 // TradingCalendar 返回窗口内的交易日轴（保序）。

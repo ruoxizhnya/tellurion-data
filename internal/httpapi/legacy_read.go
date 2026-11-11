@@ -117,6 +117,12 @@ func (s *Server) handleLegacyStock(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLegacyConstituents 是 `GET /index/{code}/constituents[?date=YYYYMMDD]`。
+//
+// 读面必须自报口径：本仓 `market.index_constituents` 当前只有 Tushare
+// `index_weight` 的**月频当前快照**（`in_date` = 快照日、`out_date` 恒 NULL），
+// 没有完整成分变更史。因此响应固定带 `pit_eligible: false` 与一句 usage——
+// 「早于快照日的 as_of 解析为空」是可观察的行为，不是文档里的一句话；
+// 把它当历史成分做 PIT 回测会拿到幸存者偏差的结果。
 func (s *Server) handleLegacyConstituents(w http.ResponseWriter, r *http.Request) {
 	if !s.legacyReady(w, s.legacy) {
 		return
@@ -135,7 +141,11 @@ func (s *Server) handleLegacyConstituents(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"constituents": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"constituents": items,
+		"pit_eligible": false,
+		"usage":        "current snapshot only; not for point-in-time backtests",
+	})
 }
 
 // handleLegacyCalendar 是 `GET /api/v1/trading/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD`。

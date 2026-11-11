@@ -29,7 +29,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/datasets/resolve?universe=&index_code=&from=&to=&freq=&adjustment=&as_of=` | 解析票池 + 窗口 + 频率 + 复权口径 + 可见时点 ⇒ `{dataset_hash, metadata}`（`metadata` 回显六分量） |
+| GET | `/datasets/resolve?universe=&index_code=&from=&to=&freq=&adjustment=&as_of=` | 解析票池 + 窗口 + 频率 + 复权口径 + 可见时点 ⇒ `{dataset_hash, metadata, pit_eligible}`（`metadata` 回显六分量；`pit_eligible` = 票池能否按 `as_of` 可还原地重建：显式 `symbols` 为 `true`，指数/别名（当前只有成分快照）为 `false`，见 `db-schema.md` §9.6） |
 | GET | `/datasets/{hash}` | 按 hash 取数据（同一 hash 两次结果必须**字节一致**） |
 | POST | `/ingest/points` | **写面**：投送一批**已归一**的点位（`{data_type, points[]}`）⇒ 闸门 + 去重 + A 集门 + 内容比对落库；返回 `{data_type, received, persisted, skipped}` |
 | POST | `/api/ingest/raw` | **证据写面（单写者）**：`{source, dataset, key, as_of?, payload, content_hash?}` ⇒ 脱敏 → 规范化 → sha256 → `ingest.raw`；201 返回完整 `RawIngest`（含 `content_hash`）。同 hash 同内容幂等，同 hash 异内容 500 |
@@ -37,11 +37,11 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 | GET | `/api/evidence[?source=&dataset=&limit=&offset=]` | **证据读面（列表）**：按 `fetched_at` 倒序 ⇒ `{items:[RawIngest], limit, offset}`；`limit` 缺省 20、上限 100，越界 400 |
 | GET | `/ohlcv/{symbol}?start_date=YYYYMMDD&end_date=YYYYMMDD` | **G3 只读兼容**（core 旧读链）：日线 ⇒ `{ohlcv:[OHLCV]}` |
 | GET | `/stocks[?exchange=]` | **G3 只读兼容**：股票列表 ⇒ `{stocks:[Stock], latest_date}`；`latest_date` = 库内日线最新交易日（`YYYY-MM-DD`，空库为 `null`）。core 的 `/api/stocks/count` 由它派生，**不新增 count 端点**（2026-11-12 裁） |
-| GET | `/index/{code}/constituents[?date=YYYYMMDD]` | **G3 只读兼容**：当日生效成分（缺省 = 今天）⇒ `{constituents:[IndexConstituent]}` |
+| GET | `/index/{code}/constituents[?date=YYYYMMDD]` | **G3 只读兼容**：当日生效成分（缺省 = 今天）⇒ `{constituents:[IndexConstituent], pit_eligible:false, usage}`；`pit_eligible` 恒 `false`、`usage` 固定为 `current snapshot only; not for point-in-time backtests`——本仓只有 Tushare `index_weight` 的最新一期快照，早于快照日的 `date` 返回空（见 `db-schema.md` §9.6） |
 | GET | `/api/v1/trading/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` | **G3 只读兼容**：交易日轴 ⇒ `{trading_days:["YYYY-MM-DD"]}` |
 | GET | `/api/v1/stocks/{symbol}` | **G3 只读兼容**：单只股票 ⇒ `{stock: Stock}`；无该票 404 `not_found` |
 | POST | `/api/v1/ohlcv/bulk` | **G3 只读兼容**（只读 POST，请求体只承载查询参数）：批量日线 ⇒ `{results:[{symbol,ohlcv,error?}]}`；逐票错误不整体失败 |
-| POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` 即 data_type（单一真相），`params` 用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验） |
+| POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` = data_type，或参考数据保留字面值 `stocks` / `trading_calendar` / `index_constituents`；点位管线用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验），`index_constituents` 只要求 `index_code`（`start_date/end_date` 缺省为 `Now` 往前 120 天） |
 | GET | `/api/sync/jobs[?status=&job_type=&limit=]` | **作业层**：`{jobs:[Job]}`（缺省最近 50 条，`status` ∈ pending/running/succeeded/failed/cancelled） |
 | GET | `/api/sync/jobs/{id}` | **作业层**：单条作业；不存在 404 `job_not_found` |
 | GET | `/api/sync/jobs/{id}/progress` | **作业层 SSE**：连上先重放当前 Job 快照，此后每 500ms 推一条 `data: {Job}`，终态（succeeded/failed/cancelled）推完即关；不存在 ⇒ 在 SSE 头写出**之前** 404 `job_not_found` |
@@ -56,10 +56,11 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 | POST | `/api/sync/schedules/{id}/toggle` | **排程**：翻转 `is_active`；激活时从当前时刻推进 `next_run_at` |
 | POST | `/api/sync/schedules/{id}/run` | **排程**：立即入队一次（不改 `next_run_at`）⇒ 202 `{job_id, next_run_at}` |
 
-> **`job_type` 的两个保留字面值（2026-11-10，ADR-0008）**：除 data_type 外，`stocks` 与 `trading_calendar` 是**参考数据作业**，走 `ReferenceRunner` 的 upsert 腿（`market.stocks` / `market.trading_calendar`），**不经过**点位闸门与 `FetchRequestFromParams` 的 data_type 校验。
+> **`job_type` 的三个保留字面值（2026-11-10 ADR-0008；`index_constituents` 2026-11-12 补）**：除 data_type 外，`stocks`、`trading_calendar`、`index_constituents` 是**参考数据作业**，走 `ReferenceRunner` 的写腿（`market.stocks` / `market.trading_calendar` / `market.index_constituents`），**不经过**点位闸门与 `FetchRequestFromParams` 的 data_type 校验。
 > - `stocks`：`params` 可给 `exchange`（空 = 全市场）、`list_status`（空 = `L` 上市中；退市要单独跑 `D`）。
 > - `trading_calendar`：`params` 可给 `exchange`（空 = `SSE`）、`start_date` / `end_date`（空 = 当年；需要历史必须显式给区间）。
-> - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这两类作业以 `misconfigured` 失败（不会静默写 0 行）。
+> - `index_constituents`：`params` 必须给 `index_code`（如 `000300.SH`），`start_date` / `end_date` 空 = `Now` 往前 120 天；只落**最新一期快照**（整期替换当前行，口径见 `db-schema.md` §9.6）。
+> - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这三类作业以 `misconfigured` 失败（不会静默写 0 行）。
 
 
 内部链路（不对外）：`connector` → `Normalizer` → `ValidatePoints` → **`GatePoints`（visible_at 整批门）** → `Deduplicate` → `BulkInsert`（A 集表；同内容 no-op / 异内容整批回滚）。`POST /ingest/points` 走的是**同一条链的后半段**（从 `ValidatePoints` 起），投影与次序在 `internal/assembly`——两条入口共享一条链，不是两份实现（ADR-0006）。
@@ -124,7 +125,7 @@ empty_data_version`），用例 `TestEmptyDataVersionMapsToConflict` 钉住其�
 
 **分页（统一策略：整段返回 + 声明上界，本轮不引 cursor）**：本仓集合类读端点只有 `GET /api/evidence`，
 它以 `limit` / `offset` 分页：`limit` 缺省 20、上限 100，`offset` 必须 ≥ 0；越界一律 400，不静默截断。
-`/datasets/resolve` 与 `/datasets/{hash}` 各自只返回**一个**数据集（`{dataset_hash, metadata}` / 一个
+`/datasets/resolve` 与 `/datasets/{hash}` 各自只返回**一个**数据集（`{dataset_hash, metadata, pit_eligible}` / 一个
 `Dataset`），不存在「翻页」。声明上界：`POST /ingest/points` ≤ 10000 点 / ≤ 8 MiB（超限 413）；
 `POST /api/ingest/raw` ≤ 8 MiB（超限按解码失败 400 `invalid_parameter`，不写半条）。
 将来新增任何列表端点，必须**要么**给 `limit` / `cursor`，**要么**在本文写明整段返回的条数上界与超限行为；

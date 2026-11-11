@@ -137,10 +137,17 @@ func (m Metadata) validateEcho(calendar []time.Time) error {
 	return nil
 }
 
-// ResolveResult 是 resolve 的返回：hash + 六分量回显。
+// ResolveResult 是 resolve 的返回：hash + 六分量回显 + 票池的 PIT 可判定标记。
+//
+// `PITEligible` 只在 resolve 响应里给，不进 `Metadata`：它由票池来源决定，而
+// 六分量 hash 不含它——同一批 symbols 既可能来自显式入参（PIT 可还原），也可能
+// 来自指数成分快照（不可还原）。若把它塞进 Metadata，同 hash 两种来源会在缓存
+// 里撞出 `ErrSnapshotMismatch`；放在顶层则是「这一次解析的来源」，与快照内容
+// 的正交事实。
 type ResolveResult struct {
-	Hash     string   `json:"dataset_hash"`
-	Metadata Metadata `json:"metadata"`
+	Hash        string   `json:"dataset_hash"`
+	Metadata    Metadata `json:"metadata"`
+	PITEligible bool     `json:"pit_eligible"`
 }
 
 // Dataset 是按 hash 取回的数据集（run 前一次物化）。

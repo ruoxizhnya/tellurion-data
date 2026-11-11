@@ -212,7 +212,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `dividends` | `tellurion:pkg/storage/cache.go:280`（`SaveDividendBatch`） | **补写者** | 公司行为，属行情参考数据；同 `stock` 同步腿 |
 | `splits` | `tellurion:pkg/storage/cache.go:499`（`SaveSplitBatch`） | **补写者** | 同上 |
 | `trading_calendar` | `tellurion:pkg/storage/calendar.go:21`（`SaveTradingCalendarEntry`）、`:43`（`SaveTradingCalendarBatch`） | **补写者** | 按 §6.2 属 C 集：它是 `calendar_hash` 的输入、不是观测流，**不补 `visible_at`**；补写者不等于加列 |
-| `index_constituents` | `tellurion:pkg/storage/cache.go:383`（`SaveIndexConstituentBatch`） | **补写者** | 前视风险在成分变更时点，归 resolve 的 `as_of`（§6.2 对表 D 组）；本仓补写者按同一语义 |
+| `index_constituents` | ~~`tellurion:pkg/storage/cache.go:383`（`SaveIndexConstituentBatch`）~~ | ✅ **已接管（2026-11-12，DATA-INDEX-CONSTITUENTS）** | 写者 = `store.ReferenceWriter.ReplaceIndexConstituents`（作业类型 `index_constituents`，取 Tushare `index_weight` 的**最新一期快照**，整期替换当前行）；口径与 PIT 边界见 §9.6 |
 | `market.index_daily` | `tellurion:pkg/storage/index_daily.go:31`（`saveIndexDailySQL`） | **显式声明「只由 core 写，本仓不拥有」** | 裁决 ⑰ 明定归 core（`tellurion:docs/design/qt-decoupling/cross-repo-decision-record-2026-10-25.md` ⑰）。**2026-11-10 已施工**：本仓 DDL、`TableNames()` 条目、C 集豁免三处删除，并加守卫 `TestIndexDaily_IsNotOwnedByThisRepo`（本仓 statements 出现该表即红）——从「建表但不认领写权」收紧为「连表都不建」，因为两套 DDL 形状不同、先建表者定形 |
 | `market_activity` | `tellurion:pkg/storage/market_activity.go:35`（`saveMarketActivitySQL`） | **补写者** | B 集：写者是 core 的 `daily_basic` 同步腿（不经 `BulkInsert`）；收编那条腿时由本仓补写者接管 |
 | `ingest.raw` | ~~`tellurion:pkg/storage/ingest_raw.go:62`（`SaveRawIngest`）~~ **文件已删（`a96d836`，2026-11-08）** | ✅ **已接管（2026-11-12，ADR-0010）** | 本仓 `store.EvidenceStore` 独占写读（`POST /api/ingest/raw` / `GET /api/evidence[/{content_hash}]`）；落库前脱敏、保留期清理见 §9.5；core 只做读反代 |
@@ -263,22 +263,23 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.global_ohlcv` | 同上 | 无 |
 | `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写；含 `delist_date`，见 ADR-0009 决策二） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
+| `market.index_constituents` | `store.ReferenceWriter.ReplaceIndexConstituents`（作业类型 `index_constituents`；取 Tushare `index_weight` 最新一期快照，**整期替换当前行**，口径见 §9.6） | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定（`pit_eligible=false`） |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /api/sync/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
 | `ingest.raw` | `store.EvidenceStore.Put`（`POST /api/ingest/raw`；单写者 = 本仓；`ON CONFLICT (content_hash) DO NOTHING`，冲突内容比对） | `GET /api/evidence/{content_hash}`、`GET /api/evidence`；保留期清理 `PurgeExpired`（§9.5） |
 
 > 参考数据的解析契约（`stock_basic` / `trade_cal` 字段形状、缺列 fail-closed）由 `internal/sync/reference_contract_test.go` + `testdata/*.json` 钉住；2026-11-11 已用 `TUSHARE_TOKEN` 线上核对（L 5580 行 / D 343 行 / `trade_cal` 4 列），**未**走过生产部署后的作业级写入。
 
-### 9.2 零写者的表（4 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
+### 9.2 零写者的表（3 张 + 1 张哨兵；均为「挂起」，见 ADR-0008）
 
-| 表 | 本仓写者 | 本仓读方 | 处置（2026-11-10） |
+| 表 | 本仓写者 | 本仓读方 | 处置（2026-11-12） |
 |---|---|---|---|
 | `market.dividends` | 无 | 无 | ⏸ 挂起：无消费者、无 connector。重开 = 公司行为/复权消费方出现 |
 | `market.splits` | 无 | 无 | ⏸ 挂起：同上 |
-| `market.index_constituents` | 无 | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定 | ⏸ 挂起：Tushare `index_weight` 只给周期快照权重，`in_date/out_date` 区间需多期快照推导；当前无消费者驱动。重开 = 确定指数集与来源后另立单 |
 | `market.market_activity` | 无 | 无 | ⏸ 挂起：B 集（`as_of` 语义）；`daily_basic` 传输可取数但写面被 `writeExcludedTypes` 排除，补 B 集写者属另一设计。重开 = B 集读消费者出现 |
 | `ingest.data_migrations` | 仅 `schema.BackfillStatements()` 哨兵（`-tags backfill`，运维执行） | 回填 guard | 不是日常写者，不计入上表 |
 
+> `market.index_constituents` 已于 2026-11-12 移出本表（重开 `DATA-INDEX-CONSTITUENTS`，写者 `ReplaceIndexConstituents`，见 §9.1 与 §9.6）。
 > `ingest.raw` 已移出本表：2026-11-12 起由本仓证据归档面接管（ADR-0010，见 §9.1 与 §9.5）。
 
 ### 9.3 与本仓相关但不属 22 张的两张表
@@ -291,7 +292,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 ### 9.4 结论
 
 - **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
-- **零写者已从 7 张降到 4 张（2026-11-12 证据归档面落地后再降 1）**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008），`ingest.raw` 由证据归档面接管（ADR-0010）；剩余 `dividends` / `splits` / `index_constituents` / `market_activity` 全部登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
+- **零写者已从 7 张降到 3 张**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008），`ingest.raw` 由证据归档面接管（ADR-0010），`index_constituents` 由指数成分腿接管（2026-11-12，§9.6）；剩余 `dividends` / `splits` / `market_activity` 登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
 - **读方覆盖**：9 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `ingest.raw` / `sync_jobs` / `sync_schedules`）；其余 13 张中 10 张 A 集只写不读、3 张挂起零写零读、1 张回填哨兵。
 - **X1d 物理 `SET SCHEMA` + `visible_at` 回填已在本机实例执行（2026-11-10）**：22 张目标表搬迁、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑通过（`docs/archive/x1d-local-replay-2026-11-10.md`）；未接触远端/生产库。
 
@@ -322,5 +323,36 @@ session, sessionid, privatekey
 - 容量上限：单条请求体 ≤ 8 MiB；分页读面 `limit` ≤ 100。超出保留期的归档不再可查（这是明确的运维口径，不是缺陷）。
 
 **不做回放**：归档面只提供「按内容哈希查阅一条不可变记录」。设计原文（ADR-022 §5）与 UI A-06 消费契约都只要求可查阅；回放/重放消费者若将来出现，另立 ADR，不在本表上顺手扩。
+
+### 9.6 `market.index_constituents` 口径（2026-11-12，重开 `DATA-INDEX-CONSTITUENTS`）
+
+**归属与写者**：本仓独占。写者是 `store.ReferenceWriter.ReplaceIndexConstituents`，入口是作业层 `POST /api/sync/jobs` 且 `job_type=index_constituents`（参考数据腿，旁路点位闸门，与 `stocks` / `trading_calendar` 同档）。取数面是 `tushare.Client.FetchIndexConstituents`（Tushare `index_weight`）。
+
+**字段与语义**（DDL 在 `internal/schema/market.go`，`schema.TableNames()` 已登记）：
+
+| 列 | 类型 | 口径 |
+|---|---|---|
+| `id` | `SERIAL` | 代理键；表上没有可用来判等的业务唯一键 |
+| `index_code` | `TEXT NOT NULL` | 指数代码，`000300.SH` 形式（`csi300` 等别名在 resolve 层展开） |
+| `symbol` | `TEXT NOT NULL` | 成分股代码，`600519.SH` 形式 |
+| `in_date` | `DATE` | **本仓写入时 = 该期快照的 `trade_date`**：我们能在这一天确认它在成分内 |
+| `out_date` | `DATE` | **本仓写入恒为 `NULL`**（当前成分）；历史区间行当前只可能来自将来补数 |
+| `weight` | `DOUBLE PRECISION` | 源端权重原值（Tushare 的**百分比**，如 `0.58` 表示 0.58%）；源端为空 ⇒ `NULL` |
+
+**同步口径（只有当前快照）**：
+
+- `index_weight` 是**月频快照**（每期在月末交易日发布整张成分/权重表），不提供成分进出日期。
+- 窗口内返回多期时，**只保留 `trade_date` 最大的一期**，不把多期拼成区间。
+- 落库按**整期替换**：同一事务内先 `DELETE ... WHERE index_code = $1 AND out_date IS NULL`，再插入新快照行。只删当前行，`out_date` 非空的历史行不动（将来补数时留用）。
+- 空响应是**数据质量失败**（指数代码错误或无接口权限在 Tushare 侧都返回空集），作业 `failed`，不静默写 0 行。
+- 已知代价：每次同步丢弃该指数的上一期当前快照。这是「只有一期」的必然结果——留两期会让读面把已调出的票算回票池。
+
+**PIT 边界（说实话）**：
+
+- 本表**不是**完整的成分变更史，只是「最近一次观测到的成分」。因此：
+  - `GET /index/{code}/constituents` 响应固定带 `pit_eligible: false` 与 `usage: "current snapshot only; not for point-in-time backtests"`；
+  - `GET /datasets/resolve` 在按指数/别名解析票池时返回 `pit_eligible: false`（显式 `symbols` 为 `true`，因为票池由调用方给定、解析层不引入前视）；
+  - 早于快照日 `in_date` 的 `as_of` 会解析为空（`409 empty_universe`）——不知为不知，不拿今天的成分回填历史。
+- 结论：**仅供当前选股/当前票池，不用于 PIT 回测**。要做 PIT，需要多期快照差分出 `in_date/out_date` 区间，另立单（重开条件见 `docs/TASKS.md`）。
 
 

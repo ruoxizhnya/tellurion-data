@@ -41,33 +41,39 @@ var indexAliases = map[string]string{
 // ⚠️ **as-of 语义**（幸存者偏差）：`in_date <= as_of AND (out_date IS NULL
 // OR out_date > as_of)`。拿「今天的成分」跑三年前的回测会系统性高估收益，
 // 而曲线照样漂亮——这条比较是本函数存在的理由。
-func (s *Store) ResolveUniverse(ctx context.Context, req serving.UniverseRequest) ([]string, error) {
+//
+// ⚠️ **PIT 可还原性**：本仓 `index_constituents` 当前只有一份 Tushare
+// `index_weight` 月频快照（`in_date` = 快照日、`out_date` 恒 NULL），不是完整的
+// 成分变更史。因此按指数解析出的票池 `PITEligible=false`：早于快照日的 as_of
+// 会解析为空（不知为不知），不把快照回填成历史区间。显式 symbols 不经过本仓
+// 推导，`PITEligible=true`。
+func (s *Store) ResolveUniverse(ctx context.Context, req serving.UniverseRequest) (serving.UniverseResolution, error) {
 	if len(req.Symbols) > 0 {
-		return normalizeSymbols(req.Symbols), nil
+		return serving.UniverseResolution{Symbols: normalizeSymbols(req.Symbols), PITEligible: true}, nil
 	}
 	if req.AsOf.IsZero() {
 		// 成分是时变的；没有 as_of 就没有正确的成分表，不拿「今天」顶替。
-		return nil, fmt.Errorf("%w: universe resolution requires as_of", serving.ErrMissingParameter)
+		return serving.UniverseResolution{}, fmt.Errorf("%w: universe resolution requires as_of", serving.ErrMissingParameter)
 	}
 
 	code := strings.TrimSpace(req.IndexCode)
 	if code == "" {
 		name := strings.TrimSpace(req.Name)
 		if name == "" {
-			return nil, fmt.Errorf("%w: empty universe", serving.ErrMissingParameter)
+			return serving.UniverseResolution{}, fmt.Errorf("%w: empty universe", serving.ErrMissingParameter)
 		}
 		mapped, ok := indexAliases[strings.ToLower(name)]
 		if !ok {
-			return nil, fmt.Errorf("%w: %q (known aliases: %v)", ErrUnknownUniverse, name, knownAliasKeys())
+			return serving.UniverseResolution{}, fmt.Errorf("%w: %q (known aliases: %v)", ErrUnknownUniverse, name, knownAliasKeys())
 		}
 		code = mapped
 	}
 
 	symbols, err := s.constituentsAsOf(ctx, code, req.AsOf)
 	if err != nil {
-		return nil, err
+		return serving.UniverseResolution{}, err
 	}
-	return normalizeSymbols(symbols), nil
+	return serving.UniverseResolution{Symbols: normalizeSymbols(symbols), PITEligible: false}, nil
 }
 
 // constituentsAsOf 取某指数在 asOf 时点的成分。

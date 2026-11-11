@@ -119,6 +119,6 @@ func TestAccessLogDurationMeasuresSlowHandler(t *testing.T) {
 // unavailableUniverse 模拟 store 分诊后的 PG 不可达（哨兵穿过 aggregator 的包装）。
 type unavailableUniverse struct{}
 
-func (unavailableUniverse) ResolveUniverse(context.Context, serving.UniverseRequest) ([]string, error) {
-	return nil, fmt.Errorf("serving: resolve universe: %w", store.ErrDependencyUnavailable)
+func (unavailableUniverse) ResolveUniverse(context.Context, serving.UniverseRequest) (serving.UniverseResolution, error) {
+	return serving.UniverseResolution{}, fmt.Errorf("serving: resolve universe: %w", store.ErrDependencyUnavailable)
 }

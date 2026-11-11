@@ -87,3 +87,58 @@ func TestReferenceWriter_PG_UpsertTradingDaysOverwritesOpenFlag(t *testing.T) {
 		"SELECT count(*) FROM "+scratch+".trading_calendar WHERE trade_date = $1", day).Scan(&count))
 	assert.Equal(t, 1, count, "upsert must not duplicate the row")
 }
+
+// 整期快照替换的真库腿：验证 SQL 本身（DELETE ... out_date IS NULL + INSERT）
+// 真的只替换当前行，且不碰历史区间行。
+func TestReferenceWriter_PG_ReplaceIndexConstituentsKeepsOnlyCurrentSnapshot(t *testing.T) {
+	pool := pgPool(t)
+	scratch := scratchSchema(t, pool)
+	writer, err := store.NewReferenceWriter(store.PoolWriteDB(pool), store.Options{MarketSchema: scratch})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 历史区间行（out_date 非空）：替换当前快照不得删它。
+	_, err = pool.Exec(ctx, "INSERT INTO "+scratch+
+		`.index_constituents (index_code, symbol, in_date, out_date, weight)
+		 VALUES ('000300.SH', '600000.SH', '2020-01-01', '2020-06-30', 1.0)`)
+	require.NoError(t, err)
+
+	first := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	written, err := writer.ReplaceIndexConstituents(ctx, []market.IndexConstituent{
+		{IndexCode: "000300.SH", Symbol: "600519.SH", InDate: first, Weight: 3.1},
+		{IndexCode: "000300.SH", Symbol: "000001.SZ", InDate: first, Weight: 1.0},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, written)
+
+	// 第二期：000001.SZ 被调出，600519.SH 权重变化。
+	second := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	written, err = writer.ReplaceIndexConstituents(ctx, []market.IndexConstituent{
+		{IndexCode: "000300.SH", Symbol: "600519.SH", InDate: second, Weight: 3.2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+
+	var current int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT count(*) FROM "+scratch+".index_constituents WHERE index_code = '000300.SH' AND out_date IS NULL").
+		Scan(&current))
+	assert.Equal(t, 1, current, "previous current snapshot must be replaced, not appended")
+
+	var symbol string
+	var inDate time.Time
+	var weight float64
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT symbol, in_date, weight FROM "+scratch+
+			".index_constituents WHERE index_code = '000300.SH' AND out_date IS NULL").
+		Scan(&symbol, &inDate, &weight))
+	assert.Equal(t, "600519.SH", symbol)
+	assert.Equal(t, "2026-10-31", inDate.Format("2006-01-02"))
+	assert.InDelta(t, 3.2, weight, 1e-9)
+
+	var history int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT count(*) FROM "+scratch+
+			".index_constituents WHERE symbol = '600000.SH' AND out_date IS NOT NULL").Scan(&history))
+	assert.Equal(t, 1, history, "historical interval rows must survive a current-snapshot replace")
+}

@@ -16,16 +16,17 @@ import (
 // ─── 测试替身 ──────────────────────────────────────────────────
 
 type fakeUniverse struct {
-	symbols []string
-	err     error
-	calls   int
-	got     UniverseRequest
+	symbols     []string
+	pitEligible bool
+	err         error
+	calls       int
+	got         UniverseRequest
 }
 
-func (f *fakeUniverse) ResolveUniverse(_ context.Context, req UniverseRequest) ([]string, error) {
+func (f *fakeUniverse) ResolveUniverse(_ context.Context, req UniverseRequest) (UniverseResolution, error) {
 	f.calls++
 	f.got = req
-	return append([]string(nil), f.symbols...), f.err
+	return UniverseResolution{Symbols: append([]string(nil), f.symbols...), PITEligible: f.pitEligible}, f.err
 }
 
 type fakeCalendar struct {

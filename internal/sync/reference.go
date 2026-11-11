@@ -1,15 +1,16 @@
 package syncjob
 
-// 参考数据同步：`stocks` / `trading_calendar`。
+// 参考数据同步：`stocks` / `trading_calendar` / `index_constituents`。
 //
-// 为什么旁路 ETL：见 `internal/store/reference_write.go` 的头注释。这两张表
+// 为什么旁路 ETL：见 `internal/store/reference_write.go` 的头注释。这些表
 // 是 C 集参照数据，没有 data_type 声明、没有 visible_at 锚点，走不了
 // `FetchRequestFromParams → Pipeline → BulkInsert` 那条链。
 //
-// 作业类型因此是两个**保留字面值**（不是 data_type）：
+// 作业类型因此是三个**保留字面值**（不是 data_type）：
 //
-//	`stocks`           → FetchStocks + UpsertStocks
-//	`trading_calendar` → FetchTradeCalendar + UpsertTradingDays
+//	`stocks`             → FetchStocks + UpsertStocks
+//	`trading_calendar`   → FetchTradeCalendar + UpsertTradingDays
+//	`index_constituents` → FetchIndexConstituents + ReplaceIndexConstituents
 //
 // 判定发生在 `Runner.Execute` 的最前面；命中即走本文件，不经过
 // `FetchRequestFromParams` 的 data_type 一致性校验（那层只属于点位管线）。
@@ -17,6 +18,7 @@ package syncjob
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
@@ -27,25 +29,33 @@ import (
 
 // 参考数据作业类型（保留字面值，与 data_type 命名空间互斥）。
 const (
-	JobTypeStocks          = "stocks"
-	JobTypeTradingCalendar = "trading_calendar"
+	JobTypeStocks            = "stocks"
+	JobTypeTradingCalendar   = "trading_calendar"
+	JobTypeIndexConstituents = "index_constituents"
 )
 
 // IsReferenceJobType 判断一个 job_type 是否属于参考数据腿。
 func IsReferenceJobType(jobType string) bool {
-	return jobType == JobTypeStocks || jobType == JobTypeTradingCalendar
+	switch jobType {
+	case JobTypeStocks, JobTypeTradingCalendar, JobTypeIndexConstituents:
+		return true
+	default:
+		return false
+	}
 }
 
 // ReferenceTransport 是参考数据同步的取数面（`*tushare.Client` 满足）。
 type ReferenceTransport interface {
 	FetchStocks(ctx context.Context, exchange, listStatus string) ([]market.Stock, error)
 	FetchTradeCalendar(ctx context.Context, exchange string, start, end time.Time) ([]ingest.TradingDay, error)
+	FetchIndexConstituents(ctx context.Context, indexCode string, start, end time.Time) ([]market.IndexConstituent, error)
 }
 
 // ReferenceWriter 是参考数据的写面（`*store.ReferenceWriter` 满足）。
 type ReferenceWriter interface {
 	UpsertStocks(ctx context.Context, stocks []market.Stock) (int, error)
 	UpsertTradingDays(ctx context.Context, days []store.TradingDay) (int, error)
+	ReplaceIndexConstituents(ctx context.Context, rows []market.IndexConstituent) (int, error)
 }
 
 // ReferenceRunner 执行参考数据作业。
@@ -74,6 +84,8 @@ func (r *ReferenceRunner) Execute(ctx context.Context, job Job) (ingest.ProcessR
 		return r.syncStocks(ctx, job)
 	case JobTypeTradingCalendar:
 		return r.syncTradingCalendar(ctx, job)
+	case JobTypeIndexConstituents:
+		return r.syncIndexConstituents(ctx, job)
 	default:
 		return ingest.ProcessResult{}, fmt.Errorf("%w: %q is not a reference job type", ErrInvalidParams, job.JobType)
 	}
@@ -162,6 +174,58 @@ func (r *ReferenceRunner) syncTradingCalendar(ctx context.Context, job Job) (ing
 		DataType:  job.JobType,
 		Source:    r.source(),
 		Fetched:   len(days),
+		Persisted: written,
+	}, nil
+}
+
+// syncIndexConstituents 取指数当前成分/权重并整期替换。
+//
+// 参数：`index_code`（必填，如 `000300.SH`）；`start_date` / `end_date`
+// （空 = 以 `Now` 为终点回看 120 天）。窗口刻意不默认全历史：`index_weight`
+// 是月频快照，120 天保证至少覆盖一期月末；只想取更早的期时显式给区间。
+//
+// 只保留窗口内最新一期（口径见 `tushare.FetchIndexConstituents`），写面按
+// 「整期快照」替换该指数的当前成分——不做逐行 upsert（表无唯一键，
+// 见 `store.ReferenceWriter.ReplaceIndexConstituents`）。
+func (r *ReferenceRunner) syncIndexConstituents(ctx context.Context, job Job) (ingest.ProcessResult, error) {
+	indexCode := strings.TrimSpace(stringField(job.Params, "index_code"))
+	if indexCode == "" {
+		return ingest.ProcessResult{}, fmt.Errorf("%w: index_code is required", ErrInvalidParams)
+	}
+	start, err := dateField(job.Params, "start_date")
+	if err != nil {
+		return ingest.ProcessResult{}, err
+	}
+	end, err := dateField(job.Params, "end_date")
+	if err != nil {
+		return ingest.ProcessResult{}, err
+	}
+	if start.IsZero() || end.IsZero() {
+		now := r.now()
+		if end.IsZero() {
+			end = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		}
+		if start.IsZero() {
+			start = end.AddDate(0, 0, -120)
+		}
+	}
+	if end.Before(start) {
+		return ingest.ProcessResult{}, fmt.Errorf("%w: end_date %s is before start_date %s",
+			ErrInvalidParams, end.Format("2006-01-02"), start.Format("2006-01-02"))
+	}
+
+	rows, err := r.Transport.FetchIndexConstituents(ctx, indexCode, start, end)
+	if err != nil {
+		return ingest.ProcessResult{}, fmt.Errorf("reference index constituents: fetch: %w", err)
+	}
+	written, err := r.Writer.ReplaceIndexConstituents(ctx, rows)
+	if err != nil {
+		return ingest.ProcessResult{}, fmt.Errorf("reference index constituents: persist: %w", err)
+	}
+	return ingest.ProcessResult{
+		DataType:  job.JobType,
+		Source:    r.source(),
+		Fetched:   len(rows),
 		Persisted: written,
 	}, nil
 }

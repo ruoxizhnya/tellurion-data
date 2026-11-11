@@ -43,8 +43,8 @@ type fakeUniverse struct {
 	symbols []string
 }
 
-func (f *fakeUniverse) ResolveUniverse(_ context.Context, _ serving.UniverseRequest) ([]string, error) {
-	return f.symbols, nil
+func (f *fakeUniverse) ResolveUniverse(_ context.Context, _ serving.UniverseRequest) (serving.UniverseResolution, error) {
+	return serving.UniverseResolution{Symbols: f.symbols, PITEligible: true}, nil
 }
 
 type fakeCalendar struct{}
@@ -149,6 +149,21 @@ func TestSnapshotBodyCarriesDigestAndMetadata(t *testing.T) {
 	assert.NotEmpty(t, dataset.Digest)
 	assert.Equal(t, "qfq", dataset.Metadata.AdjustmentBasis)
 	assert.NotEmpty(t, dataset.Metadata.CalendarHash)
+}
+
+// resolve 响应必须带可判定的 `pit_eligible`（本替身模拟显式 symbols ⇒ true；
+// 指数成分快照为 false，语义见 serving.UniverseResolution）。
+func TestResolveCarriesPITEligibilityFlag(t *testing.T) {
+	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, resolveQuery, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, jsonUnmarshal(rec.Body.Bytes(), &body))
+	got, ok := body["pit_eligible"]
+	require.True(t, ok, "resolve response must expose pit_eligible: %s", rec.Body.String())
+	assert.Equal(t, true, got)
 }
 
 // 错误映射：参数缺失 400、票池空 409、hash 不存在 404 —— 分诊口径见
