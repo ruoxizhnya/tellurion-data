@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruoxizhnya/tellurion-kit/auth"
-
 	"tellurion-data/internal/sync"
 )
 
@@ -159,11 +157,11 @@ func (f *fakeSyncStore) EnqueueFromSchedule(_ context.Context, _ int64, job sync
 	return nil
 }
 
-// syncServer 起一个只装了作业队列的 server（空 secret ⇒ 开放访问，与
-// legacyTestServer 同口径，避免鉴权在 handler 之前 503）。
+// syncServer 起一个只装了作业队列的 server（显式 allow-all 替身，避免鉴权在
+// handler 之前 503；无 secret 的真实语义见 auth_test.go 的第 2 态用例）。
 func syncServer(store syncjob.Store) http.Handler {
 	return New(nil,
-		WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{}))),
+		WithAuthorizer(allowAllAuthorizer{}),
 		WithSync(store),
 	).Routes()
 }
@@ -171,7 +169,7 @@ func syncServer(store syncjob.Store) http.Handler {
 // unwiredSyncServer 是「队列未接线」的 server（不传 WithSync）。
 func unwiredSyncServer() http.Handler {
 	return New(nil,
-		WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{}))),
+		WithAuthorizer(allowAllAuthorizer{}),
 	).Routes()
 }
 
@@ -279,7 +277,7 @@ func TestSyncWorkers_FailsClosedWhenRuntimeUnwired(t *testing.T) {
 // TestSyncWorkers_ReturnsRuntimeSnapshot 钉住 workers 读面的形状。
 func TestSyncWorkers_ReturnsRuntimeSnapshot(t *testing.T) {
 	h := New(nil,
-		WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{}))),
+		WithAuthorizer(allowAllAuthorizer{}),
 		WithSync(newFakeSyncStore()),
 		WithSyncRuntime(SyncRuntime{
 			WorkerIDs:       func() []string { return []string{"data-1"} },

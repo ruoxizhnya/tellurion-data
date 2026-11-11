@@ -43,7 +43,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 
 ### 取数（读路径，热）
 0. **鉴权闸**（2026-10-25，2026-11-11 按 `servedPolicy` 校准）：每个请求先过 `requireAuth`——`/health` / `/readyz` 公开；`/datasets/*` 与 7 条 G3 只读面接受 `service` / `viewer` / `trader` / `admin`；`POST /api/v1/ohlcv/bulk` 任意已认证；`POST /ingest/points` **只有** `service` / `admin`；`/api/sync/*` 作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`，读面 = `service` / `viewer` / `trader` / `admin`（逐条见 `api-schema.md` §1）。
-   未装配 Authorizer → 503 `auth_unavailable`，无凭证 / 坏 token → 401，越权 → 403；通过后才进入 aggregator。
+   未装配 Authorizer → 503 `auth_unavailable`，无凭证 / 坏 token → 401，越权 → 403；通过后才进入 aggregator。无 secret 时是第 2 态：读面公开、写面 503 `auth_unavailable`；只有逐字声明 `AUTH_INSECURE_EXPOSURE=loopback-published` 才进入全放行的第 3 态。
 1. 调用方 `GET /datasets/resolve?universe=csi300&from=…&to=…&freq=1d`
 2. aggregator：票池解析 → 按 `visible_at <= as_of` 过滤 → 频率聚合（口径见 §1 注）→ 算 `dataset_hash`
 3. 返回 `{dataset_hash, metadata}`；调用方拿 hash 请求 `/datasets/{hash}`

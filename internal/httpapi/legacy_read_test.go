@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
-	"github.com/ruoxizhnya/tellurion-kit/auth"
 
 	"tellurion-data/internal/serving"
 )
@@ -63,8 +62,8 @@ func (f *fakeLegacy) IndexConstituents(_ context.Context, _ string, _ time.Time)
 }
 
 func legacyTestServer(reader serving.LegacyReader) http.Handler {
-	// 空 secret ⇒ 开放访问（仅测试），否则 requireAuth 会在 handler 之前 503。
-	return New(nil, WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{}))), WithLegacyReader(reader)).Routes()
+	// 显式 allow-all 替身：本套件聚焦读面形状，鉴权语义由 auth_test.go 钉住。
+	return New(nil, WithAuthorizer(allowAllAuthorizer{}), WithLegacyReader(reader)).Routes()
 }
 
 func newFakeLegacy() *fakeLegacy {
@@ -268,7 +267,7 @@ func TestLegacyReadBadParams(t *testing.T) {
 
 // TestLegacyReadUnwired 钉住未接线形态：端口 nil ⇒ 503 dependency_unavailable。
 func TestLegacyReadUnwired(t *testing.T) {
-	h := New(nil, WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{})))).Routes()
+	h := New(nil, WithAuthorizer(allowAllAuthorizer{})).Routes()
 	rec := doLegacy(t, h, http.MethodGet, "/stocks", "")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())

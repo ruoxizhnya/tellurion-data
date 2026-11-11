@@ -20,7 +20,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -47,23 +46,35 @@ import (
 func main() {
 	addr := flag.String("addr", ":8081", "listen address")
 	jwtSecret := flag.String("jwt-secret", envFirst("JWT_SECRET", "AUTH_JWT_SECRET"),
-		"JWT secret shared with analysis (empty = open access on loopback only)")
+		"JWT secret shared with analysis (empty = write surface locked, reads public)")
 	exposure := flag.String("insecure-exposure", os.Getenv("AUTH_INSECURE_EXPOSURE"),
-		"explicit exposure declaration for open access on a non-loopback bind (only loopback-published is accepted)")
+		"explicit declaration allowing open access without a secret (only loopback-published is accepted)")
 	flag.Parse()
 
-	// 启动闸（裁-15）：本服务默认 `:8081`（全网卡），无 secret 必须显式声明容器
-	// 只在回环发布，否则拒绝启动——不允许把无鉴权数据面暴露到网络。
-	startup := kithttp.DecideStartup(*jwtSecret, true, bindHost(*addr), *exposure)
-	if startup.Refuse {
-		log.Fatalf("data-service: %s", startup.Reason)
+	// 鉴权三态（2026-11-12）：有 secret 全闸；无 secret 默认「读公开、写 503」；
+	// 只有逐字声明 AUTH_INSECURE_EXPOSURE=loopback-published 才允许全放行。
+	// 修复前这里把 allowInsecure 硬编码成 true，等价于「没配 secret = 自动开放」。
+	posture, err := decideAuthPosture(*jwtSecret, *exposure)
+	if err != nil {
+		log.Fatalf("data-service: %v", err)
 	}
-	if startup.Insecure {
-		log.Printf("data-service: WARNING authentication disabled (open access); bind address %q must be loopback or loopback-published", *addr)
+	var tokens *auth.TokenService
+	var authOption httpapi.Option
+	switch posture {
+	case authEnforced:
+		tokens = auth.NewTokenService(auth.Config{JWTSecret: []byte(strings.TrimSpace(*jwtSecret))})
+		authOption = httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokens))
+	case authLocked:
+		tokens = auth.NewTokenService(auth.Config{})
+		authOption = httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokens))
+		log.Printf("data-service: WARNING authentication unavailable (no JWT_SECRET): read surface public, write surface locked (503 auth_unavailable); set JWT_SECRET, or AUTH_INSECURE_EXPOSURE=%s for local open access", kithttp.InsecureExposureLoopbackPublished)
+	case authOpen:
+		tokens = auth.NewTokenService(auth.Config{})
+		authOption = httpapi.WithAuthorizer(httpapi.NewOpenAuthorizer())
+		log.Printf("data-service: WARNING authentication disabled by explicit AUTH_INSECURE_EXPOSURE=%s: 当前写面无鉴权 (write surface has NO authentication); publish on loopback only", kithttp.InsecureExposureLoopbackPublished)
 	}
-	tokens := auth.NewTokenService(auth.Config{JWTSecret: startup.Secret})
 
-	srv, cleanup, err := build(tokens)
+	srv, cleanup, err := build(authOption)
 	if err != nil {
 		log.Fatalf("data-service wiring failed: %v", err)
 	}
@@ -89,13 +100,33 @@ func main() {
 	}
 }
 
-// bindHost 从 -addr 取绑定主机；取不到端口时原样当主机比（空 = 全网卡）。
-func bindHost(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
+// authPosture 是进程的鉴权三态（六仓统一口径，2026-11-12）。
+type authPosture int
+
+const (
+	authEnforced authPosture = iota // 有 JWT_SECRET：全闸，写面必须带 token + 角色
+	authLocked                      // 无 secret、未声明开放：读公开、写面 503 auth_unavailable
+	authOpen                        // 无 secret + 逐字声明 loopback-published：全放行（启动 WARN）
+)
+
+// decideAuthPosture 只做三态判定，不碰网络也不读全局配置，便于单测。
+//
+// 与修复前的差别：无 secret 不再因为 allowInsecure 硬编码 true 而自动放行；
+// 只有逐字匹配的显式声明才进入第 3 态。第 2 态允许任意绑定地址：写面已经
+// 锁死、读面本来就是公开数据，进程能起比拒绝启动更可用。需要拒绝的是
+// 「声明了开放但拼错」——未知值一律拒绝，不静默落到默认态。
+func decideAuthPosture(secret, exposure string) (authPosture, error) {
+	if strings.TrimSpace(secret) != "" {
+		return authEnforced, nil
 	}
-	return host
+	switch strings.TrimSpace(exposure) {
+	case "":
+		return authLocked, nil
+	case kithttp.InsecureExposureLoopbackPublished:
+		return authOpen, nil
+	default:
+		return authLocked, fmt.Errorf("auth: AUTH_INSECURE_EXPOSURE=%q is not recognized; the only accepted value is %q (or set JWT_SECRET)", exposure, kithttp.InsecureExposureLoopbackPublished)
+	}
 }
 
 // envFirst 按顺序取第一个非空环境变量（core 历史用法 JWT_SECRET、配置口径 AUTH_JWT_SECRET）。
@@ -128,8 +159,9 @@ const (
 )
 
 // build 装配 HTTP 面。DSN 为空时返回 nil aggregator 与 nil 写面（503 形态）。
-func build(tokens *auth.TokenService) (*httpapi.Server, func(), error) {
-	authorizer := httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokens))
+// authOption 由 main 按鉴权三态选定（enforced / locked / open），本函数只负责装上。
+func build(authOption httpapi.Option) (*httpapi.Server, func(), error) {
+	authorizer := authOption
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
 		return httpapi.New(nil, authorizer), nil, nil

@@ -20,7 +20,7 @@
 | `internal/transport/tushare` | Tushare 传输（ADR-0007） |
 | `internal/sync` | 作业队列 + 排程 + Worker + Scheduler |
 | `internal/httpapi` | HTTP 面（23 路由；全端点鉴权闸） |
-| `cmd/dataservice` | 进程入口（默认 `:8081`；无 secret 且非回环 → 拒绝启动） |
+| `cmd/dataservice` | 进程入口（默认 `:8081`；无 secret ⇒ 读公开、写面 503 `auth_unavailable`；显式 `loopback-published` 才放开） |
 | `doc.go` | 根包文档占位（无实现） |
 
 ## 快速开始
@@ -43,12 +43,12 @@ docker compose -f deploy/compose.yaml down
 ```
 
 - `deploy/compose.yaml` 自带 `postgres`（`pg_isready` 健康检查）；`data` 用 `depends_on.condition=service_healthy` 等它就绪后再起。
-- 宿主端口 `8081`；`DATABASE_URL` / `DATA_MARKET_SCHEMA=market` / `JWT_SECRET` 已在 compose 内配好。连外部库时用 `DATA_DATABASE_URL=...` 覆盖。
+- 宿主端口 `8081`；`DATABASE_URL` / `DATA_MARKET_SCHEMA=market` 已在 compose 内配好；`JWT_SECRET` **不再有默认值**，需要全闸时从环境或 `.env` 注入。连外部库时用 `DATA_DATABASE_URL=...` 覆盖。
 - 镜像多阶段构建（`golang:1.25-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/health`。
 - 取数传输（ADR-0008）：`TUSHARE_TOKEN` 有值才装 Tushare（点位作业 + `stocks` / `trading_calendar` 参考数据作业）；东财客户端无凭证恒装配；`ALPHA_VANTAGE_KEY` 有值才启用 Alpha Vantage。无 token 时取数作业在作业行上响亮失败（不会静默写 0 行）。
 
-> 起服务：默认 `:8081`（全网卡）且无 `JWT_SECRET` 会被启动闸**拒绝**（不允许无鉴权数据面暴露）。
-> 本地开发用 `-addr 127.0.0.1:8081`；容器形态必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published` 或配 `JWT_SECRET`。
+> 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸（写面必须带 token + 角色）；无 secret ⇒ 进程能起，**读面公开、写面一律 503 `auth_unavailable`**；本地要开放写面必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published`，启动日志会 WARN「写面无鉴权」。
+> 默认 compose 不配 secret ⇒ 落在第 2 态（读可用、写锁定）；需要写面时 `JWT_SECRET=... docker compose -f deploy/compose.yaml up` 或写进 `.env`。
 
 ## 边界
 

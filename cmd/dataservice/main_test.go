@@ -36,11 +36,37 @@ func tokensWithSecret() *auth.TokenService {
 	return auth.NewTokenService(auth.Config{JWTSecret: []byte("compose-root-test-secret")})
 }
 
+// TestDecideAuthPosture 钉住三态启动判定：缺省不再自动放行；只有逐字
+// loopback-published 才进入开放态；拼错的值必须拒绝启动而不是静默落默认。
+func TestDecideAuthPosture(t *testing.T) {
+	cases := []struct {
+		name, secret, exposure string
+		want                   authPosture
+		wantErr                bool
+	}{
+		{"有 secret 全闸", "s3cret", "", authEnforced, false},
+		{"无 secret 未声明⇒写面锁定", "", "", authLocked, false},
+		{"无 secret 显式声明⇒开放", "", "loopback-published", authOpen, false},
+		{"无 secret 拼错声明⇒拒绝", "", "loopback_published", authLocked, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decideAuthPosture(tc.secret, tc.exposure)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("posture = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // 未配 DATABASE_URL ⇒ 读写两面都不接线，且不是错误（503 是设定）。
 func TestBuildWithoutDSNLeavesBothFacesUnwired(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 
-	srv, cleanup, err := build(tokensWithSecret())
+	srv, cleanup, err := build(httpapi.WithAuthorizer(httpapi.NewAuthorizer(tokensWithSecret())))
 	if err != nil {
 		t.Fatalf("unwired build must not error (503 is the designed shape): %v", err)
 	}

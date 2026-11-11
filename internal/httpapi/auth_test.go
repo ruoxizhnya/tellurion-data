@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ruoxizhnya/tellurion-kit/auth"
@@ -281,6 +282,14 @@ func TestAuthWireThreeStates(t *testing.T) {
 		}
 	}
 
+	// 第 1 态的写面同样全闸：无 token ⇒ 401 unauthenticated（不是放行 / 503）。
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ingest/points", strings.NewReader(`{"data_type":"x","points":[]}`)))
+	if rec.Code != http.StatusUnauthorized || errorCodeOf(t, rec.Body.Bytes()) != "unauthenticated" {
+		t.Fatalf("write without token: code=%d err=%q body=%s, want 401 unauthenticated",
+			rec.Code, errorCodeOf(t, rec.Body.Bytes()), rec.Body.String())
+	}
+
 	// viewer 可读：agg 未接线 ⇒ 业务 503 dependency_unavailable（证明已过鉴权）。
 	viewer, _, err := svc.IssueTokens(1, "alice", "viewer")
 	if err != nil {
@@ -302,12 +311,59 @@ func TestAuthWireThreeStates(t *testing.T) {
 		t.Fatalf("no authorizer: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// 显式开放（无 secret）⇒ 数据面继续走业务路径（503 dependency_unavailable）。
-	open := New(nil, WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{})))).Routes()
+	// 第 3 态（无 secret + 显式声明）用显式 allow-all 替身：数据面继续走业务
+	// 路径（503 dependency_unavailable，而不是 auth_unavailable）。
+	open := New(nil, WithAuthorizer(NewOpenAuthorizer())).Routes()
 	rec = httptest.NewRecorder()
 	open.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/datasets/deadbeef", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("open access: %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable || errorCodeOf(t, rec.Body.Bytes()) != "dependency_unavailable" {
+		t.Fatalf("open access: code=%d err=%q, want 503 dependency_unavailable", rec.Code, errorCodeOf(t, rec.Body.Bytes()))
+	}
+}
+
+// TestAuthWireDisabledLocksWriteSurface 钉住第 2 态（无 secret、未声明开放）：
+// 读面保持公开，写面一律 503 auth_unavailable —— 不是 200/400，也不是 401。
+//
+// 受影响写面逐个点名（缺陷审计列出的五条）：`POST /ingest/points`、
+// `POST /api/ingest/raw`、`POST /api/sync/jobs`、`POST /api/sync/schedules`、
+// `POST /api/v1/ohlcv/bulk`（只读 POST 也按变更方法锁定，避免留一条匿名入口）。
+func TestAuthWireDisabledLocksWriteSurface(t *testing.T) {
+	h := New(nil, WithAuthorizer(NewAuthorizer(auth.NewTokenService(auth.Config{})))).Routes()
+
+	// /health 公开。
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health must stay public: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 读面公开：走到 handler（agg 未接线 ⇒ 503 dependency_unavailable）。
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/datasets/resolve", nil))
+	if rec.Code != http.StatusServiceUnavailable || errorCodeOf(t, rec.Body.Bytes()) != "dependency_unavailable" {
+		t.Fatalf("read surface: code=%d err=%q, want 503 dependency_unavailable (must pass the gate)",
+			rec.Code, errorCodeOf(t, rec.Body.Bytes()))
+	}
+
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/ingest/points", `{"data_type":"x","points":[]}`},
+		{http.MethodPost, "/api/ingest/raw", `{}`},
+		{http.MethodPost, "/api/sync/jobs", `{}`},
+		{http.MethodPost, "/api/sync/schedules", `{}`},
+		{http.MethodPost, "/api/v1/ohlcv/bulk", `{}`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%s: code=%d body=%s, want 503 auth_unavailable", tc.path, rec.Code, rec.Body.String())
+			}
+			if code := errorCodeOf(t, rec.Body.Bytes()); code != "auth_unavailable" {
+				t.Fatalf("%s: error code=%q, want auth_unavailable", tc.path, code)
+			}
+		})
 	}
 }
 

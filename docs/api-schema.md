@@ -20,8 +20,8 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
 > `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
 > `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；**`POST /api/ingest/raw` 沿用 REV-17 的 `trader` / `admin`（迁移不重拍角色），`GET /api/evidence[/{content_hash}]` = `service` + viewer / trader / admin**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
-> fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。无 secret + 回环 = 开放；
-> 无 secret + 非回环 = **拒绝启动**（本服务默认 `:8081` 全网卡，必须显式配 `JWT_SECRET` 或声明容器只在回环发布）。
+> fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。
+> **鉴权三态（2026-11-12）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret 且未显式声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 全放行，启动 WARN 点名「写面无鉴权」；未知声明值 ⇒ 拒绝启动。第 ② 态不依赖绑定地址（写面已锁死）；第 ③ 态的声明断言发布层只在回环（容器可绑 `0.0.0.0`）。`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值，缺 secret 且未声明即落第 ② 态。
 
 ## 1. 接口面
 
@@ -176,6 +176,7 @@ httpapi: route="GET /datasets/resolve" status=200 dur_ms=3.412318
 | 无凭证 / token 过期 | ✅ 2026-10-25 | 数据面端点未带 / 带了坏 `Bearer` | 401 `unauthenticated`；不重试，补齐凭证 |
 | 角色不足 | ✅ 2026-10-25 | 角色不在策略表（数据面接受 `service` / `viewer` / `trader` / `admin`） | 403 `forbidden`；不重试 |
 | 鉴权闸未装配 | ✅ 2026-10-25 | 进程未装 `Authorizer` | 503 `auth_unavailable`；**拒绝而非放行** |
+| 无 secret 时的写面 | ✅ 2026-11-12 | 未配 `JWT_SECRET` 且未声明 `AUTH_INSECURE_EXPOSURE=loopback-published`，请求变更方法 | 503 `auth_unavailable`；读面保持公开；**拒绝而非放行** |
 | 请求超限 | ✅ 2026-11-07（G1） | 同一身份令牌桶耗尽（默认 50 rps / 突发 200；探针豁免） | 429 `rate_limited` + `Retry-After`；不重试到成功为止，按退避重试 |
 | `ErrDeclarationMissing` | ✅（`internal/ingest/declaration.go`） | connector 支持某类型却没声明时间语义 | 注册期拒收（fail-closed，不许猜）。⚠️ **本表旧名 `ErrNoTimeSemantics` 作废**，不留两个名字 |
 | `ErrDeclarationInvalid` / `ErrDeclarationMismatch` | ✅（`:67` / `:68`） | 声明非法（枚举 / 缺 `VisibleExpr` / 重复）／声明与数据形态矛盾 | 注册期拒收 |

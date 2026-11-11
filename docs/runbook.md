@@ -28,9 +28,8 @@ $env:DATA_MARKET_SCHEMA = 'market'
 go run ./cmd/dataservice -addr 127.0.0.1:8081
 ```
 
-- 无 `JWT_SECRET` + **非回环**绑定 ⇒ 拒绝启动（这是有意的；见 `docs/api-schema.md` 头注）。
-- 无 `JWT_SECRET` + 回环绑定 ⇒ 开放访问，日志会打
-  `data-service: WARNING authentication disabled (open access); ...`。
+- 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸；无 secret ⇒ 进程可起（任意绑定地址，写面已锁死），**读面公开、写面一律 503 `auth_unavailable`**；要本地开放写面，显式 `AUTH_INSECURE_EXPOSURE=loopback-published`（该声明断言发布层只在回环，容器可绑 `0.0.0.0`），启动日志会 WARN「当前写面无鉴权」。
+- `AUTH_INSECURE_EXPOSURE` 只接受逐字 `loopback-published`；拼错 / 未知值 ⇒ **拒绝启动**（不静默落到默认态）。
 - 启动时会重放本仓 DDL（幂等）；PG 连不上**不再退出**，见 §1.2 与 §5。
 
 ### 1.2 无库 / PG 不可达（降级形态，数据面 503）
