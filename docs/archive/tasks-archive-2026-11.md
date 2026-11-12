@@ -17,7 +17,7 @@
 | DATA-FACTOR-OWNER-DOC | 因子域 owner 回归 core：`db-schema` §1.3 / SPEC-R-02 与 `ARCHITECTURE` 派生行订正（DDD 审查 C2） | 2026-11-11 | `1b5d9fd` | [原文](#DATA-FACTOR-OWNER-DOC) |
 | DATA-INGEST-RAW | `ingest.raw` 归档面（证据链） | 2026-11-12 | —（原文未记） | [原文](#DATA-INGEST-RAW) |
 | DATA-INDEX-CONSTITUENTS | `index_constituents` 写者与当前快照读面 | 2026-11-12 | —（原文未记） | [原文](#DATA-INDEX-CONSTITUENTS) |
-| DATA-FUNDAMENTALS-READ-PUBLIC | `/fundamental` 跨 schema 读面止血（作废·前提被归属裁决取代） | 2026-11-12 | —（原文未记） | [原文](#DATA-FUNDAMENTALS-READ-PUBLIC) |
+| DATA-FUNDAMENTALS-READ-PUBLIC | `/fundamental` 跨 schema 读面止血（作废，不计完成·前提被归属裁决取代） | 2026-11-12（作废，不计完成） | —（原文未记） | [原文](#DATA-FUNDAMENTALS-READ-PUBLIC) |
 | DATA-GRACEFUL-SHUTDOWN | 优雅停机 + 作业租约/心跳/stale 回收 | 2026-11-12 | 本笔（`git log --grep DATA-GRACEFUL-SHUTDOWN`） | [原文](#DATA-GRACEFUL-SHUTDOWN) |
 | DATA-SYNC-JOB-NOOP | 空参数 no-op 作业不再记 succeeded（入队期拒绝无范围点位作业） | 2026-11-12 | 本笔（`git log --grep DATA-SYNC-JOB-NOOP`） | [原文](#DATA-SYNC-JOB-NOOP) |
 | DATA-POLICY-FACTORS-DEAD | 删除策略表里不存在的因子同步/派生端点（ADR-037 归属退役） | 2026-11-12 | 本笔（`git log --grep DATA-POLICY-FACTORS-DEAD`） | [原文](#DATA-POLICY-FACTORS-DEAD) |
@@ -30,6 +30,7 @@
 | X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
 | X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（同日收尾摘除别名，`/health` 现为 404） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
 | DATA-PAGINATION-ALIGN | 列表分页统一：`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显 + `created_at DESC, id DESC` 稳定排序 | 2026-11-12 | 见本条 | [施工记录](#DATA-PAGINATION-ALIGN) |
+| DATA-REFDATA-JOB-WRITE | 参考数据作业级写入：约束核对 + 退市覆盖收口 | 2026-11-12 | `8c59035`、`1a6f03c` | [原文](#DATA-REFDATA-JOB-WRITE) |
 
 ---
 
@@ -679,7 +680,7 @@
 
 ## 2026-11-12 收口
 
-> 本节收 2026-11-12 收口、从 `docs/TASKS.md` 移入的单（原文逐字搬入，完成项按台账规则只留归档）。`DATA-INGEST-RAW` / `DATA-INDEX-CONSTITUENTS` / `DATA-FUNDAMENTALS-READ-PUBLIC` 三条为当日收口，`DATA-GRACEFUL-SHUTDOWN` 为本笔施工。
+> 本节收 2026-11-12 收口、从 `docs/TASKS.md` 移入的单（原文逐字搬入，完成项按台账规则只留归档）。`DATA-INGEST-RAW` / `DATA-INDEX-CONSTITUENTS` / `DATA-FUNDAMENTALS-READ-PUBLIC` 三条为当日收口（其中 `DATA-FUNDAMENTALS-READ-PUBLIC` 为**作废，不计完成**），`DATA-GRACEFUL-SHUTDOWN` 为本笔施工。
 
 <a id="DATA-INGEST-RAW"></a>
 ### DATA-INGEST-RAW · `ingest.raw` 归档面（证据链） [P2] ✅（2026-11-12，ADR-0010）
