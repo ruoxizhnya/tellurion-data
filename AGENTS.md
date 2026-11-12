@@ -29,6 +29,7 @@ go test ./...
 ```
 
 - 这三条是 R1/R2 的判据：**单独 checkout 就能绿**。
+- CI 覆盖面按现状（`.github/workflows/ci.yml`，单 job `go`「Build & Test」）依次为：gofmt（有未格式化文件即红）→ `go build ./...` → `go vet ./...` → **Govulncheck 已是门**（`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`，符号级可达性）→ `go test ./... -count=1` → **`go test -race ./... -count=1`**（同 job，ubuntu-latest 自带 gcc）→ **Staticcheck**（`go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`）。跑 `-race` 与 `staticcheck` 是 CI 步骤，**本地上面三条命令不含它们**，本地要自证需另跑同样的两条。
 - 可选集成测试（无外部条件时自动 skip）：
   - `visible_at` 回填（D2，仅测试库）：`DATA_TEST_DSN='postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable' go test -tags backfill ./internal/schema -count=1`
     —— 默认构建不编译；只读 `DATA_TEST_DSN` 且库名必须以 `_test` 结尾（生产 `DATABASE_URL` / 生产库名自动 skip），已设置但连不上则 fail-loud。临时 schema 跑完即删，不碰目标 `market` / `ingest`。
