@@ -232,6 +232,49 @@ func TestFetchRequestFromParams_RejectsBadDateAndInvertedWindow(t *testing.T) {
 	}
 }
 
+// TestValidateJobScope_RejectsUnscopedPointJob 钉住「空参数 no-op 不入队」：
+// `params={}` 以前会被当作「全市场 + 适配器默认窗口」跑一遍，上游 0 行也记
+// succeeded，库里留下 0/0 的假成功。点位作业必须显式给 symbols 或日期窗口。
+func TestValidateJobScope_RejectsUnscopedPointJob(t *testing.T) {
+	for name, params := range map[string]map[string]any{
+		"nil params":       nil,
+		"empty map":        {},
+		"blank symbols":    {"symbols": []any{""}},
+		"empty symbol arr": {"symbols": []any{}},
+		"blank dates":      {"start_date": "", "end_date": ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateJobScope("ohlcv_daily_qfq", params)
+			if !errors.Is(err, ErrInvalidParams) {
+				t.Fatalf("ValidateJobScope(%v) = %v, want ErrInvalidParams", params, err)
+			}
+		})
+	}
+}
+
+// TestValidateJobScope_AcceptsExplicitScope 钉住正例：有 symbols 或有任一侧
+// 日期都算「有范围」；参考数据腿不套点位范围（它们各自校验）。
+func TestValidateJobScope_AcceptsExplicitScope(t *testing.T) {
+	cases := map[string]struct {
+		jobType string
+		params  map[string]any
+	}{
+		"symbols":         {"ohlcv_daily_qfq", map[string]any{"symbols": []any{"600519.SH"}}},
+		"start only":      {"ohlcv_daily_qfq", map[string]any{"start_date": "2026-01-05"}},
+		"end only":        {"ohlcv_daily_qfq", map[string]any{"end_date": "2026-01-06"}},
+		"stocks":          {JobTypeStocks, map[string]any{}},
+		"trading day":     {JobTypeTradingCalendar, nil},
+		"index component": {JobTypeIndexConstituents, map[string]any{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateJobScope(tc.jobType, tc.params); err != nil {
+				t.Fatalf("ValidateJobScope(%s, %v) = %v, want nil", tc.jobType, tc.params, err)
+			}
+		})
+	}
+}
+
 // ── 执行 ──
 
 func TestRunner_UsesPassthroughNormalizer(t *testing.T) {
@@ -533,7 +576,7 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 	// 成功终态：progress 翻到 100，result 是 JSONB 而不是字符串；
 	// 三个计数列按 `jobCounts` 口径落库（UI 队列渲染 processed/total，
 	// 不写就永远 0/0）。fetched=3、persisted=2、skipped=1 ⇒ 3 / 3。
-	job2, err := NewJob("ohlcv_daily", nil, 1)
+	job2, err := NewJob("ohlcv_daily", map[string]any{"symbols": []any{"600519.SH"}}, 1)
 	if err != nil {
 		t.Fatalf("NewJob: %v", err)
 	}
@@ -696,7 +739,7 @@ func TestPGStoreReleaseJobRequeuesThenFails(t *testing.T) {
 	ctx, pool := openLeaseTestPG(t)
 	store := NewPGStore(pool, nil)
 
-	job, err := NewJob("ohlcv_daily", nil, 2)
+	job, err := NewJob("ohlcv_daily", map[string]any{"symbols": []any{"600519.SH"}}, 2)
 	if err != nil {
 		t.Fatalf("NewJob: %v", err)
 	}

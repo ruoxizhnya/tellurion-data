@@ -41,7 +41,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 | GET | `/api/v1/trading/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` | **G3 只读兼容**：交易日轴 ⇒ `{trading_days:["YYYY-MM-DD"]}` |
 | GET | `/api/v1/stocks/{symbol}` | **G3 只读兼容**：单只股票 ⇒ `{stock: Stock}`；无该票 404 `not_found` |
 | POST | `/api/v1/ohlcv/bulk` | **G3 只读兼容**（只读 POST，请求体只承载查询参数）：批量日线 ⇒ `{results:[{symbol,ohlcv,error?}]}`；逐票错误不整体失败 |
-| POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` = data_type，或参考数据保留字面值 `stocks` / `trading_calendar` / `index_constituents`；点位管线用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验），`index_constituents` 只要求 `index_code`（`start_date/end_date` 缺省为 `Now` 往前 120 天） |
+| POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` = data_type，或参考数据保留字面值 `stocks` / `trading_calendar` / `index_constituents`；点位管线用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验），`index_constituents` 只要求 `index_code`（`start_date/end_date` 缺省为 `Now` 往前 120 天）。**点位作业必须显式给范围**：`symbols` 非空，或 `start_date` / `end_date` 至少一个；空 `params`（`{}`）不解释成「全市场 + 适配器默认窗口」，直接 400 `invalid_parameter`（2026-11-12：此前空参数会跑出 0 行并记 succeeded，库里留下 0/0 假成功） |
 | GET | `/api/sync/jobs[?status=&job_type=&limit=]` | **作业层**：`{jobs:[Job]}`（缺省最近 50 条，`status` ∈ pending/running/succeeded/failed/cancelled） |
 | GET | `/api/sync/jobs/{id}` | **作业层**：单条作业；不存在 404 `job_not_found` |
 | GET | `/api/sync/jobs/{id}/progress` | **作业层 SSE**：连上先重放当前 Job 快照，此后每 500ms 推一条 `data: {Job}`，终态（succeeded/failed/cancelled）推完即关；不存在 ⇒ 在 SSE 头写出**之前** 404 `job_not_found` |
@@ -61,6 +61,8 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > - `trading_calendar`：`params` 可给 `exchange`（空 = `SSE`）、`start_date` / `end_date`（空 = 当年；需要历史必须显式给区间）。
 > - `index_constituents`：`params` 必须给 `index_code`（如 `000300.SH`），`start_date` / `end_date` 空 = `Now` 往前 120 天；只落**最新一期快照**（整期替换当前行，口径见 `db-schema.md` §9.6）。
 > - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这三类作业以 `misconfigured` 失败（不会静默写 0 行）。
+
+> **空参数 no-op 不再入队（2026-11-12）**：点位作业的「范围」在**入队期**校验（`syncjob.ValidateJobScope`，`POST /api/sync/jobs` 与排程创建/更新共用）：`symbols` 非空，或 `start_date` / `end_date` 至少一个，否则 400 `invalid_parameter`。调度 tick 遇到库里遗留的无范围排程只记日志并跳过，不建作业。参考数据三字面值不套这条规则（各自的范围校验在 `ReferenceRunner`）。
 
 > **`Job` 的计数三列（2026-11-12）**：`total_items` = `fetched`；`processed_items` = `persisted + skipped`；成功终态 `failed_items` = 0。三列随结案（`FinishJob`）与 `result` 一起落库，**运行中不逐条更新**——因此队列渲染的 `processed/total` 在作业到达终态前可能仍是 `0/0`；要实时进度看 `GET /api/sync/jobs/{id}/progress`（SSE）的 `progress_percent`。旧实现从未给这三列赋值，导致成功作业也显示 `0/0`。
 

@@ -111,6 +111,9 @@ func NewJob(jobType string, params map[string]any, maxRetries int) (Job, error) 
 	if params == nil {
 		params = map[string]any{}
 	}
+	if err := ValidateJobScope(jobType, params); err != nil {
+		return Job{}, err
+	}
 	id, err := newID()
 	if err != nil {
 		return Job{}, err
@@ -122,6 +125,30 @@ func NewJob(jobType string, params map[string]any, maxRetries int) (Job, error) 
 		Params:     params,
 		MaxRetries: maxRetries,
 	}, nil
+}
+
+// ValidateJobScope 校验作业「有明确的取数范围」。
+//
+// 点位管线作业（`job_type` = data_type）必须给出 `symbols` 或
+// `start_date`/`end_date` 之一。空 `params`（`{}`）曾经会被当作「全市场 +
+// 适配器默认窗口」跑过去，上游返回 0 行时仍记成 succeeded，让队列里混进一批
+// 「什么都没干却成功」的 0/0 行。入队时直接拒（HTTP 400 / 调度跳过）。
+//
+// 参考数据腿（stocks / trading_calendar / index_constituents）不套用点位
+// 范围，它们各自的范围校验在 `ReferenceRunner.Execute` 里。
+func ValidateJobScope(jobType string, params map[string]any) error {
+	if IsReferenceJobType(jobType) {
+		return nil
+	}
+	req, err := FetchRequestFromParams(jobType, params)
+	if err != nil {
+		return err
+	}
+	if len(req.Symbols) == 0 && req.StartDate.IsZero() && req.EndDate.IsZero() {
+		return fmt.Errorf("%w: %s requires an explicit scope (symbols or start_date/end_date); refusing an unscoped no-op job",
+			ErrInvalidParams, jobType)
+	}
+	return nil
 }
 
 func newID() (string, error) {
@@ -277,7 +304,7 @@ func (in *ScheduleInput) Validate() error {
 	if in.Params == nil {
 		in.Params = map[string]any{}
 	}
-	if _, err := FetchRequestFromParams(in.JobType, in.Params); err != nil {
+	if err := ValidateJobScope(in.JobType, in.Params); err != nil {
 		return err
 	}
 	if _, err := NextRun(in.Cron, time.Now()); err != nil {

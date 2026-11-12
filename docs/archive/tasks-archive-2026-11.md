@@ -19,6 +19,7 @@
 | DATA-INDEX-CONSTITUENTS | `index_constituents` 写者与当前快照读面 | 2026-11-12 | —（原文未记） | [原文](#DATA-INDEX-CONSTITUENTS) |
 | DATA-FUNDAMENTALS-READ-PUBLIC | `/fundamental` 跨 schema 读面止血（作废·前提被归属裁决取代） | 2026-11-12 | —（原文未记） | [原文](#DATA-FUNDAMENTALS-READ-PUBLIC) |
 | DATA-GRACEFUL-SHUTDOWN | 优雅停机 + 作业租约/心跳/stale 回收 | 2026-11-12 | 本笔（`git log --grep DATA-GRACEFUL-SHUTDOWN`） | [原文](#DATA-GRACEFUL-SHUTDOWN) |
+| DATA-SYNC-JOB-NOOP | 空参数 no-op 作业不再记 succeeded（入队期拒绝无范围点位作业） | 2026-11-12 | 本笔（`git log --grep DATA-SYNC-JOB-NOOP`） | [原文](#DATA-SYNC-JOB-NOOP) |
 
 ---
 
@@ -727,3 +728,18 @@
   - **验收**：`go build ./... && go vet ./... && go test ./... -count=1` 全绿；真实 SIGTERM 探针容器演练（`docker stop`）→ 日志出现 `shutdown signal received; draining in-flight HTTP requests` / `stopped`，`ExitCode=0`（`docs/runbook.md` §7.4）；PG 腿（`DATA_TEST_DSN=…tellurion_data_test`）覆盖领取写租约、未到期不回收、错 owner 心跳/终态被拒、过期回收回 `pending`、预算用尽判 `failed`、停机交还两分支。
   - **破坏验证（实做并逐字节还原）**：① `ClaimJob` 的 `lease_until` 写入改 `NULL` ⇒ `TestPGStoreLeaseClaimHeartbeatReap` 红（`lease_until = 0001-01-01 … want a future lease`）；② `FinishJob` 去掉 `worker_id` 持有权判定 ⇒ 同一用例红（错 owner 写入未被拒）；③ worker 停机交还分支短路 ⇒ `TestWorker_ReleasesJobOnShutdown` 红。
   - **未做（如实）**：探针容器未制造真实在途同步作业（需外部 Tushare 配额），作业交还分支以单测 + PG 腿验收；`lease_until IS NULL` 的历史 `running` 行不被自动回收（见 `docs/db-schema.md` §9.7 已知边界）。
+
+<a id="DATA-SYNC-JOB-NOOP"></a>
+### DATA-SYNC-JOB-NOOP · 空参数 no-op 作业仍记 succeeded（库里 13/26 条 succeeded 是 0/0） [P1] ✅（2026-11-12）
+
+- **① 目标**：让「没有取数范围」的点位作业在**入队期**就被拒（HTTP 400 / 调度跳过），而不是跑一遍上游、返回 0 行、再记成 `succeeded` 的 0/0 假成功。
+- **② 上下文**：业务面验证发现库里 26 条 `succeeded` 中有 13 条 `total_items/processed_items/failed_items` 全是 0，典型是 `ohlcv_daily` + `params={}`：`FetchRequestFromParams` 对空参数返回零 `FetchRequest`，适配器按缺省窗口取数，0 行也记成功。计数三列本身已由 `249548d` 落库，本条修的是「作业根本没有范围」这一入队缺口。
+- **③ 要求（已落地）**：① 新增 `syncjob.ValidateJobScope(jobType, params)`：点位作业须 `symbols` 非空，或 `start_date` / `end_date` 至少一个，否则 `ErrInvalidParams`；② 接入 `NewJob`（HTTP 建作业、`schedules/{id}/run`、调度 tick 共用）与 `ScheduleInput.Validate`（建/改排程即拒）；③ 参考数据三字面值（`stocks` / `trading_calendar` / `index_constituents`）不套这条，各自范围校验仍在 `ReferenceRunner`；④ `docs/api-schema.md` 写清空 `params` = 400。
+- **④ 约束与非目标**：**不改**「上游返回 0 行」的语义（合法空区间仍可 succeeded——那是真实结果，不是 no-op）；不删既有 0/0 历史行（数据清理另报）；不新增作业状态。
+- **⑤ 验收**：`go build ./... && go vet ./... && go test ./... -count=1` 全绿；PG 腿（`DATA_TEST_DSN=…tellurion_data_test`）`internal/sync` + `internal/store` 全绿；新增用例 `TestValidateJobScope_RejectsUnscopedPointJob`（nil / `{}` / 空 symbol / 空白日期）、`TestValidateJobScope_AcceptsExplicitScope`（symbols / 仅 start / 仅 end / 三个参考类型）、`TestCreateSyncJob_RejectsUnscopedNoOp`（三种请求体 ⇒ 400 `invalid_parameter`）。
+- **⑥ 边界**：本仓作业入队校验与 HTTP 语义；历史 0/0 行与既有数据的清理不在本单。
+- **收口（2026-11-12）**：
+  - **代码**：`internal/sync/job.go` 新增 `ValidateJobScope` 并接入 `NewJob` 与 `ScheduleInput.Validate`；既有测试里两处 `NewJob(..., nil, ...)` 改为显式 `symbols`（`TestPGStoreFinishJobWritesTerminalState`、`TestPGStoreReleaseJobRequeuesThenFails`）；`TestCreateSchedule_ValidatesCron` / `TestUpdateSchedule_MissingIs404` 补 `symbols`，让它们继续由 cron / 404 这一预期原因驱动，而不是被新校验顺带变绿。
+  - **文档**：`docs/api-schema.md` §1 建作业行 + 新增「空参数 no-op 不再入队」说明。
+  - **破坏验证（实做并逐字节还原）**：把 `NewJob` 内的 `ValidateJobScope` 调用摘掉 ⇒ `TestCreateSyncJob_RejectsUnscopedNoOp` 三个子用例全红（`status = 202, want 400`，响应体 `params:{}` 的 pending 作业）；逐字节还原后 `sha256 F81A553B3B1DD2D1617A094C98DE1083F56499AA730325139FD3D37561DCDDD2` 与改前一致，`ok tellurion-data/internal/sync 0.192s` / `ok tellurion-data/internal/httpapi 0.160s`。
+  - **未做（如实）**：库里已有的 13 条 0/0 历史行未删（不属代码修复，清理前会先报）。

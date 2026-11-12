@@ -217,6 +217,22 @@ func TestCreateSyncJob_RejectsBadParams(t *testing.T) {
 	assertErrorCode(t, rec, "invalid_parameter")
 }
 
+func TestCreateSyncJob_RejectsUnscopedNoOp(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty params":   `{"job_type":"ohlcv_daily_qfq","params":{}}`,
+		"missing params": `{"job_type":"ohlcv_daily_qfq"}`,
+		"blank symbols":  `{"job_type":"ohlcv_daily_qfq","params":{"symbols":[""]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodPost, "/api/sync/jobs", body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertErrorCode(t, rec, "invalid_parameter")
+		})
+	}
+}
+
 func TestCreateSyncJob_RejectsUnknownFields(t *testing.T) {
 	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodPost, "/api/sync/jobs",
 		`{"job_type":"ohlcv_daily_qfq","bogus":1}`)
@@ -356,7 +372,7 @@ func TestSyncJobProgress_UnknownJobIs404(t *testing.T) {
 
 func TestCreateSchedule_ValidatesCron(t *testing.T) {
 	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodPost, "/api/sync/schedules",
-		`{"name":"bad","job_type":"ohlcv_daily_qfq","cron_expression":"*/0 * * * *","is_active":true}`)
+		`{"name":"bad","job_type":"ohlcv_daily_qfq","cron_expression":"*/0 * * * *","is_active":true,"params":{"symbols":["600519.SH"]}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -373,7 +389,7 @@ func TestCreateSchedule_AcceptsFiveFieldCron(t *testing.T) {
 
 func TestUpdateSchedule_MissingIs404(t *testing.T) {
 	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodPut, "/api/sync/schedules/9",
-		`{"name":"x","job_type":"ohlcv_daily_qfq","cron_expression":"0 18 * * *","is_active":true}`)
+		`{"name":"x","job_type":"ohlcv_daily_qfq","cron_expression":"0 18 * * *","is_active":true,"params":{"symbols":["600519.SH"]}}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
