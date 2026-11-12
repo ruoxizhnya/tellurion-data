@@ -885,6 +885,7 @@
 > - **CI**：`go-version` 改 `1.26.11`；`Vet` 之后新增 `Govulncheck` 步（`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`）。
 > - **验收（真实输出）**：`govulncheck ./...` → `No vulnerabilities found`，EXIT=0；`gofmt -l .` 空；`go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 EXIT=0（12 包 `ok`）。
 > - **破坏验证（真做真还原）**：把 kit / pgx 降回 bump 前版本并 `go mod tidy` ⇒ `GO-2026-5004`，EXIT=1；从**目标态备份**（`$env:TEMP\data_target_20261112`，非 bump 前备份）逐字节还原，`go.mod` SHA256 `3F69BAAA44C6C8A588199E2EE868A0F5425863F84E04DF194E901856FE38A6D3`、`go.sum` `4C254838BA0FB51C5F1E3BD549A63929920D50C81D30042769053C17EA4CFA98`，与破坏前一致，复跑 EXIT=0。
+> - **补丁（2026-11-12 发现，同批补）**：`go` directive 升到 1.26.11 后，`Dockerfile` 仍是 `golang:1.25-alpine` 且 `GOTOOLCHAIN=local`，`docker build` 在 `go mod download` 处硬失败（`go.mod requires go >= 1.26.11 (running go 1.25.14)`）；builder 升 `golang:1.26.11-alpine`，实建 `docker build -f Dockerfile` 通过。
 > - **边界**：只动本仓 `go.mod`/`go.sum`/CI/文档；`AGENTS.md` §4 的版本订正单列在 `X-AGENTS-DEPENDENCY-TABLE` 提交。
 
 <a id="X-AGENTS-DEPENDENCY-TABLE"></a>
