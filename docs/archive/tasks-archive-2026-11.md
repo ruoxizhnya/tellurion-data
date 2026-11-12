@@ -957,3 +957,20 @@
 > - **门**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` / `staticcheck ./...` / `go test ./... -count=1` 全绿；PG 腿用临时容器单独跑通后即停并删除。
 > - **重开条件（改 cursor）**：出现全量遍历 / 审计导出 / 深翻页消费者，或 `sync_jobs` 数据量让 offset 扫描成为实际问题时，另立 keyset 单（`(created_at, id)` 复合游标），回显字段改 `next_cursor`。
 > - **边界**：只动本仓读面参数与 SQL；UI 若加「下一页」交互归 UI 单独立项；core 只反代单条证据，无列表消费。
+
+<a id="DATA-REFDATA-JOB-WRITE"></a>
+### DATA-REFDATA-JOB-WRITE · 参考数据作业级写入：约束核对 + 退市覆盖收口 [P1] ✅（2026-11-12）
+
+> **重开记录（2026-11-12，挂起任务处置批次，主任指令）**：重开条件「一次带真实 TUSHARE_TOKEN 的部署」已满足——2026-11-12 实测部署库：stocks 作业成功 7 次（累计 processed 22,320，表 5,580 行）、trading_calendar 成功 3 次（1,096 行），两类作业均无 failed。**作业级写入路径已证明**，原单收窄为两条小腿：约束核对表 + 退市覆盖口径。另：部署库 2026-11-10 刚从 `internal/schema` 整库重建，「既有库约束缺口」预期不存在，核对是走形式但必须留证据。
+
+- **① 目标**：用两份证据关闭本单——既有库约束逐条核对表 + 退市覆盖的明确口径（回读证据或验收改写）。
+- **② 上下文（收口时订正）**：D 段**不是被代码丢弃**，而是**从未跑过**——`syncStocks` 显式读 `params.list_status`（`internal/sync/reference.go:116`），只是缺省 `L`；`FetchStocks` 无条件把它传给 `stock_basic`（`internal/transport/tushare/stocks.go:34-38`）；HTTP 建作业无参数白名单（`internal/httpapi/sync.go:68-77`，`FetchRequestFromParams` 对 `stocks` 只做通用解析）。⇒ 打通只需「跑一条 D 作业」，无需改代码。
+- **③ 施工与证据（2026-11-12）**：
+  - **真源 E2E（临时 schema，未写部署库）**：`TestReferenceRunner_LiveDelistedStocks`（`internal/store/reference_live_pg_test.go`，需 `TUSHARE_ONLINE=1` + `TUSHARE_TOKEN` + `DATABASE_URL`）走 `ReferenceRunner` → tushare → `ReferenceWriter` 正常作业路径：L 段 5,580 行入库后以显式 `list_status=D` 回读 **343 行**（与 ADR-0009 线上核对同数），`delisted` 343、`delist_date` 缺失 0、在市票 active 行数前后不变、D 段重跑幂等；样本 `301139.SZ delist_date=2026-10-28`。单测 `TestReferenceRunner_StocksForwardsExplicitListStatus` 钉住 `D` 不被缺省 `L` 吞掉。
+  - **部署库真跑（主任授权，正常作业路径，不手写 SQL）**：基线 `total 5,580 / delisted 0 / delist_date 非 NULL 0 / active 5,580`。作业 `42545d54b42a0523`（`{"job_type":"stocks","params":{"list_status":"D"}}`）`succeeded`, `fetched=343 / persisted=343` → 回读 `total **5,923**`（= 5,580 + 343；D 段与 L 段无重叠，343 行全部 INSERT）、`delisted **343**`、`delist_date` 非 NULL **343**、`delisted` 且无日期 **0**、`active **5,580**`（与基线一致，无一行被误标）。重跑 `488b9d63617295cb`：`fetched=persisted=343`，`total` / `delisted` / `active` 全部不变（幂等）。**未做任何 UPDATE/DELETE，未整表重刷。**
+  - **约束核对表**：落 `docs/db-schema.md` §9.8（部署库实况 vs `internal/schema`，22 张表）：**22/22 一致**、全库 0 外键、16 个业务索引全在位。
+  - **核对发现的漂移（单独 commit）**：`market.trading_calendar.exchange` 的 `NOT NULL` + `CHECK` 未在既有库落地（既有库建于 ADR-0009 之前，`CREATE TABLE IF NOT EXISTS` 不回改）。按主任裁决「查出漂移不动 = 表做了白做」落**启动期受保护回填**：`internal/schema/guard.go` + `cmd/dataservice` 的 `applySchema`——先查 `pg_constraint` / `pg_attribute` 判幂等，再 `SELECT` 校验无 NULL / 无越界值，通过才 `SET NOT NULL` + `ADD CONSTRAINT`；校验不通过只打 **WARN**（违规行数 + 样例）、不加约束、服务照常启动。ADR-0009 追加「既有库回填路径」说明为何不改语义（判据与写侧 `ErrMixedTradingExchanges` 完全一致）。PG 用例 `TestApplyGuardedConstraints_AddsMissingConstraints` / `TestApplyGuardedConstraints_SkipsAndWarnsOnDirtyData` 全绿；部署库重启后实测 `ck_trading_calendar_exchange` 在位、`exchange.attnotnull=true`，1,096 行数据未动。
+- **④ 约束与非目标**：不改 writer 契约与 DDL 形状（约束回填只补既有库缺的约束，不改列/不改数据）；不引入通用迁移框架；除参考作业自身的 upsert 外不动部署库数据。
+- **⑤ 验收结论**：约束核对表逐行有结论 ✅；退市腿有部署库回读证据 ✅（343 行、`delist_date` 全写入、在市票无误标、重跑幂等）。`delisted=0` 的旧尴尬消除，core `sync_all.sh` 的验证输出自此有意义。
+- **⑥ 边界**：本仓作业面与 schema；D 回读走正常作业路径，未手写 SQL 改数。
+
