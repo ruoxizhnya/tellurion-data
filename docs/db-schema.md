@@ -387,4 +387,50 @@ session, sessionid, privatekey
 
 **已知边界**：`lease_until IS NULL` 的 `running` 行（本列上线前领取的历史行）不被自动回收；按本机/集群实际情况用 `POST /api/sync/jobs/{id}/retry` 或一次性 SQL 收口，不为此放宽 reaper 的判据。
 
+### 9.8 既有库约束实况核对（2026-11-12，`DATA-REFDATA-JOB-WRITE`）
+
+**用途**：改表结构前先看这张表。它记录的是**部署库实况**与 `internal/schema` DDL 的逐项对照（PK / UNIQUE / NOT NULL DEFAULT / CHECK / 索引 / 外键），不是设计意图。形状一变就要同步本表，否则它会变成第二份过期文档。
+
+**基准与取数方式**（部署库唯一实例 `127.0.0.1:5432/tellurion`，2026-11-12 实测）：
+
+- 列：`information_schema.columns WHERE table_schema='market'`
+- 约束：`pg_constraint`（`contype`：`p` 主键 / `u` 唯一 / `c` CHECK / `f` 外键）
+- 索引：`pg_indexes WHERE schemaname='market'`（含非约束的唯一索引）
+- 对照基准：`internal/schema/market.go`（21 张）+ `internal/schema/visible_at.go`（A 集 12 张的 `visible_at`）
+
+**总览**：`market` schema 共 22 张表 = 本仓 DDL 21 张 + core 持有的 `market.index_daily`。逐项核对后 **21/21 一致**，**1 处漂移**：`market.trading_calendar` 的收紧约束未在既有库落地（见下）。**全库 0 个外键**，DDL 也不声明外键 ⇒ 一致（跨表引用由应用层保证）。DDL 声明的 16 个业务索引（含 1 个部分唯一索引）全部在位，无多余业务索引。
+
+| 表 | 主键 | 唯一 / 其他约束 | NOT NULL / DEFAULT | CHECK | 结论 |
+|---|---|---|---|---|---|
+| `stocks` | `symbol` | 无 | `name` / `exchange` NOT NULL；`status` DEFAULT `'active'`；`created_at` / `updated_at` DEFAULT `now()` | 无 | 一致（`delist_date` 列已由幂等 ALTER 前滚） |
+| `trading_calendar` | `trade_date` | 无 | `trade_date` NOT NULL；**`exchange` 可空** DEFAULT `'SSE'`；`is_trading_day` 可空 DEFAULT `true` | **实况无** | **漂移**：DDL（`market.go:324-326`）要求 `exchange NOT NULL` + `ck_trading_calendar_exchange`，既有库两者皆缺 |
+| `ohlcv_daily_qfq` | `(symbol, trade_date)` | 无 | 价格 / 量 NOT NULL；`turnover` / `trade_days` DEFAULT `0`；`created_at` DEFAULT `now()` | 无 | 一致 |
+| `adjust_baseline_changes` | `id` | 部分唯一索引 `uq_adjust_baseline_bootstrap (symbol) WHERE reason='bootstrap'` | `symbol` / `base_date` / `base_factor` / `reason` NOT NULL；`changed_at` DEFAULT `now()` | `ck_adjust_baseline_reason`、`ck_adjust_baseline_factor` | 一致 |
+| `stock_fundamentals` | `(ts_code, trade_date)` | 无 | `ts_code` / `trade_date` NOT NULL；`available_date` 为生成列 | 无 | 一致 |
+| `daily_basic` | `(ts_code, trade_date)` | 无 | `ts_code` / `trade_date` NOT NULL | 无 | 一致 |
+| `ohlcv_minute` | `(symbol, ts)` | 无 | `symbol` / `ts` / 四价 NOT NULL；`source` / `ingest_time` DEFAULT | 无 | 一致 |
+| `realtime_quote` | `(symbol, ts)` | 无 | `symbol` / `ts` NOT NULL；`source` / `ingest_time` DEFAULT | 无 | 一致 |
+| `capital_flow` | `id` | UNIQUE `(symbol, trade_date, period)` | `symbol` / `trade_date` / `period` NOT NULL；`source` / `ingest_time` DEFAULT | 无 | 一致 |
+| `sectors` | `sector_code` | 无 | `sector_name` / `trade_date` NOT NULL；`category` DEFAULT `'industry'`；`data_version` DEFAULT `1` | 无 | 一致 |
+| `stock_sector_map` | `(symbol, sector_code)` | 无 | 三个字符串列 NOT NULL；`source` / `ingest_time` DEFAULT | 无 | 一致 |
+| `top_list` | `id` | UNIQUE `(trade_date, symbol)` | `trade_date` / `symbol` / `name` NOT NULL；`data_version` DEFAULT `1` | 无 | 一致 |
+| `limit_up_pool` | `id` | UNIQUE `(trade_date, symbol)` | `trade_date` / `symbol` / `name` NOT NULL；`limit_times` / `continuous` DEFAULT `1` | 无 | 一致 |
+| `announcements` | `ann_id` | 无 | `symbol` / `ann_title` / `ann_time` NOT NULL；`source` DEFAULT `'juchao'` | 无 | 一致 |
+| `news` | `news_id` | 无 | `symbol` / `title` / `publish_time` NOT NULL；`source` DEFAULT `'eastmoney'` | 无 | 一致 |
+| `hot_search` | `id` | UNIQUE `(rank, snapshot_time)` | `rank` / `keyword` / `snapshot_time` NOT NULL；`source` DEFAULT `'xueqiu'` | 无 | 一致 |
+| `global_ohlcv` | `(symbol, trade_date)` | 无 | `symbol` / `trade_date` / 四价 NOT NULL；`source` DEFAULT `'yahoo_finance'` | 无 | 一致 |
+| `index_constituents` | `id` | 无 | `index_code` / `symbol` NOT NULL；`in_date` / `out_date` **列可空**（写侧 `ReplaceIndexConstituents` 拒零 `in_date`） | 无 | 一致（列宽与写侧守卫的差异是有意的） |
+| `dividends` | `id` | 无 | `symbol` / `ann_date` NOT NULL | 无 | 一致 |
+| `splits` | `id` | 无 | `symbol` / `trade_date` NOT NULL；`currency` DEFAULT `'CNY'` | 无 | 一致 |
+| `market_activity` | `id` | UNIQUE `(symbol, trade_date, source)` | `symbol` / `trade_date` / `source` / `as_of` NOT NULL | `market_activity_identity_present` | 一致 |
+| `index_daily`（core 持有） | `id` | UNIQUE `(code, trade_date)` | `code` / `trade_date` / `close` / `volume` / `source` / `as_of` NOT NULL | `market_index_daily_identity_present` | 不在本仓 DDL（§9.3），仅登记实况；本仓不改不迁 |
+
+**`visible_at` 分布**：只出现在 A 集 12 张（`announcements` / `capital_flow` / `global_ohlcv` / `hot_search` / `limit_up_pool` / `news` / `ohlcv_daily_qfq` / `ohlcv_minute` / `realtime_quote` / `sectors` / `stock_sector_map` / `top_list`），B 集（`market_activity` 用 `as_of`）与 C 集（`stocks` / `trading_calendar` / `index_constituents` / `dividends` / `splits` / `stock_fundamentals` / `daily_basic`）均无 ⇒ 与 `visible_at.go` 的口径一致。
+
+**漂移处置（`trading_calendar`）**：
+
+- 成因：既有库建于 2026-11-10，`exchange` 的 `NOT NULL` + `CHECK` 是 ADR-0009（2026-11-11）之后加进 DDL 的；`CREATE TABLE IF NOT EXISTS` 不会回改既有表，本仓也没有通用 `ALTER` 迁移通道。
+- 现状风险：表内 1,096 行 `exchange` 全为 `'SSE'`、无 NULL，**当前数据满足收紧后的约束**；误用「按交易所分片写」由写侧 `ErrMixedTradingExchanges` 拦截，不依赖 CHECK。
+- 结论：ADR-0009 已明确「CHECK 只对新建表生效，既有库靠写侧守卫」⇒ **不作为缺陷处理，不擅自 ALTER**（本单 ④ 也禁止改 DDL 形状）。若将来重建库或做正式迁移，再一并补 `SET NOT NULL` + `ADD CONSTRAINT`（届时先 `SELECT` 复核分布）。
+
 

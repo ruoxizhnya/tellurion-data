@@ -140,6 +140,30 @@ func TestReferenceRunner_StocksUsesDefaultsAndReportsCounts(t *testing.T) {
 	}
 }
 
+// 退市腿：显式 `list_status=D` 必须原样传到传输层，不能被「缺省 L」吞掉。
+func TestReferenceRunner_StocksForwardsExplicitListStatus(t *testing.T) {
+	tr := &fakeReferenceTransport{stocks: []market.Stock{{Symbol: "600001.SH", Name: "退市样本", Status: "delisted"}}}
+	wr := &fakeReferenceWriter{}
+	runner := &ReferenceRunner{Transport: tr, Writer: wr}
+
+	res, err := runner.Execute(context.Background(), Job{
+		JobType: JobTypeStocks,
+		Params:  map[string]any{"list_status": "D"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if tr.gotStockStatus != "D" {
+		t.Fatalf("list_status = %q, want D", tr.gotStockStatus)
+	}
+	if res.Fetched != 1 || res.Persisted != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(wr.stocks) != 1 || wr.stocks[0].Status != "delisted" {
+		t.Fatalf("writer did not receive the delisted row: %+v", wr.stocks)
+	}
+}
+
 func TestReferenceRunner_CalendarDefaultsToCurrentYear(t *testing.T) {
 	tr := &fakeReferenceTransport{days: []ingest.TradingDay{{Date: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)}}}
 	wr := &fakeReferenceWriter{}
