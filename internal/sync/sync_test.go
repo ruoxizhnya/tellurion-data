@@ -831,3 +831,47 @@ func TestPGStoreReleaseJobRequeuesThenFails(t *testing.T) {
 		t.Fatalf("预算用尽交还 = %+v", got)
 	}
 }
+
+// TestPGStoreListJobsOffsetCoversAllWithoutDuplicates 是 offset 分页在真库上的
+// 「不重不漏」实证：把 5 行 created_at 改成同一值，逼出并列行。只按 created_at
+// 排序时 PG 对并列行的返回顺序不稳定，翻页会重复/漏行；`ORDER BY created_at
+// DESC, id DESC` 是必要条件。本测试按 limit=2 翻完，断言每条恰好出现一次。
+func TestPGStoreListJobsOffsetCoversAllWithoutDuplicates(t *testing.T) {
+	ctx, pool := openLeaseTestPG(t)
+	store := NewPGStore(pool, nil)
+
+	const total = 5
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		job, err := NewJob("ohlcv_daily", map[string]any{"symbols": []any{"600519.SH"}}, 1)
+		if err != nil {
+			t.Fatalf("NewJob: %v", err)
+		}
+		if err := store.CreateJob(ctx, job); err != nil {
+			t.Fatalf("CreateJob: %v", err)
+		}
+		ids = append(ids, job.ID)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE ingest.sync_jobs SET created_at = '2026-01-01T00:00:00Z'`); err != nil {
+		t.Fatalf("捏并列 created_at: %v", err)
+	}
+
+	seen := map[string]int{}
+	for offset := 0; offset < total; offset += 2 {
+		jobs, err := store.ListJobs(ctx, JobFilter{Limit: 2, Offset: offset})
+		if err != nil {
+			t.Fatalf("ListJobs(offset=%d): %v", offset, err)
+		}
+		for _, job := range jobs {
+			seen[job.ID]++
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("翻页覆盖 %d 条，want %d（漏行）", len(seen), total)
+	}
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Fatalf("作业 %q 出现 %d 次（翻页重复/漏行）", id, seen[id])
+		}
+	}
+}

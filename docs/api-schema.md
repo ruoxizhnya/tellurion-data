@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-12
-verified-by: 代码-文档对齐审计 —— 29 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`；同日 `X-PROBE-NAMING` 增 `/healthz` 规范名、`/health` 改过渡弃用别名）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐；2026-11-12 `X-LOW-CLEANUP` 登记「分页口径不一致」（`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`），只登记不改行为
+verified-by: 代码-文档对齐审计 —— 29 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`；同日 `X-PROBE-NAMING` 增 `/healthz` 规范名、`/health` 改过渡弃用别名）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐；2026-11-12 `X-LOW-CLEANUP` 登记「分页口径不一致」后，同日 `DATA-PAGINATION-ALIGN` 收口：`/api/sync/jobs` 补 `offset` 与 `limit`/`offset` 回显，坏值一律 400 分表，`ORDER BY created_at DESC, id DESC`，真 PG 分页不重不漏实证
 ---
 
 # API Schema — tellurion-data
@@ -42,7 +42,7 @@ verified-by: 代码-文档对齐审计 —— 29 条路由逐条核对（2026-11
 | GET | `/api/v1/stocks/{symbol}` | **G3 只读兼容**：单只股票 ⇒ `{stock: Stock}`；无该票 404 `not_found` |
 | POST | `/api/v1/ohlcv/bulk` | **G3 只读兼容**（只读 POST，请求体只承载查询参数）：批量日线 ⇒ `{results:[{symbol,ohlcv,error?}]}`；逐票错误不整体失败 |
 | POST | `/api/sync/jobs` | **作业层**：`{job_type, params, max_retries?}` ⇒ 202 `{job}`；`job_type` = data_type，或参考数据保留字面值 `stocks` / `trading_calendar` / `index_constituents` / `fundamentals`；点位管线用 `FetchRequestFromParams` 的同一套解析（symbols / 日期 / inverted window 校验），`index_constituents` 只要求 `index_code`（`start_date/end_date` 缺省为 `Now` 往前 120 天）。**点位作业必须显式给范围**：`symbols` 非空，或 `start_date` / `end_date` 至少一个；空 `params`（`{}`）不解释成「全市场 + 适配器默认窗口」，直接 400 `invalid_parameter`（2026-11-12：此前空参数会跑出 0 行并记 succeeded，库里留下 0/0 假成功） |
-| GET | `/api/sync/jobs[?status=&job_type=&limit=]` | **作业层**：`{jobs:[Job]}`（缺省最近 50 条，`status` ∈ pending/running/succeeded/failed/cancelled） |
+| GET | `/api/sync/jobs[?status=&job_type=&limit=&offset=]` | **作业层**：`{jobs:[Job], limit, offset}`（倒序 `created_at DESC, id DESC`；`limit` 缺省 50 / 上限 200，`offset` 缺省 0；坏值 400 `invalid_parameter`，见下方分页表；`status` ∈ pending/running/succeeded/failed/cancelled） |
 | GET | `/api/sync/jobs/{id}` | **作业层**：单条作业；不存在 404 `job_not_found` |
 | GET | `/api/sync/jobs/{id}/progress` | **作业层 SSE**：连上先重放当前 Job 快照，此后每 500ms 推一条 `data: {Job}`，终态（succeeded/failed/cancelled）推完即关；不存在 ⇒ 在 SSE 头写出**之前** 404 `job_not_found` |
 | GET | `/api/sync/workers` | **作业层自省**：`{num_workers, worker_ids, registered_types, is_running}`；`registered_types` = 注册表声明的 data_type（即可接的 `job_type`）；运行态未注入 ⇒ 503 |
@@ -56,7 +56,21 @@ verified-by: 代码-文档对齐审计 —— 29 条路由逐条核对（2026-11
 | POST | `/api/sync/schedules/{id}/toggle` | **排程**：翻转 `is_active`；激活时从当前时刻推进 `next_run_at` |
 | POST | `/api/sync/schedules/{id}/run` | **排程**：立即入队一次（不改 `next_run_at`）⇒ 202 `{job_id, next_run_at}` |
 
-> **分页口径不一致（2026-11-12 登记，不改行为，X-LOW-CLEANUP）**：本仓两个列表端点现在不是同一套分页——`GET /api/evidence` 用 `limit + offset`（`limit` 缺省 20 / 上限 100，`offset` 缺省 0），`GET /api/sync/jobs` 只有 `limit`（缺省 50），没有 `offset`。这是**现状登记**，不是承诺：要统一（补 `offset`、或两者都改游标）属于改变对外形状，须另立单并同步消费方；本条只保证下一次读文档的人知道差异在哪，不用去翻 handler 猜。
+> **两个列表端点的分页口径（2026-11-12 统一，`DATA-PAGINATION-ALIGN`）**：`GET /api/evidence` 与 `GET /api/sync/jobs` 现在同一套——`limit + offset`。`/api/sync/jobs` 的 `jobs` 字段名与元素形状**不变**，新增 `limit` / `offset` 两个**回显**字段（加法）。排序固定为 `created_at DESC, id DESC`：`created_at` 允许并列，`id` 是稳定 tie-breaker，保证 offset 翻页不重不漏（只按 `created_at` 排序时并列行顺序不稳定，会重复/漏行）。
+>
+> | 入参（`/api/sync/jobs`） | 取值 | 结果 |
+> |---|---|---|
+> | `limit` | 缺省 / 空 | 200，按 50 处理并回显 `"limit":50` |
+> | `limit` | `1..200` | 200，回显实际值 |
+> | `limit` | `0` / 负数 | **400** `{"error":{"code":"invalid_parameter","message":"serving: invalid parameter: limit must be >= 1"}}` |
+> | `limit` | `>200` | **400** `{"error":{"code":"invalid_parameter","message":"serving: invalid parameter: limit must be <= 200"}}` |
+> | `limit` | 非整数（`abc` / `1.5`） | **400** `…: limit must be an integer` |
+> | `offset` | 缺省 / 空 | 200，按 0 处理并回显 `"offset":0` |
+> | `offset` | `>=0` | 200；超过末页返回 `"jobs":[]` |
+> | `offset` | 负数 | **400** `…: offset must be >= 0` |
+> | `offset` | 非整数 | **400** `…: offset must be an integer` |
+>
+> **不静默回退**：坏值一律 400，点名参数与边界，不按默认值处理——静默回退会把「翻页翻丢了」伪装成正常结果。`/api/evidence` 的规则同形（边界是缺省 20 / 上限 100 / offset 0）。**不引入 cursor**：两个端点都只服务「最近 N 条」查看，`sync_jobs.created_at` 无唯一性，keyset 需 `(created_at, id)` 复合游标，成本高于当前需求；出现全量遍历 / 审计导出 / 深翻页消费者时另立单（重开条件见 `docs/TASKS.md` 归档 `DATA-PAGINATION-ALIGN`）。
 
 > **`job_type` 的五个保留字面值（2026-11-10 ADR-0008；`index_constituents` 2026-11-12 补；`fundamentals` / `daily_basic` 2026-11-12 补，ADR-0012）**：除 data_type 外，`stocks`、`trading_calendar`、`index_constituents`、`fundamentals`、`daily_basic` 是**参考数据作业**，走 `ReferenceRunner` 的写腿（`market.stocks` / `market.trading_calendar` / `market.index_constituents` / `market.stock_fundamentals` / `market.daily_basic`），**不经过**点位闸门与 `FetchRequestFromParams` 的 data_type 校验。`fundamentals` / `daily_basic` 与 data_type 同名，但**参考腿优先**：点位管线永远拿不到它们。`daily_basic` 原本的 B 集活跃度写面本就挂起（`market_activity` 被 `writeExcludedTypes` 拒绝），不存在两条腿抢同一字面值的活跃路径。
 > - `stocks`：`params` 可给 `exchange`（空 = 全市场）、`list_status`（空 = `L` 上市中；退市要单独跑 `D`）。

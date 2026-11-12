@@ -85,8 +85,8 @@ func (s *pgStore) ListJobs(ctx context.Context, filter JobFilter) ([]Job, error)
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+jobColumns+` FROM ingest.sync_jobs
 		WHERE ($1 = '' OR status = $1) AND ($2 = '' OR job_type = $2)
-		ORDER BY created_at DESC
-		LIMIT $3`, filter.Status, filter.JobType, limit)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $3 OFFSET $4`, filter.Status, filter.JobType, limit, filter.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("syncjob: list jobs: %w", err)
 	}

@@ -18,6 +18,9 @@ type JobFilter struct {
 	Status  string
 	JobType string
 	Limit   int
+	// Offset 是跳过的行数（keyset 之前的最简分页）。负数由 HTTP 层挡掉，
+	// 存储层不静默纠正——否则「翻页翻丢了」会被吞成正常结果。
+	Offset int
 }
 
 // 租约口径写死（不做配置项，DATA-GRACEFUL-SHUTDOWN ④）：

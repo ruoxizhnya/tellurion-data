@@ -87,7 +87,16 @@ func (s *Server) handleCreateSyncJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, created)
 }
 
+// syncJobsListResponse 是列表读面的报文形状。`jobs` 字段是既有形状，
+// `limit` / `offset` 是 2026-11-12 加的**回显**字段（加法，不动 `jobs`）。
+type syncJobsListResponse struct {
+	Jobs   []syncjob.Job `json:"jobs"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
 // handleListSyncJobs 列出作业（可按 status / job_type 过滤，倒序）。
+// limit 缺省 50、上限 200；offset 缺省 0；越界一律 400，不静默截断。
 func (s *Server) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 	if !s.dependencyReady(w) {
 		return
@@ -97,24 +106,31 @@ func (s *Server) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	limit, err := parseBoundedInt(strings.TrimSpace(q.Get("limit")), "limit", defaultSyncJobsLimit, 1, maxSyncJobsLimit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	offset, err := parseBoundedInt(strings.TrimSpace(q.Get("offset")), "offset", 0, 0, -1)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	filter := syncjob.JobFilter{
 		Status:  strings.TrimSpace(q.Get("status")),
 		JobType: strings.TrimSpace(q.Get("job_type")),
-	}
-	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			writeError(w, fmt.Errorf("%w: limit %q is not a positive integer", syncjob.ErrInvalidParams, raw))
-			return
-		}
-		filter.Limit = n
+		Limit:   limit,
+		Offset:  offset,
 	}
 	jobs, err := s.sync.ListJobs(r.Context(), filter)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+	if jobs == nil {
+		jobs = []syncjob.Job{}
+	}
+	writeJSON(w, http.StatusOK, syncJobsListResponse{Jobs: jobs, Limit: limit, Offset: offset})
 }
 
 // handleGetSyncJob 取单个作业。
@@ -328,6 +344,13 @@ func (s *Server) handleRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 
 // defaultJobMaxRetries 与 `ingest.sync_jobs.max_retries` 的 DDL 默认值一致。
 const defaultJobMaxRetries = 3
+
+// 列表分页口径（与 `/api/evidence` 对齐）：limit 缺省 50、上限 200；offset 缺省 0。
+// 越界一律 400，不静默截断——静默回退会把「翻页翻丢了」伪装成正常结果。
+const (
+	defaultSyncJobsLimit = 50
+	maxSyncJobsLimit     = 200
+)
 
 // decodeScheduleInput 解码排程请求体；失败时已写 400。
 func decodeScheduleInput(w http.ResponseWriter, r *http.Request, in *syncjob.ScheduleInput) bool {

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -50,10 +52,32 @@ func (f *fakeSyncStore) GetJob(_ context.Context, id string) (syncjob.Job, error
 	return job, nil
 }
 
-func (f *fakeSyncStore) ListJobs(_ context.Context, _ syncjob.JobFilter) ([]syncjob.Job, error) {
+func (f *fakeSyncStore) ListJobs(_ context.Context, filter syncjob.JobFilter) ([]syncjob.Job, error) {
 	out := make([]syncjob.Job, 0, len(f.jobs))
 	for _, job := range f.jobs {
+		if filter.Status != "" && job.Status != filter.Status {
+			continue
+		}
+		if filter.JobType != "" && job.JobType != filter.JobType {
+			continue
+		}
 		out = append(out, job)
+	}
+	// 复刻 pgStore 的 ORDER BY created_at DESC, id DESC：id 是同一时刻的稳定
+	// tie-breaker，少了它 map 迭代顺序会让分页测试假绿。
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	offset := filter.Offset
+	if offset > len(out) {
+		offset = len(out)
+	}
+	out = out[offset:]
+	if filter.Limit > 0 && filter.Limit < len(out) {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
@@ -424,6 +448,136 @@ func TestSyncEndpoints_UnwiredIs503(t *testing.T) {
 		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertErrorCode(t, rec, "dependency_unavailable")
+}
+
+// syncJobsPage 是列表读面的线格式（测试侧只关心这三个字段）。
+type syncJobsPage struct {
+	Jobs   []syncjob.Job `json:"jobs"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
+func decodeSyncJobsPage(t *testing.T, rec *httptest.ResponseRecorder) syncJobsPage {
+	t.Helper()
+	var body syncJobsPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode list body: %v (body %s)", err, rec.Body.String())
+	}
+	return body
+}
+
+// TestListSyncJobs_DefaultsAndEcho 钉住加法的形状：不传参数时 jobs 仍是 []、
+// 并回显 limit=50 / offset=0；传边界值 200 也接受。
+func TestListSyncJobs_DefaultsAndEcho(t *testing.T) {
+	rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodGet, "/api/sync/jobs", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"jobs":[]`) {
+		t.Fatalf("空列表必须是 [] 而不是 null：%s", rec.Body.String())
+	}
+	body := decodeSyncJobsPage(t, rec)
+	if body.Limit != defaultSyncJobsLimit || body.Offset != 0 {
+		t.Fatalf("回显 = limit:%d offset:%d，want %d/0", body.Limit, body.Offset, defaultSyncJobsLimit)
+	}
+
+	rec = doJSON(t, syncServer(newFakeSyncStore()), http.MethodGet, "/api/sync/jobs?limit=200&offset=100000", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("边界 limit=200 status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body = decodeSyncJobsPage(t, rec)
+	if body.Limit != maxSyncJobsLimit || body.Offset != 100000 {
+		t.Fatalf("回显 = limit:%d offset:%d，want %d/100000", body.Limit, body.Offset, maxSyncJobsLimit)
+	}
+	if len(body.Jobs) != 0 {
+		t.Fatalf("offset 超过末页应为空数组，got %d 条", len(body.Jobs))
+	}
+}
+
+// TestListSyncJobs_InvalidPaginationParams 钉住「不静默回退」：坏值一律 400
+// invalid_parameter，报文点名参数与边界（`docs/api-schema.md` §1 同表）。
+func TestListSyncJobs_InvalidPaginationParams(t *testing.T) {
+	cases := []struct{ name, query, wantMsg string }{
+		{"limit zero", "limit=0", "limit must be >= 1"},
+		{"limit negative", "limit=-1", "limit must be >= 1"},
+		{"limit over max", "limit=201", "limit must be <= 200"},
+		{"limit not integer", "limit=abc", "limit must be an integer"},
+		{"offset negative", "offset=-1", "offset must be >= 0"},
+		{"offset not integer", "offset=abc", "offset must be an integer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doJSON(t, syncServer(newFakeSyncStore()), http.MethodGet, "/api/sync/jobs?"+tc.query, "")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertErrorCode(t, rec, "invalid_parameter")
+			var body struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v (body %s)", err, rec.Body.String())
+			}
+			if !strings.Contains(body.Error.Message, tc.wantMsg) {
+				t.Fatalf("message = %q，want 含 %q", body.Error.Message, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestListSyncJobs_PaginationCoversAllWithoutDuplicates 是「翻页不重不漏」的
+// 实证：7 条作业里有并列 created_at（前三行同一时刻），只按时间排序时并列
+// 行的顺序不稳定，正是 offset 分页重复/漏行的触发条件。按 limit=2 翻完，
+// 断言合集 = 全量且每条恰好出现一次。
+func TestListSyncJobs_PaginationCoversAllWithoutDuplicates(t *testing.T) {
+	store := newFakeSyncStore()
+	base := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	const total = 7
+	want := map[string]bool{}
+	for i := 0; i < total; i++ {
+		job, err := syncjob.NewJob("ohlcv_daily", map[string]any{"symbols": []any{"600519.SH"}}, 1)
+		if err != nil {
+			t.Fatalf("NewJob: %v", err)
+		}
+		job.ID = fmt.Sprintf("job-%02d", i)
+		job.CreatedAt = base.Add(time.Duration(i/3) * time.Minute) // 0,1,2 同一时刻；3,4,5 同一时刻
+		store.jobs[job.ID] = job
+		want[job.ID] = true
+	}
+
+	seen := map[string]int{}
+	const page = 2
+	for offset := 0; ; offset += page {
+		rec := doJSON(t, syncServer(store), http.MethodGet,
+			fmt.Sprintf("/api/sync/jobs?limit=%d&offset=%d", page, offset), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("offset=%d status = %d, body = %s", offset, rec.Code, rec.Body.String())
+		}
+		body := decodeSyncJobsPage(t, rec)
+		if body.Limit != page || body.Offset != offset {
+			t.Fatalf("offset=%d 回显 = limit:%d offset:%d", offset, body.Limit, body.Offset)
+		}
+		if len(body.Jobs) == 0 {
+			break
+		}
+		for _, job := range body.Jobs {
+			if !want[job.ID] {
+				t.Fatalf("offset=%d 出现未知作业 %q", offset, job.ID)
+			}
+			seen[job.ID]++
+		}
+	}
+
+	if len(seen) != total {
+		t.Fatalf("翻页覆盖 %d 条，want %d（漏行）", len(seen), total)
+	}
+	for id := range want {
+		if seen[id] != 1 {
+			t.Fatalf("作业 %q 出现 %d 次（翻页重复/漏行）", id, seen[id])
+		}
+	}
 }
 
 // assertErrorCode 断言错误体里的 code（线格式是 {"error":{"code":...}}）。

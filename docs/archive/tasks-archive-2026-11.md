@@ -29,6 +29,7 @@
 | X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
 | X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
 | X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（三信号 + 摘除前置条件） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
+| DATA-PAGINATION-ALIGN | 列表分页统一：`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显 + `created_at DESC, id DESC` 稳定排序 | 2026-11-12 | 见本条 | [施工记录](#DATA-PAGINATION-ALIGN) |
 
 ---
 
@@ -924,6 +925,7 @@
 > - **落在哪**：`docs/api-schema.md` §1 路由表末尾加一条显式「分页口径不一致（登记，不改行为）」；frontmatter 同批注明。这样读文档的人不用翻 handler 猜。
 > - **其它仓的核查结论（避免下一次重复调查）**：strategy 的 `/promotions` 与 `/evidence` 都是 `limit + offset`（`internal/httpapi/api.go:372/380`、`evidence.go:143/148`）；risk / analytics / orchestration / broker / agent / contracts 无 `offset` 分页面（analytics 明确「不提供列表端点」）；core 的列表面亦无 `offset`（`/api/backtest` 只 limit），core 禁碰，属 core 侧重开立单的事。**没有发现同一仓内两套分页互相矛盾的第二个样本。**
 > - **验收**：纯文档改动；`docs/api-schema.md` 新增段落引用了可复核的源码行号，未改任何 handler。
+> - **后续（同日 2026-11-12）**：本条登记项已由 [`DATA-PAGINATION-ALIGN`](#DATA-PAGINATION-ALIGN) 施工收口——`/api/sync/jobs` 补 `offset` 与回显，两端点口径统一；本记录的差异描述仅作历史证据保留。**注意：本仓之外（strategy 的 `/promotions`、core 的 `/api/backtest`）的同类差异未动，仍按各自仓立单。**
 
 <a id="X-PROBE-NAMING"></a>
 ### X-PROBE-NAMING（data 腿）· `/health` → `/healthz` 规范名 + 过渡弃用别名（跨仓伞 `tellurion:X-PROBE-NAMING`）
@@ -940,3 +942,17 @@
 > - **消费者核查（非 core）**：全工作区 `grep 8081/health` 的非 core 命中只有 `tellurion-agent:docs/hermes/e2e-acceptance-test.md:48` 一处，已改打 `/healthz`（agent 同批单独 commit）；其余均为本仓自身（已改）或历史归档（不改写）。
 > - **core 两处消费者（只记录，不动）**：`tellurion:docker-compose.yml:160`（`curl -f http://localhost:8081/health`）与 `tellurion:tools/local-stack.sh:82`；core 改打 `/healthz` 之前，别名**不得删**，core 侧改动按裁决另立单项。
 > - **边界**：只动本仓；`quant-trading` / `quant-trading-agent` 是历史仓，不在本次 12 仓范围，未碰。
+
+<a id="DATA-PAGINATION-ALIGN"></a>
+### DATA-PAGINATION-ALIGN · 两个列表端点分页口径统一（`/api/evidence` vs `/api/sync/jobs`）[P2] ✅（2026-11-12）
+
+> **施工记录（2026-11-12）**：
+> - **立案→施工**：`X-LOW-CLEANUP` 当日只登记差异（`e700080`）；本条随后按六字段单施工并当日收口，原单正文已从 `docs/TASKS.md` 移入本节（上一条）。
+> - **形状（加法）**：`GET /api/sync/jobs` 补 `offset`（缺省 0）；`limit` 保持缺省 50、补上限 200；响应 `{jobs}` → `{jobs, limit, offset}`，**`jobs` 字段名、元素形状与位置不变**，新字段只追加在尾部。
+> - **非法参数定死（不静默回退）**：`limit=0` / 负数 → 400 `invalid_parameter`、message `serving: invalid parameter: limit must be >= 1`；`limit>200` → 400 `… limit must be <= 200`；`limit` 非整数（`abc` / `1.5`）→ 400 `… limit must be an integer`；`offset<0` → 400 `… offset must be >= 0`；`offset` 非整数 → 400 `… offset must be an integer`。逐条写进 `docs/api-schema.md` §1 分页表，单测 `TestListSyncJobs_InvalidPaginationParams` 六个子例逐一断言状态码 + `code` + message。
+> - **排序稳定（真正的漏行风险）**：`ORDER BY created_at DESC` → `created_at DESC, id DESC`；`created_at` 允许并列，`id` 作稳定 tie-breaker，否则 offset 翻页在并列行上会重复/漏行。
+> - **不重不漏实证**：① handler 腿 `TestListSyncJobs_PaginationCoversAllWithoutDuplicates`——7 条作业、三组并列 `created_at`，`limit=2` 翻完，断言覆盖全量且每条恰好一次；② 真 PG 腿 `TestPGStoreListJobsOffsetCoversAllWithoutDuplicates`——临时 `postgres:16-alpine` 容器（`DATA_TEST_DSN` 指向 `*_test` 库），5 行 `created_at` 全改成同一值，`limit=2&offset=0/2/4` 翻完，断言合集 = 全量、无重复，`PASS`。
+> - **消费方回归（实核）**：`tellurion-ui:web/src/api/sync.ts:36-41` 的 `listSyncJobs` 只传 `status` / `limit`，不传 `offset` ⇒ 请求与解析不变；`tellurion:tools/sync_all.sh:128` 无参数 `GET /api/sync/jobs` ⇒ 仍按缺省 50 条；UI e2e `e2e/tests/data-sync.spec.ts:92` 不传新参数。后端空列表仍序列化为 `"jobs":[]`（单测钉住）。
+> - **门**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` / `staticcheck ./...` / `go test ./... -count=1` 全绿；PG 腿用临时容器单独跑通后即停并删除。
+> - **重开条件（改 cursor）**：出现全量遍历 / 审计导出 / 深翻页消费者，或 `sync_jobs` 数据量让 offset 扫描成为实际问题时，另立 keyset 单（`(created_at, id)` 复合游标），回显字段改 `next_cursor`。
+> - **边界**：只动本仓读面参数与 SQL；UI 若加「下一页」交互归 UI 单独立项；core 只反代单条证据，无列表消费。
