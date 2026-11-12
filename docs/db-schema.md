@@ -398,12 +398,12 @@ session, sessionid, privatekey
 - 索引：`pg_indexes WHERE schemaname='market'`（含非约束的唯一索引）
 - 对照基准：`internal/schema/market.go`（21 张）+ `internal/schema/visible_at.go`（A 集 12 张的 `visible_at`）
 
-**总览**：`market` schema 共 22 张表 = 本仓 DDL 21 张 + core 持有的 `market.index_daily`。逐项核对后 **21/21 一致**，**1 处漂移**：`market.trading_calendar` 的收紧约束未在既有库落地（见下）。**全库 0 个外键**，DDL 也不声明外键 ⇒ 一致（跨表引用由应用层保证）。DDL 声明的 16 个业务索引（含 1 个部分唯一索引）全部在位，无多余业务索引。
+**总览**：`market` schema 共 22 张表 = 本仓 DDL 21 张 + core 持有的 `market.index_daily`。逐项核对后 **22/22 一致**；核对曾发现 **1 处漂移**（`market.trading_calendar` 的收紧约束未在既有库落地），已于 2026-11-12 由启动期受保护回填补齐（见下）。**全库 0 个外键**，DDL 也不声明外键 ⇒ 一致（跨表引用由应用层保证）。DDL 声明的 16 个业务索引（含 1 个部分唯一索引）全部在位，无多余业务索引。
 
 | 表 | 主键 | 唯一 / 其他约束 | NOT NULL / DEFAULT | CHECK | 结论 |
 |---|---|---|---|---|---|
 | `stocks` | `symbol` | 无 | `name` / `exchange` NOT NULL；`status` DEFAULT `'active'`；`created_at` / `updated_at` DEFAULT `now()` | 无 | 一致（`delist_date` 列已由幂等 ALTER 前滚） |
-| `trading_calendar` | `trade_date` | 无 | `trade_date` NOT NULL；**`exchange` 可空** DEFAULT `'SSE'`；`is_trading_day` 可空 DEFAULT `true` | **实况无** | **漂移**：DDL（`market.go:324-326`）要求 `exchange NOT NULL` + `ck_trading_calendar_exchange`，既有库两者皆缺 |
+| `trading_calendar` | `trade_date` | 无 | `trade_date` NOT NULL；`exchange` NOT NULL DEFAULT `'SSE'`；`is_trading_day` 可空 DEFAULT `true` | `ck_trading_calendar_exchange` | **曾漂移、2026-11-12 已回填**：既有库原缺 `NOT NULL` + `CHECK`，由启动期受保护回填补齐（见下） |
 | `ohlcv_daily_qfq` | `(symbol, trade_date)` | 无 | 价格 / 量 NOT NULL；`turnover` / `trade_days` DEFAULT `0`；`created_at` DEFAULT `now()` | 无 | 一致 |
 | `adjust_baseline_changes` | `id` | 部分唯一索引 `uq_adjust_baseline_bootstrap (symbol) WHERE reason='bootstrap'` | `symbol` / `base_date` / `base_factor` / `reason` NOT NULL；`changed_at` DEFAULT `now()` | `ck_adjust_baseline_reason`、`ck_adjust_baseline_factor` | 一致 |
 | `stock_fundamentals` | `(ts_code, trade_date)` | 无 | `ts_code` / `trade_date` NOT NULL；`available_date` 为生成列 | 无 | 一致 |
@@ -427,10 +427,11 @@ session, sessionid, privatekey
 
 **`visible_at` 分布**：只出现在 A 集 12 张（`announcements` / `capital_flow` / `global_ohlcv` / `hot_search` / `limit_up_pool` / `news` / `ohlcv_daily_qfq` / `ohlcv_minute` / `realtime_quote` / `sectors` / `stock_sector_map` / `top_list`），B 集（`market_activity` 用 `as_of`）与 C 集（`stocks` / `trading_calendar` / `index_constituents` / `dividends` / `splits` / `stock_fundamentals` / `daily_basic`）均无 ⇒ 与 `visible_at.go` 的口径一致。
 
-**漂移处置（`trading_calendar`）**：
+**漂移处置（`trading_calendar`，2026-11-12 已回填）**：
 
-- 成因：既有库建于 2026-11-10，`exchange` 的 `NOT NULL` + `CHECK` 是 ADR-0009（2026-11-11）之后加进 DDL 的；`CREATE TABLE IF NOT EXISTS` 不会回改既有表，本仓也没有通用 `ALTER` 迁移通道。
-- 现状风险：表内 1,096 行 `exchange` 全为 `'SSE'`、无 NULL，**当前数据满足收紧后的约束**；误用「按交易所分片写」由写侧 `ErrMixedTradingExchanges` 拦截，不依赖 CHECK。
-- 结论：ADR-0009 已明确「CHECK 只对新建表生效，既有库靠写侧守卫」⇒ **不作为缺陷处理，不擅自 ALTER**（本单 ④ 也禁止改 DDL 形状）。若将来重建库或做正式迁移，再一并补 `SET NOT NULL` + `ADD CONSTRAINT`（届时先 `SELECT` 复核分布）。
+- 成因：既有库建于 2026-11-10，`exchange` 的 `NOT NULL` + `CHECK` 是 ADR-0009（2026-11-11）之后加进 DDL 的；`CREATE TABLE IF NOT EXISTS` 不会回改既有表。
+- 回填路径：启动期 `schema.ApplyGuardedConstraints`（ADR-0009「既有库回填路径」）——先查 `pg_constraint` / `pg_attribute` 判幂等，再 `SELECT` 校验无 NULL、无越界值，通过才 `SET NOT NULL` + `ADD CONSTRAINT`；校验不通过只打 **WARN**（违规行数 + 样例）、不加约束、服务照常启动。
+- 实测：2026-11-12 重启 data-service 后，`ck_trading_calendar_exchange` 在位、`exchange.attnotnull = true`；1,096 行全为 `'SSE'`，回填未改任何数据。
+- 三处同步：`internal/schema/market.go`（`CREATE TABLE` 定义）→ `internal/schema/guard.go` + `cmd/dataservice` 的 `applySchema`（启动执行）→ 本节（核对基准）。以后若再加「建表定义里有、既有库可能缺」的约束，三处一起改，并补 PG 用例。
 
 

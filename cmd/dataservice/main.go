@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ruoxizhnya/tellurion-kit/auth"
@@ -542,7 +543,8 @@ func hostnameOr(fallback string) (string, error) {
 }
 
 // retrySchema 在降级启动后重放本仓 DDL，成功即翻 availability 并退出。
-// 只重放 `schema.Statements()`（幂等）；不碰一次性回填。
+// 只重放 `schema.Statements()`（幂等）；不碰一次性回填（`schema.BackfillStatements()`）。
+// 受保护的约束回填随 `applySchema` 一起重跑——它本身幂等，且脏数据只告警。
 func retrySchema(ctx context.Context, pool *pgxpool.Pool, ready *atomic.Bool) {
 	ticker := time.NewTicker(schemaRetryInterval)
 	defer ticker.Stop()
@@ -587,11 +589,13 @@ func readinessCheck(pool *pgxpool.Pool) func(context.Context) error {
 // execer 是执行 DDL 的最小面（`*pgxpool.Pool` 满足它）。
 type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// applySchema 按序执行本仓的建表/加列语句（幂等，可重入）。
+// applySchema 按序执行本仓的建表/加列语句（幂等，可重入），再跑受保护的
+// 约束回填（见 `schema.ApplyGuardedConstraints` 与 ADR-0009）。
 //
-// 不跑回填：见文件头注释。
+// 回填在数据违规时只 WARN、不返回 error：历史脏库不许把启动打死。
 func applySchema(ctx context.Context, db execer) error {
 	for i, stmt := range schema.Statements() {
 		if strings.TrimSpace(stmt) == "" {
@@ -601,5 +605,7 @@ func applySchema(ctx context.Context, db execer) error {
 			return fmt.Errorf("schema statement %d failed: %w", i+1, err)
 		}
 	}
-	return nil
+	return schema.ApplyGuardedConstraints(ctx, db, func(format string, args ...any) {
+		log.Printf("WARN: "+format, args...)
+	})
 }
