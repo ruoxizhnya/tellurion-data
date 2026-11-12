@@ -191,6 +191,9 @@ func TestStatements_AreIdempotent(t *testing.T) {
 			assert.Contains(t, upper, "IF NOT EXISTS", s)
 		case strings.HasPrefix(upper, "CREATE INDEX"):
 			assert.Contains(t, upper, "IF NOT EXISTS", s)
+		case strings.HasPrefix(upper, "CREATE UNIQUE INDEX"):
+			// 局部唯一索引（如 adjust_baseline_changes 的 bootstrap 唯一）同样是幂等 DDL。
+			assert.Contains(t, upper, "IF NOT EXISTS", s)
 		case strings.HasPrefix(upper, "ALTER TABLE"):
 			assert.Contains(t, upper, "IF EXISTS", s)
 			assert.Contains(t, upper, "IF NOT EXISTS", s)

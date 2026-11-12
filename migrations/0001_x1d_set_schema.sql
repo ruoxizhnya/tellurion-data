@@ -37,6 +37,7 @@ BEGIN
             ('ingest', 'raw'),
             ('ingest', 'sync_jobs'),
             ('ingest', 'sync_schedules'),
+            ('market', 'adjust_baseline_changes'),
             ('market', 'announcements'),
             ('market', 'capital_flow'),
             ('market', 'dividends'),

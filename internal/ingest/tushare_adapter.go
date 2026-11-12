@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
@@ -122,8 +123,11 @@ func (a *TushareAdapter) fetchDaily(ctx context.Context, req FetchRequest) (*Fet
 	items := make([]DataItem, 0)
 	startStr := req.StartDate.Format("20060102")
 	endStr := req.EndDate.Format("20060102")
+	// baseline_date 只在显式改复权基准时出现（ADR-0011），且入队期已要求
+	// overwrite=true（`syncjob.FetchRequestFromParams`）。
+	baselineDate := extraString(req.Extra, "baseline_date")
 	for _, sym := range req.Symbols {
-		bars, err := a.client.FetchDailyOHLCV(ctx, sym, startStr, endStr)
+		bars, err := a.client.FetchDailyOHLCVWithBaseline(ctx, sym, startStr, endStr, baselineDate)
 		if err != nil {
 			return nil, fmt.Errorf("tushare fetch %s: %w", sym, err)
 		}
@@ -148,6 +152,17 @@ func (a *TushareAdapter) fetchDaily(ctx context.Context, req FetchRequest) (*Fet
 		Items:     items,
 		FetchedAt: time.Now().UTC(),
 	}, nil
+}
+
+// extraString 读 Extra 里的字符串项；缺省/类型不对返回空串。
+func extraString(extra map[string]interface{}, name string) string {
+	if extra == nil {
+		return ""
+	}
+	if s, ok := extra[name].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 func (a *TushareAdapter) fetchFundamentals(ctx context.Context, req FetchRequest) (*FetchResponse, error) {

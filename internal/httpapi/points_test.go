@@ -29,7 +29,11 @@ type capturedSink struct {
 	err      error
 }
 
-func (s *capturedSink) BulkInsert(_ context.Context, dataType string, points []store.Point) (int, int, error) {
+func (s *capturedSink) BulkInsert(ctx context.Context, dataType string, points []store.Point) (int, int, error) {
+	return s.BulkInsertWithOptions(ctx, dataType, points, store.BulkWriteOptions{})
+}
+
+func (s *capturedSink) BulkInsertWithOptions(_ context.Context, dataType string, points []store.Point, _ store.BulkWriteOptions) (int, int, error) {
 	s.calls++
 	s.dataType = dataType
 	s.points = append([]store.Point(nil), points...)

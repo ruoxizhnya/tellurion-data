@@ -52,14 +52,20 @@ type fakeStore struct {
 	calls     int
 	points    []UnifiedDataPoint
 	dataType  string
+	opts      BulkWriteOptions
 	persisted int
 	skipped   int
 	err       error
 }
 
-func (f *fakeStore) BulkInsert(_ context.Context, dataType string, points []UnifiedDataPoint) (int, int, error) {
+func (f *fakeStore) BulkInsert(ctx context.Context, dataType string, points []UnifiedDataPoint) (int, int, error) {
+	return f.BulkInsertWithOptions(ctx, dataType, points, BulkWriteOptions{})
+}
+
+func (f *fakeStore) BulkInsertWithOptions(_ context.Context, dataType string, points []UnifiedDataPoint, opts BulkWriteOptions) (int, int, error) {
 	f.calls++
 	f.dataType = dataType
+	f.opts = opts
 	f.points = append([]UnifiedDataPoint(nil), points...)
 	if f.err != nil {
 		return 0, 0, f.err
@@ -123,6 +129,27 @@ func TestETLProcess_GatesAndWritesDeduplicatedPoints(t *testing.T) {
 		assert.Equal(t, clock(), p.IngestTime, "IngestTime 必须来自注入时钟")
 	}
 	assert.Equal(t, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC), store.points[0].VisibleAt)
+}
+
+// overwrite 只在显式 true 时下传；缺省保持「同键异内容整批回滚」的审计语义。
+func TestETLProcess_ForwardsOverwriteOption(t *testing.T) {
+	decl := validDecl(DataTypeOHLCDaily)
+	adapter := newFakeAdapter("src", DataTypeOHLCDaily, decl,
+		tradeTimePoint("600519.SH", map[string]interface{}{"close": 10.0}))
+	reg := NewRegistry()
+	require.NoError(t, reg.Register(adapter))
+
+	overwriteStore := &fakeStore{}
+	_, err := NewETLPipeline(reg, overwriteStore).Process(context.Background(),
+		FetchRequest{DataType: DataTypeOHLCDaily, Extra: map[string]interface{}{"overwrite": true}}, passthroughNormalizer)
+	require.NoError(t, err)
+	assert.True(t, overwriteStore.opts.Overwrite, "extra.overwrite=true 必须下传到写面")
+
+	defaultStore := &fakeStore{}
+	_, err = NewETLPipeline(reg, defaultStore).Process(context.Background(),
+		FetchRequest{DataType: DataTypeOHLCDaily}, passthroughNormalizer)
+	require.NoError(t, err)
+	assert.False(t, defaultStore.opts.Overwrite, "缺省不许覆盖")
 }
 
 // 漏锚点 ⇒ 整批拒收，**store 一次都不许被调用**。这是 D3 的核心用例：

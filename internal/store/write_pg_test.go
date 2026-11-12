@@ -132,6 +132,47 @@ func TestPG_BulkInsert_ConflictingContentRollsBackWholeBatch(t *testing.T) {
 		"整批回滚：新行不得落库")
 }
 
+// 覆盖路径（ADR-0011）：基准变更后允许重写同主键旧行，且重跑幂等
+// （行数不变、内容哈希不变）。这是「历史数据只能增不能改」的解法。
+func TestPG_BulkInsertWithOptions_OverwriteRewritesAndIsIdempotent(t *testing.T) {
+	pool := pgPool(t)
+	scratch := scratchSchema(t, pool)
+	w := newPGWriter(t, pool, scratch)
+	ctx := context.Background()
+	table := scratch + ".ohlcv_daily_qfq"
+	hashSQL := "SELECT md5(string_agg(symbol || '|' || trade_date || '|' || close::text, ',' ORDER BY trade_date)) FROM " + table
+
+	base := pgPoint("600519.SH", 1.5)
+	_, _, err := w.BulkInsert(ctx, "ohlcv_daily", []store.Point{base})
+	require.NoError(t, err)
+
+	rewritten := pgPoint("600519.SH", 9.9) // 基准变更后的新价格
+	persisted, skipped, err := w.BulkInsertWithOptions(ctx, "ohlcv_daily",
+		[]store.Point{rewritten}, store.BulkWriteOptions{Overwrite: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, persisted)
+	assert.Zero(t, skipped)
+	assert.Equal(t, 1, countRows(t, pool, table), "覆盖写不许新增行")
+
+	var closeVal float64
+	require.NoError(t, pool.QueryRow(ctx, "SELECT close FROM "+table+" WHERE symbol = $1", "600519.SH").Scan(&closeVal))
+	assert.Equal(t, 9.9, closeVal, "旧行必须被新口径覆盖")
+
+	var hashBefore string
+	require.NoError(t, pool.QueryRow(ctx, hashSQL).Scan(&hashBefore))
+
+	// 重跑同一批（换 ingest_time）：行数与内容哈希都不许变。
+	rewritten.IngestTime = rewritten.IngestTime.Add(24 * time.Hour)
+	_, _, err = w.BulkInsertWithOptions(ctx, "ohlcv_daily",
+		[]store.Point{rewritten}, store.BulkWriteOptions{Overwrite: true})
+	require.NoError(t, err)
+
+	var hashAfter string
+	require.NoError(t, pool.QueryRow(ctx, hashSQL).Scan(&hashAfter))
+	assert.Equal(t, hashBefore, hashAfter, "重跑两次内容哈希必须不变")
+	assert.Equal(t, 1, countRows(t, pool, table))
+}
+
 // 漏 visible_at ⇒ 整批拒收，库里零行。
 func TestPG_BulkInsert_RejectsBatchWithoutVisibleAt(t *testing.T) {
 	pool := pgPool(t)

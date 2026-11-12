@@ -21,6 +21,8 @@ func TestLiveDailyOHLCV(t *testing.T) {
 	}
 
 	c := NewDefault(token)
+	// 线上腿同样需要账本（ADR-0011）；这里用内存替身，不碰任何库。
+	c.Baselines = newMemLedger()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

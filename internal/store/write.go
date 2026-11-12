@@ -262,6 +262,14 @@ func (w *Writer) specFor(dataType string) (writeSpec, error) {
 	return writeSpec{}, fmt.Errorf("%w: %q", ErrUnmappedDataType, dataType)
 }
 
+// BulkWriteOptions 是写面选项。
+type BulkWriteOptions struct {
+	// Overwrite 为 true 时同主键旧行被**覆盖**（`ON CONFLICT DO UPDATE`），
+	// 用于复权基准变更后的重算（ADR-0011）：重跑幂等（行数不变、内容稳定）。
+	// 默认 false 保持「冲突即整批回滚」的审计语义。
+	Overwrite bool
+}
+
 // BulkInsert 写一批点。返回值口径：
 //   - persisted = **请求点已就位**（新插入 + 同内容 no-op），不是「新增行数」；
 //   - skipped = 因载荷不合法被跳过的行（与 core 同形；缺 visible_at 不在此列，
@@ -269,6 +277,11 @@ func (w *Writer) specFor(dataType string) (writeSpec, error) {
 //
 // 失败即整批回滚：`ErrContentConflict` 之前已插入的行也一并撤销。
 func (w *Writer) BulkInsert(ctx context.Context, dataType string, points []Point) (int, int, error) {
+	return w.BulkInsertWithOptions(ctx, dataType, points, BulkWriteOptions{})
+}
+
+// BulkInsertWithOptions 是 `BulkInsert` 带选项的形态（Overwrite 见类型注释）。
+func (w *Writer) BulkInsertWithOptions(ctx context.Context, dataType string, points []Point, opts BulkWriteOptions) (int, int, error) {
 	if len(points) == 0 {
 		return 0, 0, nil
 	}
@@ -317,6 +330,9 @@ func (w *Writer) BulkInsert(ctx context.Context, dataType string, points []Point
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	insertSQL := buildInsertSQL(w.prefix+"."+spec.Table, spec.Columns)
+	if opts.Overwrite {
+		insertSQL = buildUpsertSQL(w.prefix+"."+spec.Table, spec.Columns, spec.PK)
+	}
 	compareSQL := buildCompareSQL(w.prefix+"."+spec.Table, spec.Columns, spec.DateColumns)
 	persisted := 0
 	for i, r := range rows {
@@ -356,6 +372,29 @@ func buildInsertSQL(table string, cols []string) string {
 	}
 	return "INSERT INTO " + table + " (" + strings.Join(cols, ", ") + ") VALUES (" +
 		strings.Join(ph, ", ") + ") ON CONFLICT DO NOTHING"
+}
+
+// buildUpsertSQL 构造 `INSERT ... ON CONFLICT (pk) DO UPDATE SET 非主键列`。
+//
+// 只有显式 `overwrite=true` 才走这条：基准变更后的重算需要能改写历史行，
+// 且必须幂等（同一批重跑两次行数与内容都不变）。非主键列整列覆盖——
+// `ingest_time` / `visible_at` 反映本次写入，不保留旧值。
+func buildUpsertSQL(table string, cols, pk []string) string {
+	pkSet := make(map[string]bool, len(pk))
+	for _, c := range pk {
+		pkSet[c] = true
+	}
+	ph := make([]string, len(cols))
+	updates := make([]string, 0, len(cols))
+	for i, c := range cols {
+		ph[i] = fmt.Sprintf("$%d", i+1)
+		if !pkSet[c] {
+			updates = append(updates, c+" = EXCLUDED."+c)
+		}
+	}
+	return "INSERT INTO " + table + " (" + strings.Join(cols, ", ") + ") VALUES (" +
+		strings.Join(ph, ", ") + ") ON CONFLICT (" + strings.Join(pk, ", ") +
+		") DO UPDATE SET " + strings.Join(updates, ", ")
 }
 
 // buildCompareSQL 构造「整行内容相同」的存在性查询。

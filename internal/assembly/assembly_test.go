@@ -30,14 +30,20 @@ type recordingSink struct {
 	calls     int
 	dataType  string
 	batches   [][]store.Point
+	opts      store.BulkWriteOptions
 	persisted int
 	skipped   int
 	err       error
 }
 
-func (s *recordingSink) BulkInsert(_ context.Context, dataType string, points []store.Point) (int, int, error) {
+func (s *recordingSink) BulkInsert(ctx context.Context, dataType string, points []store.Point) (int, int, error) {
+	return s.BulkInsertWithOptions(ctx, dataType, points, store.BulkWriteOptions{})
+}
+
+func (s *recordingSink) BulkInsertWithOptions(_ context.Context, dataType string, points []store.Point, opts store.BulkWriteOptions) (int, int, error) {
 	s.calls++
 	s.dataType = dataType
+	s.opts = opts
 	s.batches = append(s.batches, points)
 	if s.err != nil {
 		return 0, 0, s.err
@@ -105,6 +111,23 @@ func point(symbol string, tradeTime time.Time) Point {
 		Source:    "fake",
 		Data:      map[string]any{"close": json.Number("12.5")},
 	}
+}
+
+// 写面选项要原样翻译过去：ingest 的 overwrite 必须抵达 store。
+func TestNewInserterForwardsOverwriteOption(t *testing.T) {
+	sink := &recordingSink{}
+	ins := NewInserter(sink)
+	dp := ingest.NewUnifiedDataPoint("600519.SH", "fake", dataprotocol.DataTypeOHLCDaily,
+		fixedClock(), fixedClock(), map[string]any{"close": 1.0})
+
+	_, _, err := ins.BulkInsertWithOptions(context.Background(), dataprotocol.DataTypeOHLCDaily,
+		[]ingest.UnifiedDataPoint{dp}, ingest.BulkWriteOptions{Overwrite: true})
+	require.NoError(t, err)
+	assert.True(t, sink.opts.Overwrite, "overwrite 必须抵达写面")
+
+	_, _, err = ins.BulkInsert(context.Background(), dataprotocol.DataTypeOHLCDaily, []ingest.UnifiedDataPoint{dp})
+	require.NoError(t, err)
+	assert.False(t, sink.opts.Overwrite, "BulkInsert 等价于 Overwrite=false")
 }
 
 func TestNew_RejectsNilRegistryAndSink(t *testing.T) {

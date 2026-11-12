@@ -8,6 +8,7 @@ package tushare
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -116,17 +117,30 @@ func (c *Client) normalizeStocks(resp *response) ([]market.Stock, int) {
 //
 // 复权口径（Tushare 官方 adj_factor 文档示例 4，**别凭记忆改**）：
 //
-//	前复权价 = 当日价格 × 当日复权因子 / 区间最新复权因子
+//	前复权价 = 当日价格 × 当日复权因子 / 该 symbol 的全局基准因子
 //
 // 三个必须知道的性质：
 //   - adj_factor 是累计后复权因子；停牌日因子会补齐而 daily 没有行情，
 //     两个序列按日期不对齐 ⇒ 逐日取因子，取不到的那天**跳过**而不是补 1
 //     （补 1 等于宣称「这天没除权」，会在除权日附近造出假跳空）；
-//   - qfq 基准是**区间内**最新交易日，将来同步到更晚日期时历史 qfq 会整体
-//     变动——这是复权口径的固有性质，不是本实现引入的；
+//   - 基准因子由 `market.adjust_baseline_changes` 固定（ADR-0011），**不随
+//     请求窗口变化**：同一 (symbol, trade_date) 的 qfq 价在任意窗口中一致；
 //   - vol 手→股要 round（浮点表示误差会让下游整数校验判整批损坏），
 //     amount 千元→CNY 不 round（源侧有元以下真实精度）。
 func (c *Client) FetchDailyOHLCV(ctx context.Context, symbol, startDate, endDate string) ([]market.OHLCV, error) {
+	return c.FetchDailyOHLCVWithBaseline(ctx, symbol, startDate, endDate, "")
+}
+
+// FetchDailyOHLCVWithBaseline 同 FetchDailyOHLCV，但允许显式改基准日。
+//
+// baselineDate 非空 = 人工改基准（ADR-0011，必须配合 `overwrite=true` 的
+// 作业）；空 = 用该 symbol 已固定的全局基准。改基准会向账本追加一条
+// `previous_*` 齐全的 manual 记录。
+func (c *Client) FetchDailyOHLCVWithBaseline(ctx context.Context, symbol, startDate, endDate, baselineDate string) ([]market.OHLCV, error) {
+	if c.Baselines == nil {
+		return nil, fmt.Errorf("tushare: %s: 复权基准账本未装配（qfq 基准必须全局固定，见 ADR-0011）", symbol)
+	}
+
 	params := map[string]interface{}{
 		"ts_code":    symbol,
 		"start_date": formatDate(startDate),
@@ -142,7 +156,16 @@ func (c *Client) FetchDailyOHLCV(ctx context.Context, symbol, startDate, endDate
 		return nil, err
 	}
 
-	records, skipped := c.normalizeDailyOHLCV(resp, symbol, factors)
+	baseFactor, err := c.resolveBaseline(ctx, symbol, factors, baselineDate)
+	if err != nil {
+		return nil, err
+	}
+	if baseFactor <= 0 {
+		// 窗口内一个因子都没有：空窗口是合法的 0 行，也不该钉一个基准。
+		return nil, nil
+	}
+
+	records, skipped := c.normalizeDailyOHLCV(resp, symbol, factors, baseFactor)
 	// 有行却一行都没归一出来 ⇒ 上游形状变故（典型：adj_factor 整段缺失）。
 	// core 这里只 log warn 然后返回 0 行，等于把「拿不到复权因子」伪装成
 	// 「区间内没有交易」；本仓按同款 fail-loud 口径拒绝。
@@ -183,19 +206,9 @@ func (c *Client) fetchAdjFactors(ctx context.Context, symbol, startDate, endDate
 }
 
 // normalizeDailyOHLCV 把 daily 响应按 qfq 口径转成行；返回 (行, 跳过行数)。
-func (c *Client) normalizeDailyOHLCV(resp *response, symbol string, factors map[string]float64) ([]market.OHLCV, int) {
-	if len(factors) == 0 {
-		return nil, 0
-	}
-	// YYYYMMDD 的字典序 == 时间序。
-	latest := ""
-	for d := range factors {
-		if d > latest {
-			latest = d
-		}
-	}
-	base := factors[latest]
-	if base <= 0 {
+// baseFactor 是该 symbol 的全局基准因子（调用方保证 > 0）。
+func (c *Client) normalizeDailyOHLCV(resp *response, symbol string, factors map[string]float64, baseFactor float64) ([]market.OHLCV, int) {
+	if len(factors) == 0 || baseFactor <= 0 {
 		return nil, 0
 	}
 
@@ -218,7 +231,7 @@ func (c *Client) normalizeDailyOHLCV(resp *response, symbol string, factors map[
 			skipped++
 			continue
 		}
-		scale := f / base
+		scale := f / baseFactor
 		records = append(records, market.OHLCV{
 			Symbol:   symbol,
 			Date:     t,

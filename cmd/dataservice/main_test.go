@@ -207,6 +207,9 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 	for _, want := range []string{
 		"store.NewWriter(store.PoolWriteDB(pool), opts)",
 		"tushareClient = tushare.NewDefault(token)",
+		// 复权基准账本（ADR-0011）：漏了它日线取数会因「账本未装配」响亮失败。
+		"store.NewAdjustBaselineStore(store.PoolBaselineDB(pool), opts)",
+		"tushareClient.Baselines = baselines",
 		"assembly.Registry(transports)",
 		"assembly.New(registry, writer, nil)",
 		// 传输多门（QT-40）：东财无凭证恒装配；Alpha Vantage 从环境变量取 key。
@@ -339,7 +342,13 @@ func TestReapLoopTicksUntilCancel(t *testing.T) {
 // nopSink 只为造出一个「已装配」的 assembly.Writer；本用例不投点。
 type nopSink struct{}
 
-func (nopSink) BulkInsert(context.Context, string, []store.Point) (int, int, error) { return 0, 0, nil }
+func (nopSink) BulkInsert(context.Context, string, []store.Point) (int, int, error) {
+	return 0, 0, nil
+}
+
+func (nopSink) BulkInsertWithOptions(context.Context, string, []store.Point, store.BulkWriteOptions) (int, int, error) {
+	return 0, 0, nil
+}
 
 func readOwnSource(t *testing.T) string {
 	t.Helper()

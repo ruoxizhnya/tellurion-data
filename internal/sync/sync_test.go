@@ -232,6 +232,59 @@ func TestFetchRequestFromParams_RejectsBadDateAndInvertedWindow(t *testing.T) {
 	}
 }
 
+// TestFetchRequestFromParams_GuardsBaselineChange 钉住 ADR-0011 的硬约束：
+// `baseline_date` 只对日线有意义，且必须同时给 `overwrite=true`——没有覆盖
+// 授权的改基准必然在写面撞 `ErrContentConflict` 整批回滚，属于「入队即注定
+// 失败」的参数，必须在入队期拒绝。
+func TestFetchRequestFromParams_GuardsBaselineChange(t *testing.T) {
+	for name, tc := range map[string]struct {
+		jobType string
+		params  map[string]any
+	}{
+		"baseline without overwrite": {"ohlcv_daily", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"baseline_date": "2026-01-06"},
+		}},
+		"baseline with overwrite=false": {"ohlcv_daily", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"baseline_date": "2026-01-06", "overwrite": false},
+		}},
+		"baseline on non-daily job": {"capital_flow", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"baseline_date": "2026-01-06", "overwrite": true},
+		}},
+		"baseline not a string": {"ohlcv_daily", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"baseline_date": 20260106, "overwrite": true},
+		}},
+		"baseline not a date": {"ohlcv_daily", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"baseline_date": "06/01/2026", "overwrite": true},
+		}},
+		"overwrite not a bool": {"ohlcv_daily", map[string]any{
+			"symbols": []any{"600519.SH"},
+			"extra":   map[string]any{"overwrite": "true"},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := FetchRequestFromParams(tc.jobType, tc.params); !errors.Is(err, ErrInvalidParams) {
+				t.Fatalf("err = %v, want ErrInvalidParams", err)
+			}
+		})
+	}
+
+	req, err := FetchRequestFromParams("ohlcv_daily", map[string]any{
+		"symbols": []any{"600519.SH"},
+		"extra":   map[string]any{"baseline_date": "2026-01-06", "overwrite": true},
+	})
+	if err != nil {
+		t.Fatalf("正例被判非法: %v", err)
+	}
+	if req.Extra["baseline_date"] != "2026-01-06" || req.Extra["overwrite"] != true {
+		t.Fatalf("extra 透传 = %v", req.Extra)
+	}
+}
+
 // TestValidateJobScope_RejectsUnscopedPointJob 钉住「空参数 no-op 不入队」：
 // `params={}` 以前会被当作「全市场 + 适配器默认窗口」跑一遍，上游 0 行也记
 // succeeded，库里留下 0/0 的假成功。点位作业必须显式给 symbols 或日期窗口。

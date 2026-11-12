@@ -64,6 +64,11 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 
 > **空参数 no-op 不再入队（2026-11-12）**：点位作业的「范围」在**入队期**校验（`syncjob.ValidateJobScope`，`POST /api/sync/jobs` 与排程创建/更新共用）：`symbols` 非空，或 `start_date` / `end_date` 至少一个，否则 400 `invalid_parameter`。调度 tick 遇到库里遗留的无范围排程只记日志并跳过，不建作业。参考数据三字面值不套这条规则（各自的范围校验在 `ReferenceRunner`）。
 
+> **点位作业的写面开关（`params.extra`，2026-11-12，ADR-0011）**：
+> - `extra.overwrite`（布尔，缺省 `false`）：`true` 时写面用 `ON CONFLICT (pk) DO UPDATE` **覆盖**同主键旧行，用于复权基准变更后的重算；`false` 保持「同内容 no-op / 异内容 `ErrContentConflict` 整批回滚」。类型不是布尔 ⇒ 400 `invalid_parameter`。
+> - `extra.baseline_date`（`YYYY-MM-DD` 或 `YYYYMMDD`）：日线作业的**人工改复权基准**。必须同时给 `extra.overwrite=true`，且只允许 `job_type=ohlcv_daily`，否则 400 `invalid_parameter`（改基准会重写历史行，没有覆盖授权必然撞冲突回滚）。基准日当天必须查得到 `adj_factor`，查不到同样 400。变更会向 `market.adjust_baseline_changes` 追加一条 `reason=manual`、`previous_date/previous_factor` 齐全的记录；同一基准重放不追加（幂等）。
+> - 复权基准本身**全局固定**（首次入库建的基准，或账本里的最新记录），不随 `start_date/end_date` 漂移——同一 `(symbol, trade_date)` 在任意窗口下 `close` 相同。定义与变更流程见 `docs/dataflow.md` §2.3 与 `docs/adr/0011-复权基准全局化与覆盖重算.md`。
+
 > **`Job` 的计数三列（2026-11-12）**：`total_items` = `fetched`；`processed_items` = `persisted + skipped`；成功终态 `failed_items` = 0。三列随结案（`FinishJob`）与 `result` 一起落库，**运行中不逐条更新**——因此队列渲染的 `processed/total` 在作业到达终态前可能仍是 `0/0`；要实时进度看 `GET /api/sync/jobs/{id}/progress`（SSE）的 `progress_percent`。旧实现从未给这三列赋值，导致成功作业也显示 `0/0`。
 
 

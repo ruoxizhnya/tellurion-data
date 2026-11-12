@@ -45,6 +45,31 @@ func MarketStatements() []string {
 			PRIMARY KEY (symbol, trade_date)
 		)`,
 
+		// 复权基准账本（append-only，ADR-0011）
+		//
+		// qfq 的基准日/基准因子必须**全局固定**：同一 (symbol, trade_date) 的
+		// close 不许随「当初用哪个窗口拉的」变化。每次建立（bootstrap）或人工
+		// 改基准（manual）都追加一行，`previous_*` 记录变更前的基准。
+		// 不设 updated_at / 不许 UPDATE：账本只增不改，审计靠这条约束。
+		`CREATE TABLE IF NOT EXISTS market.adjust_baseline_changes (
+			id BIGSERIAL PRIMARY KEY,
+			symbol VARCHAR(20) NOT NULL,
+			base_date DATE NOT NULL,
+			base_factor DOUBLE PRECISION NOT NULL,
+			previous_date DATE,
+			previous_factor DOUBLE PRECISION,
+			reason VARCHAR(16) NOT NULL,
+			changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CONSTRAINT ck_adjust_baseline_reason CHECK (reason IN ('bootstrap', 'manual')),
+			CONSTRAINT ck_adjust_baseline_factor CHECK (base_factor > 0)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_adjust_baseline_symbol_changed
+			ON market.adjust_baseline_changes (symbol, changed_at DESC, id DESC)`,
+		// 每只票最多一条 bootstrap：两个 worker 同时首拉同一只票时，
+		// 并发的「建基准」只能有一个赢家，另一个必须读回赢家的基准。
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_adjust_baseline_bootstrap
+			ON market.adjust_baseline_changes (symbol) WHERE reason = 'bootstrap'`,
+
 		// 分钟线
 		`CREATE TABLE IF NOT EXISTS market.ohlcv_minute (
 			symbol      VARCHAR(20) NOT NULL,

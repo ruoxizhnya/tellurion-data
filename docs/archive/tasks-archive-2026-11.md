@@ -21,6 +21,7 @@
 | DATA-GRACEFUL-SHUTDOWN | 优雅停机 + 作业租约/心跳/stale 回收 | 2026-11-12 | 本笔（`git log --grep DATA-GRACEFUL-SHUTDOWN`） | [原文](#DATA-GRACEFUL-SHUTDOWN) |
 | DATA-SYNC-JOB-NOOP | 空参数 no-op 作业不再记 succeeded（入队期拒绝无范围点位作业） | 2026-11-12 | 本笔（`git log --grep DATA-SYNC-JOB-NOOP`） | [原文](#DATA-SYNC-JOB-NOOP) |
 | DATA-POLICY-FACTORS-DEAD | 删除策略表里不存在的因子同步/派生端点（ADR-037 归属退役） | 2026-11-12 | 本笔（`git log --grep DATA-POLICY-FACTORS-DEAD`） | [原文](#DATA-POLICY-FACTORS-DEAD) |
+| DATA-ADJUST-BASELINE | 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值，ADR-0011） | 2026-11-12 | 本笔（`git log --grep DATA-ADJUST-BASELINE`） | [原文](#DATA-ADJUST-BASELINE) |
 
 ---
 
@@ -762,3 +763,36 @@
     `TestFactorSyncPolicyIsRetired: "POST /sync/factors/all" is still in legacyREV17; factors were retired to core (ADR-037)`；
     逐字节还原后 `sha256 35774E01A26C13FE55DD7713A4744092417BD211EE4B9D8E46778C3B5D3A8873` 与改前一致，`ok tellurion-data/internal/httpapi 0.171s`。
   - **未做（如实）**：core 侧「先跑 sync/factors/all」提示文案未改（父会话另派）。
+
+<a id="DATA-ADJUST-BASELINE"></a>
+### DATA-ADJUST-BASELINE · 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值） [P0] ✅（2026-11-12，ADR-0011）
+
+- **① 目标**：让 qfq 的复权基准由**全局账本固定**，不随 `start_date/end_date` 漂移；并给「基准变更后需要重算历史」一条显式、幂等、可审计的覆盖路径，替代「内容冲突就整批回滚、只能手工删行」。
+- **② 上下文**：复权基准原为「请求区间内最新交易日」——补 2025 数据后 `600036.SH` 的 qfq 基准变成 2025-12-31（因子 6.3201），而 `600000.SH`（58 行）/ `600519.SH`（22 行）仍按 2024 年窗口基准计算 ⇒ 同一 `(symbol, trade_date)` 的 `close` 取决于「当初用哪个窗口拉的」，同参回测不可复现。写面是 `ON CONFLICT DO NOTHING` + 内容比对，异内容触发 `ErrContentConflict` 整批回滚 ⇒ 想把旧行对齐到统一基准，一行都写不进去，必须先手工删行。两者都违背「数据面唯一写者、可审计」。
+- **③ 要求（已落地）**：
+  1. **基准全局化**：新增 `market.adjust_baseline_changes`（append-only 账本，`base_date` / `base_factor` / `previous_date` / `previous_factor` / `reason` ∈ {`bootstrap`,`manual`}，`bootstrap` 每 symbol 局部唯一）；解析顺序固定为「账本最新记录 → 无账本但有存量数据用 `MAX(trade_date)` 及其因子补 `bootstrap` → 首次入库用窗口最新因子补 `bootstrap`」，建后**不自动推进**（`internal/transport/tushare/baseline.go` 的 `resolveBaseline`）。
+  2. **覆盖/重算路径**：`POST /api/sync/jobs` 的 `extra.overwrite=true` ⇒ `BulkInsertWithOptions` 走 `ON CONFLICT (pk) DO UPDATE`；`extra.baseline_date` 必须配合 `overwrite=true`、只允许 `job_type=ohlcv_daily`，否则入队期 400 `ErrInvalidParams`（`internal/sync/job.go` 的 `validateWriteExtra`）；`manual` 记录写全 `previous_*`，同基准重放不追加。
+  3. **fail-closed**：`Client.Baselines` 未装配 ⇒ 日线取数直接失败（不退回旧口径）；已落库最新交易日查不到因子 ⇒ `ErrTransportDataQuality`。
+  4. **文档**：`docs/api-schema.md`（写面开关与 400 条件）、`docs/dataflow.md`（基准定义/变更流程 + 失败表两行 + 不变量 11）、`docs/db-schema.md`（新表与 23 张计数）、`docs/adr/0011-复权基准全局化与覆盖重算.md`。
+- **④ 约束与非目标**：**不动** `600000.SH` / `600519.SH` 的既有数据（清行重拉需另行报批）；不引入第二写者、不改三个证据入口（`POST /api/ingest/raw` / `GET /api/evidence/{content_hash}` / `GET /api/evidence`）的契约；不删断言或放宽断言换绿。
+- **⑤ 验收**：
+  - `go build ./...` = 0、`go vet ./...` = 0、`go test ./... -count=1` = 0（12 包 `ok`）；PG 腿（`DATABASE_URL=…/tellurion_data_test`，`-run 'TestPG|TestSchemaReplay'`）全 PASS。
+  - 一致性：`TestFetchDailyOHLCV_BaselineIsPinnedAcrossWindows`（同区间不同窗口两次取数逐日 `close` 相同）。
+  - 审计与幂等：`TestFetchDailyOHLCV_ManualBaselineChangeIsAuditableAndIdempotent`（`manual` 记录带 `previous_*`、同基准重放不追加）、`TestPG_AdjustBaselineStore_AppendOnlyAndBootstrapUniqueness`、`TestPG_AdjustBaselineStore_LatestTradeDate`。
+  - 覆盖幂等：`TestPG_BulkInsertWithOptions_OverwriteRewritesAndIsIdempotent`（重跑两次行数 = 1、内容哈希不变）、`TestWriter_OverwriteUsesUpsertSQL`、`TestNewInserterForwardsOverwriteOption`、`TestETLProcess_ForwardsOverwriteOption`、`TestFetchRequestFromParams_GuardsBaselineChange`。
+  - 失败闸：`TestFetchDailyOHLCV_RequiresBaselineLedger`、`TestFetchDailyOHLCV_BootstrapFromPersistedData`、`TestFetchDailyOHLCV_ManualBaselineWithoutFactorIsInvalidInput`。
+- **⑥ 边界**：本仓基准账本、取数解析、写面开关与文档；既有历史数据的对齐是运维动作（`baseline_date + overwrite`），不在本笔执行。
+
+- **收口（2026-11-12）**：
+  - **DDL**：`internal/schema/market.go` 新增 `market.adjust_baseline_changes`（`ck_adjust_baseline_reason` / `ck_adjust_baseline_factor` / `idx_adjust_baseline_symbol_changed` / `uq_adjust_baseline_bootstrap`）；`TableNames()` 22 → 23 张；`migrations/0001_x1d_set_schema.{sql,down.sql,verify.sql}` 同步。
+  - **存储面**：`internal/store/adjust_baseline.go`（`BaselineDB` 端口 + `Load` / `Save` / `LatestTradeDate`）；`internal/store/write.go` 的 `BulkWriteOptions` + `buildUpsertSQL`。
+  - **传输面**：`internal/transport/tushare/baseline.go`（`BaselineLedger` 端口 + `resolveBaseline` / `manualBaseline` / `bootstrap` / `adjFactorOn`）；`stocks.go` 的 `FetchDailyOHLCVWithBaseline`；`client.go` 的 `Baselines` 字段。
+  - **编排面**：`internal/ingest`（`BulkWriteOptions` / `FetchDailyOHLCVWithBaseline` 适配 / `extra.overwrite`）、`internal/assembly`（`PointWriter.BulkInsertWithOptions`）、`internal/sync/job.go`（`validateWriteExtra`）、`cmd/dataservice/main.go`（装配账本）。
+  - **破坏验证（实做并逐字节还原）**：
+    1. 在 `resolveBaseline` 顶部插回「区间最新因子」分支 ⇒ `TestFetchDailyOHLCV_BaselineIsPinnedAcrossWindows` 红：
+       `baseline_test.go:206: 2026-01-06 close = 5 in window B, 10 in window A (基准随窗口漂移了)`（`FAIL tellurion-data/internal/transport/tushare 0.057s`，EXIT=1）。
+       逐字节还原后 `sha256 EFE1A929591025EFDC7D0AE7D856CCF7B9327A5CF32AA603D5CD336D65D58328` 与改前一致，`ok tellurion-data/internal/transport/tushare 0.063s`（EXIT=0）。
+    2. 把 `write.go` 的 `if opts.Overwrite` 改成 `if false` ⇒ `TestPG_BulkInsertWithOptions_OverwriteRewritesAndIsIdempotent` 红：
+       `store: row exists with different content for the same primary key: point[0] 600519.SH ohlcv_daily`（`FAIL tellurion-data/internal/store 0.357s`，EXIT=1）。
+       逐字节还原后 `sha256 FB1D75EEEB1F1B336268F1ABAE095DCFFAC24D28DDE4A4A4E5404E79403872FE` 与改前一致，`ok tellurion-data/internal/store 2.112s`（EXIT=0）。
+  - **未做（如实）**：`600000.SH` / `600519.SH` 既有行仍按各自旧窗口基准；对齐操作 = 对每只票 `POST /api/sync/jobs` 带 `baseline_date` + `overwrite=true` 重算，**执行前需报批**（会改写历史价格）。

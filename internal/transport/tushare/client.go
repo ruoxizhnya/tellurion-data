@@ -10,9 +10,9 @@
 // 语义搬运纪律（不许「顺手改进」）：
 //   - 归一化口径逐条对齐 core `pkg/data/tushare.go` / `macro.go` /
 //     `tushare_daily_basic.go` / `tushare_moneyflow.go`（只读参考，本仓不
-//     import core 实现包）：qfq 复权用 `daily × adj_factor / 区间最新因子`、
-//     vol 手→股要 round、amount 千元→CNY 不 round、资金流万元→元、宏观月频
-//     取当月首日；
+//     import core 实现包）：qfq 复权用 `daily × adj_factor / 全局基准因子`
+//     （基准由 ADR-0011 的账本固定，不是「区间最新因子」）、vol 手→股要
+//     round、amount 千元→CNY 不 round、资金流万元→元、宏观月频取当月首日；
 //   - 「缺失≠0」：可空数值一律 `*float64`，nil 原样上抛；
 //   - 有行但全被跳过 → 数据质量哨兵（fail-loud，同 core 在 macro /
 //     daily_basic / moneyflow 上的闸门），真空响应才是合法的 0 行；
@@ -85,6 +85,12 @@ type Client struct {
 	httpClient *http.Client
 	maxRetries int
 	now        func() time.Time
+
+	// Baselines 是复权基准账本（ADR-0011）。日线取数依赖它：没有账本就只能
+	// 按「请求窗口最新因子」算 qfq——那正是本仓要消灭的口径漂移，所以
+	// 未装配时 `FetchDailyOHLCV` 直接失败，而不是悄悄退回旧行为。
+	// 装配期赋值（`cmd/dataservice`），其余字段构造后只读。
+	Baselines BaselineLedger
 
 	mu          sync.Mutex
 	windowStart time.Time

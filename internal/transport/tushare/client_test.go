@@ -161,6 +161,7 @@ func TestFetchDailyOHLCV_AppliesQFQAndUnits(t *testing.T) {
 			return nil, nil
 		}
 	})
+	c.Baselines = newMemLedger()
 
 	rows, err := c.FetchDailyOHLCV(context.Background(), "600519.SH", "2026-01-05", "2026-01-06")
 	if err != nil {
@@ -169,7 +170,7 @@ func TestFetchDailyOHLCV_AppliesQFQAndUnits(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(rows))
 	}
-	// 区间最新因子 = 2.0 ⇒ 0105 scale 0.5，0106 scale 1.0。
+	// 首次入库 ⇒ 基准 = 窗口最新因子 2.0 ⇒ 0105 scale 0.5，0106 scale 1.0。
 	if rows[0].Close != 5 || rows[0].Open != 5 || rows[0].High != 5.5 || rows[0].Low != 4.5 {
 		t.Fatalf("qfq prices = %+v", rows[0])
 	}
@@ -207,6 +208,7 @@ func TestFetchDailyOHLCV_AllRowsSkippedIsDataQuality(t *testing.T) {
 		}
 		return nil, nil
 	})
+	c.Baselines = newMemLedger()
 
 	_, err := c.FetchDailyOHLCV(context.Background(), "600519.SH", "20260105", "20260105")
 	if !errors.Is(err, ingest.ErrTransportDataQuality) {
@@ -224,6 +226,7 @@ func TestFetchDailyOHLCV_EmptyResponseIsLegalZeroRows(t *testing.T) {
 		}
 		return nil, nil
 	})
+	c.Baselines = newMemLedger()
 
 	rows, err := c.FetchDailyOHLCV(context.Background(), "600519.SH", "20260105", "20260105")
 	if err != nil {

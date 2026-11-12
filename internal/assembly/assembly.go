@@ -86,6 +86,8 @@ type Result struct {
 // 被无库测试（假的 sink 记录它收到什么）。
 type PointWriter interface {
 	BulkInsert(ctx context.Context, dataType string, points []store.Point) (persisted, skipped int, err error)
+	// BulkInsertWithOptions 是带选项的写面（Overwrite 见 ADR-0011）。
+	BulkInsertWithOptions(ctx context.Context, dataType string, points []store.Point, opts store.BulkWriteOptions) (persisted, skipped int, err error)
 }
 
 // Writer 是 HTTP 投点入口用的写面装配。
@@ -230,6 +232,12 @@ func NewInserter(sink PointWriter) ingest.BulkInserter { return Inserter{sink: s
 // BulkInsert 投影后转给写面。
 func (i Inserter) BulkInsert(ctx context.Context, dataType string, points []ingest.UnifiedDataPoint) (int, int, error) {
 	return i.sink.BulkInsert(ctx, dataType, ProjectAll(points))
+}
+
+// BulkInsertWithOptions 投影后带选项转给写面（ingest 与 store 的选项在此翻译）。
+func (i Inserter) BulkInsertWithOptions(ctx context.Context, dataType string, points []ingest.UnifiedDataPoint, opts ingest.BulkWriteOptions) (int, int, error) {
+	return i.sink.BulkInsertWithOptions(ctx, dataType, ProjectAll(points),
+		store.BulkWriteOptions{Overwrite: opts.Overwrite})
 }
 
 // Pipeline 装出一条完整的作业链（取数 → 归一 → 校验 → 闸门 → 去重 → 写面）。

@@ -58,7 +58,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 3. `Normalizer` 映射成 `UnifiedDataPoint`（`ingest_time` 由 pipeline 时钟统一填；载荷为 nil 的点只计入 `skipped`）
 4. `ValidatePoints` 拒收形态不合法（缺 symbol / trade_time / data）
 5. **`GatePoints`**（`internal/ingest`）按该 data_type 的**声明锚点**逐点校验：任一点缺锚点 ⇒ `ErrVisibleAtMissing`、坏值 ⇒ `ErrAnchorInvalid`，**整批拒收且不触达 store**
-6. `Deduplicate` 按幂等坐标（symbol + data_type + trade_time）去重 → `store.BulkInsert` 写 A 集表：`ON CONFLICT DO NOTHING` + 内容比对（排除易变列 `ingest_time`）；同内容 no-op、同主键异内容 `ErrContentConflict` 整批回滚；B/C 集 data_type 拒写（`ErrWriteTableNotInASet` / `ErrUnmappedDataType`）。`persisted` 口径 = **请求点已就位**（新插入 + 同内容 no-op），不是新增行数
+6. `Deduplicate` 按幂等坐标（symbol + data_type + trade_time）去重 → `store.BulkInsertWithOptions` 写 A 集表：`ON CONFLICT DO NOTHING` + 内容比对（排除易变列 `ingest_time`）；同内容 no-op、同主键异内容 `ErrContentConflict` 整批回滚；`extra.overwrite=true` 时改为 `ON CONFLICT (pk) DO UPDATE`（覆盖重算，ADR-0011）；B/C 集 data_type 拒写（`ErrWriteTableNotInASet` / `ErrUnmappedDataType`）。`persisted` 口径 = **请求点已就位**（新插入 + 同内容 no-op），不是新增行数
 
 > **红线**：同步 HTTP 端点**不得承载无界批量**——无界批量一律走作业层（`POST /api/sync/jobs` → `sync_jobs` → worker → executor → ETL，`tellurion:docs/SPEC.md` DATA-10）；HTTP 灌数入口只许单次有界任务（DATA-12：以「没有无界批量问题」为前提）。
 > **这条红线现在执法在本仓**（2026-10-25，H4 ②）：`POST /ingest/points` 有 `assembly.MaxPointsPerRequest = 10000` 与 8 MiB 报文上限两道门，超限**整批拒收 413**，既不截断也不「写前 N 条」。代价如实登记：调用方必须按上界分片，一片一个请求，于是一次作业跨请求失败时**已落的那片不回滚**——作业层的「整池一次」原子性从来就不在跨仓这一侧，读 `sync_jobs.error_message` 时要按分片理解。
@@ -72,6 +72,21 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 4. **字段契约 fail-closed**：`stock_basic` 必填 `ts_code` / `symbol` / `name` / `list_date` / `delist_date`，`trade_cal` 必填 `cal_date` / `is_open`；缺列或改名 ⇒ `ErrTransportDataQuality`，作业在开事务前失败（不会把退市票静默写成 `active`，也不会把整天静默写成非交易日）。多余列显式忽略。fixture 与线上核对见 `internal/sync/testdata/` + `internal/sync/reference_contract_test.go`。
 
 它不经过 `ValidatePoints` / `GatePoints` / `Deduplicate` / `BulkInsert`。参照表的语义是「后到者覆盖」而不是「历史不可改」，硬套点位闸门只会把合法的名称/状态变更判成冲突。
+
+### 复权基准与重算（ADR-0011）
+
+**基准定义**：`前复权价 = 当日价格 × 当日复权因子 / 该 symbol 的全局基准因子`。基准因子由 `market.adjust_baseline_changes` 的最新一条记录固定，**不随 `start_date/end_date` 变化**——同一 `(symbol, trade_date)` 在任意窗口下 `close` 相同。
+
+**建基准（只发生一次）**：取数时按序解析（`tushare.resolveBaseline`）：
+1. 账本有该 symbol 的最新记录 ⇒ 用它；
+2. 无账本但 `market.ohlcv_daily_qfq` 已有该 symbol 行 ⇒ 用 `MAX(trade_date)` 及其当日因子，append 一条 `reason=bootstrap`（老实现的基准就是当时窗口的最新交易日，那一行必然已落库，是对旧口径最忠实的重建）；
+3. 首次入库 ⇒ 用本次窗口的最新因子，append 一条 `reason=bootstrap`。
+
+基准一旦建立**不自动推进**：否则每个增量作业都要重写全部历史。`bootstrap` 每 symbol 只有一条（局部唯一索引），并发首拉时输的一方读回赢家的基准再算价格。
+
+**改基准（显式、可审计）**：`POST /api/sync/jobs` 带 `extra.baseline_date` + `extra.overwrite=true`（缺一即 400）。取数按新基准重算，账本 append 一条 `reason=manual`、`previous_date/previous_factor` 齐全的记录；同一基准重放不追加。写入用 UPSERT 覆盖受影响区间，重跑幂等（行数不变、内容哈希不变）。变更后的价格与原口径的差异可由新旧基准因子算出（`close_new / close_old = base_old / base_new`）。
+
+**为什么不能按窗口算**：qfq 基准随窗口漂移会让「同参回测」的结果取决于数据是分几次、按什么窗口拉进来的；且 `ON CONFLICT DO NOTHING` 下想对齐旧行必须先手工删行。两者都违背「数据面唯一写者、可审计」。
 
 ## 3. 失败模式（每一处 fail-closed 都要能指名）
 
@@ -87,7 +102,9 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 | 因子读面误挂本仓 | 常驻 404 被读成「该数据集没有该因子」 | 裁-14 已撤路由；重新引入 `/factors/*` ⇒ `TestFactorRouteIsRemoved` 红（路由表与契约双向对拍） |
 | 投点批次超上界 | 「无界批量」披成一次 HTTP 请求 | `assembly.MaxPointsPerRequest`（10000）+ 8 MiB 报文上限 ⇒ **整批拒收 413 `batch_too_large`**，不截断、不「写前 N 条」（用例 `TestWriteRejectsBatchAboveThePerRequestLimit` / `TestIngestPointsRejectsBatchOverTheLimitOnTheWire` / `TestIngestPointsRejectsOversizedBody`） |
 | 调用方自己投 `visible_at` / `ingest_time` | 闸门拦不住自称「我可见」的批次 | 这两个字段不在投送面上：`DisallowUnknownFields` ⇒ 400 `invalid_parameter`（用例 `TestWirePointCarriesNoServerOwnedFields` / `TestIngestPointsRejectsServerOwnedFields`） |
-| 换源写同一主键 | core 老语义是 `DO UPDATE` 静默覆盖；本仓是响亮失败 | 409 `content_conflict` + 整批回滚。⚠️ 这是**行为变更**，不是等价搬迁（ADR-0006「代价」）：上游修正历史数值会一直 409，直到走一次受控修正流程 |
+| 换源写同一主键 | core 老语义是 `DO UPDATE` 静默覆盖；本仓是响亮失败 | 409 `content_conflict` + 整批回滚。⚠️ 这是**行为变更**，不是等价搬迁（ADR-0006「代价」）：上游修正历史数值会一直 409，直到走一次受控修正流程（`extra.overwrite=true`，ADR-0011） |
+| 复权基准随取数窗口漂移 | 同一 `(symbol, trade_date)` 出现两个 `close`；扩窗补历史会改动旧价格，且 `DO NOTHING` 下补不回去 | 基准固定在 `market.adjust_baseline_changes`（ADR-0011）；用例 `TestFetchDailyOHLCV_BaselineIsPinnedAcrossWindows`；账本未装配 ⇒ 日线取数**直接失败**（不退回旧口径） |
+| 基准变更后旧行写不进去 | 只能手工删行才能对齐口径 | `extra.overwrite=true` ⇒ `ON CONFLICT (pk) DO UPDATE`；PG 用例 `TestPG_BulkInsertWithOptions_OverwriteRewritesAndIsIdempotent`（重跑行数/哈希不变） |
 | 写端点未接线（无 `DATABASE_URL`） | 请求打到一个不会落库的进程 | 503 `dependency_unavailable`（用例 `TestIngestPointsUnwiredFailsClosed`），与读面同一档 fail-closed |
 
 ## 4. 不变量（可被测试钉住的）
@@ -95,7 +112,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 1. 同一 `dataset_hash` 两次拉取字节一致。
 2. 任何返回点满足 `visible_at <= as_of`。
 3. `market` / `ingest` 无第二写者（CI 静态检查 + 评审）。
-   ✅ **2026-11-10 起成立**：core 数据面写点已随 `a96d836`（2026-11-08）全部删除；core 非测试代码只剩裁决 ⑰ 的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go`，不在本仓 22 表内）。点数以 grep 为准，见 `db-schema.md` §9.4。
+   ✅ **2026-11-10 起成立**：core 数据面写点已随 `a96d836`（2026-11-08）全部删除；core 非测试代码只剩裁决 ⑰ 的 `market.index_daily`（`tellurion:pkg/storage/index_daily.go`，不在本仓 23 表内）。点数以 grep 为准，见 `db-schema.md` §9.4。
 4. connector 全部走 `ConnectorDeclaration`（漏声明被拒收）。
 5. 写面幂等：同主键同内容重写 = no-op；同主键异内容 = fail-loud 且整批不落（`ON CONFLICT DO NOTHING` + 内容比对，排除 `ingest_time`）。
 6. 写面只落 A 集（`visible_at` 三集合门）；B/C 集只能走各自同步腿或被明确豁免。
@@ -103,6 +120,7 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 8. 写面**有界**：单次 `POST /ingest/points` ≤ `assembly.MaxPointsPerRequest`（10000 点）且 ≤ 8 MiB 报文；超限整批拒收，不截断（`docs/dataflow.md` §2 红线的执法点）。
 9. **可见时刻与入库时刻只由本仓推导**：`visible_at` 来自声明锚点（`GatePoints`），`ingest_time` 来自本进程时钟；投送面上没有这两个字段。
 10. **两条入口共用一条写侧链**：HTTP 投点（`assembly.Write`）与作业管线（`assembly.Pipeline`）对同一批数据必须产出逐字段相同的 `store.Point`（用例 `TestWriteAndPipelineAgreeOnTheSameBatch`）——分叉就是本仓内部复活两个真相。
+11. **复权基准全局固定**：同一 `(symbol, trade_date)` 的 qfq 价与请求窗口无关（用例 `TestFetchDailyOHLCV_BaselineIsPinnedAcrossWindows`）；改基准只能走 `baseline_date + overwrite=true`，并在 `market.adjust_baseline_changes` 留下 `previous_*` 齐全的 manual 记录（ADR-0011）。
 
 ## 5. 与契约文档的关系
 

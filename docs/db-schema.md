@@ -23,6 +23,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `global_ohlcv` | 日线行情主表（含复权口径） |
 | `ohlcv_minute` | 分钟线 |
 | `ohlcv_daily_qfq` | 前复权日线（派生表） |
+| `adjust_baseline_changes` | 复权基准账本（**append-only**，ADR-0011）：每个 symbol 的基准日/基准因子 + 变更历史（`previous_*`、`reason`）。qfq 的基准由它固定，不随取数窗口漂移 |
 | `market.index_daily` | 指数日线（**已是 `market.` 前缀**；**owner = core，本仓不认领**，见 §7） |
 | `dividends` / `splits` | 分红 / 拆股（公司行为） |
 | `trading_calendar` | 交易日历 |
@@ -40,7 +41,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 ### 1.3 因子（不属本仓）
 
-> **归属现状（2026-11-11 订正）**：本仓 `internal/schema/schema.go` 的 `TableNames()` 实测 **22 张表**，全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**。下表列的是因子域的历史/目标说明，**不是本仓物理表清单**；这些表的物理 DDL 与写者今天都在 `tellurion`（core）的 `public` schema。
+> **归属现状（2026-11-11 订正，2026-11-12 增至 23 张）**：本仓 `internal/schema/schema.go` 的 `TableNames()` 实测 **23 张表**（`market` 19 + `ingest` 4），全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**。下表列的是因子域的历史/目标说明，**不是本仓物理表清单**；这些表的物理 DDL 与写者今天都在 `tellurion`（core）的 `public` schema。
 
 | 表 | 内容与今天的 owner |
 |---|---|
@@ -107,7 +108,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 - **目标态（2026-11-10 已达成）**：本仓的数组是唯一真相；core 的内联数组已随 `a96d836`（2026-11-08）删除（core 只剩自己拥有的 `stock_fundamentals` / `market.index_daily` 等），双份过渡状态结束。
 - **不许做的**：在本仓数组里静默 `ALTER TABLE ... SET SCHEMA`（§1 注：迁移不是改名）；也不许把 `visible_at` 直接写进 `CREATE TABLE`（列必须走独立的加列腿，否则目标侧与今天侧的列会各自长出来）。
-- **X1d 物理搬迁脚本（2026-11-10）**：`migrations/0001_x1d_set_schema.sql`（另有 `.down.sql` / `.verify.sql`），单事务、幂等；目标空壳可删，**目标副本有行即报错中止**（绝不静默合并）。22 张表的清单与 `schema.TableNames()` 由 `TestMigrationTableListMatchesSchema` 钉住（三份脚本都要对得上）。它**不进** `Statements()`——迁移是运维动作，不是建表。演练（Docker PostgreSQL 16.15）：22 表搬迁、`public` 归零、探针行保留、非空冲突整体回滚（`public` 仍 22 表）、重跑 22 条 skip、`down` 还原 22 表且行数不变。**本地系统实例已执行（2026-11-10）**：系统 PostgreSQL 16.15（服务 `postgresql-x64-16`，`127.0.0.1:5432`）修复 `pg_hba.conf` 的 UTF-8 BOM 后启动；`tellurion` 库按删除前清单 DROP + 重建 → 68 条 DDL / 22 张表 → `0001` 22 条 skip → `verify.sql` 22/22 `ok`、`public_state` 全空 → 回填 12 条（空表 0 行、哨兵 12）→ 幂等复跑 + `-tags backfill` 套件全 PASS。取证见 `docs/archive/system-pg-init-2026-11-10.md`。**仍未做**：任何远端/生产实例零动作（按约定执行者是运维）。
+- **X1d 物理搬迁脚本（2026-11-10）**：`migrations/0001_x1d_set_schema.sql`（另有 `.down.sql` / `.verify.sql`），单事务、幂等；目标空壳可删，**目标副本有行即报错中止**（绝不静默合并）。22 张表的清单与 `schema.TableNames()` 由 `TestMigrationTableListMatchesSchema` 钉住（三份脚本都要对得上；2026-11-12 新增的 `market.adjust_baseline_changes` 在 `public` 侧无前身，脚本对它按「不存在即 skip」处理）。它**不进** `Statements()`——迁移是运维动作，不是建表。演练（Docker PostgreSQL 16.15）：22 表搬迁、`public` 归零、探针行保留、非空冲突整体回滚（`public` 仍 22 表）、重跑 22 条 skip、`down` 还原 22 表且行数不变。**本地系统实例已执行（2026-11-10）**：系统 PostgreSQL 16.15（服务 `postgresql-x64-16`，`127.0.0.1:5432`）修复 `pg_hba.conf` 的 UTF-8 BOM 后启动；`tellurion` 库按删除前清单 DROP + 重建 → 68 条 DDL / 22 张表 → `0001` 22 条 skip → `verify.sql` 22/22 `ok`、`public_state` 全空 → 回填 12 条（空表 0 行、哨兵 12）→ 幂等复跑 + `-tags backfill` 套件全 PASS。取证见 `docs/archive/system-pg-init-2026-11-10.md`。**仍未做**：任何远端/生产实例零动作（按约定执行者是运维）。
 
 **本仓约定**（从建仓第一天执行）：
 
@@ -240,16 +241,17 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 ## 9. 逐表 writer / reader 清单（SVC-DATA-G3 ③，2026-11-10）
 
-> **表名口径** = `internal/schema.TableNames()` 的 **22 张**（`market` 18 + `ingest` 4）。
+> **表名口径** = `internal/schema.TableNames()` 的 **23 张**（`market` 19 + `ingest` 4）。
 > **取证方式**：本仓写者/读方逐条点名 `internal/store`、`internal/sync`、`internal/schema` 的 SQL 常量与端口实现；core 侧实测
-> `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 22 张**）。
+> `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 23 张**）。
 > core `cmd/data` / `pkg/data` 已于 `a96d836`（2026-11-08）整体删除；`Test-Path cmd/data` / `Test-Path pkg/data` 均为 False。
 
-### 9.1 有本仓写者的表（17 张）
+### 9.1 有本仓写者的表（18 张）
 
 | 表 | 本仓写者 | 本仓读方 |
 |---|---|---|
-| `market.ohlcv_daily_qfq` | `store.Writer.BulkInsert`（`POST /ingest/points`；同步作业 worker 同一写面） | `GET /ohlcv/{symbol}`、`POST /api/v1/ohlcv/bulk`、`GET /datasets/resolve`（`store.ReadBars`）、`GET /datasets/{hash}`（`store.DataVersion`） |
+| `market.ohlcv_daily_qfq` | `store.Writer.BulkInsert`（`POST /ingest/points`；同步作业 worker 同一写面；`extra.overwrite=true` 时走 UPSERT，ADR-0011） | `GET /ohlcv/{symbol}`、`POST /api/v1/ohlcv/bulk`、`GET /datasets/resolve`（`store.ReadBars`）、`GET /datasets/{hash}`（`store.DataVersion`） |
+| `market.adjust_baseline_changes` | `store.AdjustBaselineStore.Save`（唯一调用方是 `tushare.Client` 的基准解析：bootstrap / manual；append-only，bootstrap 每 symbol 唯一） | `store.AdjustBaselineStore.Load` / `LatestTradeDate`（日线取数在算 qfq 前读当前基准）；运维可按 `symbol, changed_at` 直查变更历史 |
 | `market.ohlcv_minute` | 同上 | `GET /datasets/resolve`（`1m`，`ReadBars`）、`GET /datasets/{hash}`（`DataVersion`）；**无**逐分钟兼容端点 |
 | `market.realtime_quote` | 同上 | 无 |
 | `market.capital_flow` | 同上（东财 connector / `POST /ingest/points` 投点） | 无 |
@@ -282,7 +284,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 > `market.index_constituents` 已于 2026-11-12 移出本表（重开 `DATA-INDEX-CONSTITUENTS`，写者 `ReplaceIndexConstituents`，见 §9.1 与 §9.6）。
 > `ingest.raw` 已移出本表：2026-11-12 起由本仓证据归档面接管（ADR-0010，见 §9.1 与 §9.5）。
 
-### 9.3 与本仓相关但不属 22 张的两张表
+### 9.3 与本仓相关但不属 23 张的两张表
 
 | 表 | 归属 | 写者 | 本仓读方 |
 |---|---|---|---|

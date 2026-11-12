@@ -12,6 +12,7 @@ WITH expected(target_schema, table_name) AS (
         ('ingest', 'raw'),
         ('ingest', 'sync_jobs'),
         ('ingest', 'sync_schedules'),
+        ('market', 'adjust_baseline_changes'),
         ('market', 'announcements'),
         ('market', 'capital_flow'),
         ('market', 'dividends'),
@@ -54,6 +55,7 @@ BEGIN
         SELECT * FROM (VALUES
             ('ingest', 'data_migrations'), ('ingest', 'raw'),
             ('ingest', 'sync_jobs'), ('ingest', 'sync_schedules'),
+            ('market', 'adjust_baseline_changes'),
             ('market', 'announcements'), ('market', 'capital_flow'),
             ('market', 'dividends'), ('market', 'global_ohlcv'),
             ('market', 'hot_search'), ('market', 'index_constituents'),

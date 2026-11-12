@@ -309,6 +309,14 @@ func build(authOption httpapi.Option) (*httpapi.Server, func(), error) {
 		return nil, nil, err
 	}
 
+	// 复权基准账本（ADR-0011）：qfq 基准必须全局固定且可审计，日线取数依赖它。
+	baselines, err := store.NewAdjustBaselineStore(store.PoolBaselineDB(pool), opts)
+	if err != nil {
+		stopRetry()
+		pool.Close()
+		return nil, nil, err
+	}
+
 	// 取数链：`TUSHARE_TOKEN` 有值才装真传输；否则注册表只有声明，作业会被
 	// connector 判成 disabled 并在作业行上响亮失败（不会静默写 0 行）。
 	// 东财 HTTP 客户端无凭证，恒装配；Alpha Vantage 仅在 key 有值时启用
@@ -320,6 +328,7 @@ func build(authOption httpapi.Option) (*httpapi.Server, func(), error) {
 	var tushareClient *tushare.Client
 	if token := strings.TrimSpace(os.Getenv("TUSHARE_TOKEN")); token != "" {
 		tushareClient = tushare.NewDefault(token)
+		tushareClient.Baselines = baselines
 		transports.Tushare = tushareClient
 	}
 	registry, err := assembly.Registry(transports)

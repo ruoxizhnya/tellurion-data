@@ -206,7 +206,51 @@ func FetchRequestFromParams(jobType string, params map[string]any) (ingest.Fetch
 			req.Extra = m
 		}
 	}
+	if err := validateWriteExtra(jobType, req.Extra); err != nil {
+		return ingest.FetchRequest{}, err
+	}
 	return req, nil
+}
+
+// validateWriteExtra 校验 `extra` 里的写面开关（ADR-0011）。
+//
+// 两条硬约束：
+//   - `overwrite` 只能是布尔：它是「允许覆盖旧行」的显式授权，类型不对不许猜；
+//   - `baseline_date` 只对日线有意义，且必须同时给 `overwrite=true`——改
+//     复权基准会重写历史行，没有覆盖授权就只剩「冲突整批回滚」，等于
+//     给调用方一个必然失败的开关。
+func validateWriteExtra(jobType string, extra map[string]any) error {
+	if len(extra) == 0 {
+		return nil
+	}
+	if raw, ok := extra["overwrite"]; ok && raw != nil {
+		if _, ok := raw.(bool); !ok {
+			return fmt.Errorf("%w: extra.overwrite must be a boolean", ErrInvalidParams)
+		}
+	}
+	raw, ok := extra["baseline_date"]
+	if !ok || raw == nil {
+		return nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("%w: extra.baseline_date must be a string", ErrInvalidParams)
+	}
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	if _, err := dateField(map[string]any{"baseline_date": s}, "baseline_date"); err != nil {
+		return err
+	}
+	if jobType != ingest.DataTypeOHLCDaily {
+		return fmt.Errorf("%w: extra.baseline_date is only supported for %s (got %q)",
+			ErrInvalidParams, ingest.DataTypeOHLCDaily, jobType)
+	}
+	if overwrite, _ := extra["overwrite"].(bool); !overwrite {
+		return fmt.Errorf("%w: extra.baseline_date requires extra.overwrite=true (改基准会重写历史行)",
+			ErrInvalidParams)
+	}
+	return nil
 }
 
 // stringSliceField 读一个字符串数组字段（JSON 数组解码后是 []any）。

@@ -27,6 +27,10 @@ type TushareTransport interface {
 	FetchStocks(ctx context.Context, exchange, listStatus string) ([]market.Stock, error)
 	// FetchDailyOHLCV 取某票区间日线（前复权口径由实现负责）。
 	FetchDailyOHLCV(ctx context.Context, symbol, startDate, endDate string) ([]market.OHLCV, error)
+	// FetchDailyOHLCVWithBaseline 同 FetchDailyOHLCV，但允许显式指定复权基准日
+	// （空 = 用该 symbol 已固定的全局基准）。改基准必须配合 overwrite=true
+	// （ADR-0011），否则历史行会与账面基准不一致。
+	FetchDailyOHLCVWithBaseline(ctx context.Context, symbol, startDate, endDate, baselineDate string) ([]market.OHLCV, error)
 	// FetchFundamentals 取某票某日的财报字段。
 	FetchFundamentals(ctx context.Context, symbol, date string) ([]market.Fundamental, error)
 

@@ -27,10 +27,19 @@ var ErrPipelineMisconfigured = errors.New("ingest: ETL pipeline misconfigured")
 //   - 不读墙钟；`IngestTime` 由管线用注入的时钟统一赋值。
 type Normalizer func(item DataItem, source, dataType string) UnifiedDataPoint
 
+// BulkWriteOptions 是写面选项（与 `store.BulkWriteOptions` 同义，装配层翻译）。
+type BulkWriteOptions struct {
+	// Overwrite 为 true 时允许重写同主键旧行（重算路径，ADR-0011）。
+	// 默认 false：同主键异内容仍 fail-loud + 整批回滚。
+	Overwrite bool
+}
+
 // BulkInserter 是写面 port。`internal/store.Writer` 提供 PG 实现；两者之间
 // 的点位投影在装配层完成（store 不 import ingest，保持「存储不知道采集语义」）。
 type BulkInserter interface {
 	BulkInsert(ctx context.Context, dataType string, points []UnifiedDataPoint) (persisted, skipped int, err error)
+	// BulkInsertWithOptions 是带选项的写面；`BulkInsert` 等价于 Overwrite=false。
+	BulkInsertWithOptions(ctx context.Context, dataType string, points []UnifiedDataPoint, opts BulkWriteOptions) (persisted, skipped int, err error)
 }
 
 // ETLPipeline 是一次同步作业的驱动面。字段导出是为装配期注入。
@@ -61,6 +70,15 @@ type ProcessResult struct {
 	Persisted int
 	Skipped   int
 	Duration  time.Duration
+}
+
+// extraOverwrite 读 Extra 里的 overwrite 开关；只有显式的 true 才算。
+func extraOverwrite(extra map[string]interface{}) bool {
+	if extra == nil {
+		return false
+	}
+	v, ok := extra["overwrite"].(bool)
+	return ok && v
 }
 
 // Process 执行一次取数-写入。
@@ -126,7 +144,8 @@ func (p *ETLPipeline) Process(ctx context.Context, req FetchRequest, normalizer 
 		return result, nil
 	}
 
-	persisted, storeSkipped, err := p.Store.BulkInsert(ctx, req.DataType, deduped)
+	persisted, storeSkipped, err := p.Store.BulkInsertWithOptions(ctx, req.DataType, deduped,
+		BulkWriteOptions{Overwrite: extraOverwrite(req.Extra)})
 	if err != nil {
 		return ProcessResult{}, err
 	}

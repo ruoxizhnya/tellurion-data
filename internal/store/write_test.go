@@ -168,6 +168,29 @@ func TestWriter_SameContentRewriteIsNoOp(t *testing.T) {
 	assert.Contains(t, tx.execs[0], "ON CONFLICT DO NOTHING")
 }
 
+// overwrite=true 必须走 UPSERT：同主键旧行被覆盖、非主键列整列更新，
+// 且**不得**把主键列放进 SET（那等于改主键）。
+func TestWriter_OverwriteUsesUpsertSQL(t *testing.T) {
+	tx := &fakeWriteTx{affected: []int64{1}}
+	db := &fakeWriteDB{tx: tx}
+	w, err := NewWriter(db, Options{MarketSchema: "market"})
+	require.NoError(t, err)
+
+	_, _, err = w.BulkInsertWithOptions(context.Background(), "ohlcv_daily",
+		[]Point{validPoint("600519.SH")}, BulkWriteOptions{Overwrite: true})
+	require.NoError(t, err)
+
+	require.Len(t, tx.execs, 1)
+	sql := tx.execs[0]
+	assert.Contains(t, sql, "ON CONFLICT (symbol, trade_date) DO UPDATE SET")
+	assert.Contains(t, sql, "close = EXCLUDED.close")
+	assert.Contains(t, sql, "visible_at = EXCLUDED.visible_at")
+	assert.NotContains(t, sql, "symbol = EXCLUDED.symbol")
+	assert.NotContains(t, sql, "trade_date = EXCLUDED.trade_date")
+	assert.Zero(t, len(tx.compares), "覆盖模式直接改行，不做内容比对")
+	assert.True(t, tx.committed)
+}
+
 // 同主键异内容：fail-loud + 整批回滚。
 func TestWriter_DifferentContentFailsLoudAndRollsBack(t *testing.T) {
 	tx := &fakeWriteTx{affected: []int64{1, 0}, compares: []bool{false}}
