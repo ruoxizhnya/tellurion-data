@@ -39,6 +39,7 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"GET /datasets/resolve",
 		"GET /datasets/{hash}",
 		"GET /health",
+		"GET /healthz",
 		"GET /index/{code}/constituents",
 		"GET /ohlcv/{symbol}",
 		"GET /readyz",

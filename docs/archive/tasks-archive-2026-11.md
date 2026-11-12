@@ -28,6 +28,7 @@
 | X-AGENTS-DEPENDENCY-TABLE | `AGENTS.md` §4 依赖表按实际 `go.mod` 订正 | 2026-11-12 | 见本条 | [施工记录](#X-AGENTS-DEPENDENCY-TABLE) |
 | X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
 | X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
+| X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（三信号 + 摘除前置条件） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
 
 ---
 
@@ -923,3 +924,19 @@
 > - **落在哪**：`docs/api-schema.md` §1 路由表末尾加一条显式「分页口径不一致（登记，不改行为）」；frontmatter 同批注明。这样读文档的人不用翻 handler 猜。
 > - **其它仓的核查结论（避免下一次重复调查）**：strategy 的 `/promotions` 与 `/evidence` 都是 `limit + offset`（`internal/httpapi/api.go:372/380`、`evidence.go:143/148`）；risk / analytics / orchestration / broker / agent / contracts 无 `offset` 分页面（analytics 明确「不提供列表端点」）；core 的列表面亦无 `offset`（`/api/backtest` 只 limit），core 禁碰，属 core 侧重开立单的事。**没有发现同一仓内两套分页互相矛盾的第二个样本。**
 > - **验收**：纯文档改动；`docs/api-schema.md` 新增段落引用了可复核的源码行号，未改任何 handler。
+
+<a id="X-PROBE-NAMING"></a>
+### X-PROBE-NAMING（data 腿）· `/health` → `/healthz` 规范名 + 过渡弃用别名（跨仓伞 `tellurion:X-PROBE-NAMING`）
+
+> **施工记录（2026-11-12）**：
+> - **变更（代码）**：`internal/httpapi/server.go` 路由表新增 `GET /healthz`（→ `handleHealth`，规范名），`GET /health` 改挂 `handleHealthDeprecated`——报文与 `/healthz` **逐字节相同**（老探针只读状态码），额外带 `Deprecation: true` / `Link: </healthz>; rel="alternate"` / `Warning: 299 - "deprecated endpoint /health; use /healthz"` 三个标准弃用信号；`policy.go` 两条都 `Public: true`（别名摘除时同步删条目）；`auth_test.go` 的路由-策略对表加 `GET /healthz`；`health_test.go` 把探针公开/豁免循环改为双路径，并新增守卫 `TestHealthAliasCarriesDeprecationSignals`（规范名不得带弃用头、别名三个头齐全、报文与规范名逐字节一致）。
+> - **变更（文档/部署）**：`Dockerfile` `HEALTHCHECK`、`deploy/compose.yaml` healthcheck、`cmd/dataservice/main.go` 注释、`README.md`、`SERVICE.md`、`AGENTS.md`、`docs/api-schema.md`、`docs/dataflow.md`、`docs/ARCHITECTURE.md`、`docs/runbook.md` 一律改打 `/healthz`；`docs/api-schema.md` §1 路由表加 `/healthz` 行、`/health` 标「过渡别名」并写**摘除前置条件**（① core 的 `docker-compose.yml` healthcheck 与 `tools/local-stack.sh` 改打 `/healthz`；② 非 core 全仓 `grep -rn "/health\b"` 零残留；③ 本表删行 + `servedPolicy` 同步删条目）。
+> - **路由总数订正**：按 `server.go` 实际注册逐条数，改动前 **28** 条、改动后 **29** 条；文档里原有的 26 / 23 均为陈旧值（漏记 G3 兼容面与证据归档面），本笔一并订正，不是本单新增路由的产物。
+> - **真起服务验证（2026-11-12，`-addr 127.0.0.1:18082`，`DATABASE_URL` / `JWT_SECRET` 均空）**：
+>   - `GET /healthz` → `200 {"status":"ok"}`，**无**弃用头；
+>   - `GET /health` → `200 {"status":"ok"}`（同报文）+ `Deprecation: true` / `Link: </healthz>; rel="alternate"` / `Warning: 299 - "deprecated endpoint /health; use /healthz"`；
+>   - `GET /readyz` → `503`（unwired，预期）。
+> - **门**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` / `staticcheck ./...` / `go test ./... -count=1` 全 EXIT=0（12 包 `ok`）。
+> - **消费者核查（非 core）**：全工作区 `grep 8081/health` 的非 core 命中只有 `tellurion-agent:docs/hermes/e2e-acceptance-test.md:48` 一处，已改打 `/healthz`（agent 同批单独 commit）；其余均为本仓自身（已改）或历史归档（不改写）。
+> - **core 两处消费者（只记录，不动）**：`tellurion:docker-compose.yml:160`（`curl -f http://localhost:8081/health`）与 `tellurion:tools/local-stack.sh:82`；core 改打 `/healthz` 之前，别名**不得删**，core 侧改动按裁决另立单项。
+> - **边界**：只动本仓；`quant-trading` / `quant-trading-agent` 是历史仓，不在本次 12 仓范围，未碰。

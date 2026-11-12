@@ -5,7 +5,7 @@
 // 用 `internal/store` 的四个 port 装出 aggregator。DDL 失败（PG 不可达）
 // 不再让进程退出：数据端点保持 503，后台每 10s 重试迁移，成功后同进程自愈。
 //
-// `DATABASE_URL` 为空 ⇒ 保持 **fail-closed 503**（`/health` 常绿）。
+// `DATABASE_URL` 为空 ⇒ 保持 **fail-closed 503**（`/healthz` 常绿）。
 // 这不是「能用但没数据」，而是「明确没接线」：接上假实现让 200 看起来正常，
 // 比 503 危险得多。
 //

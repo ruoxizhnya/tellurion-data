@@ -56,11 +56,13 @@ data-service listening on 127.0.0.1:18082 (data ports unwired: /datasets/* -> 50
 
 ```powershell
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); $env:CGO_ENABLED='0'
-curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:18082/health
+curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:18082/healthz
 curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:18082/readyz
 ```
 
 真输出：`200`、`503`。
+
+> **`/health` 是过渡弃用别名**（X-PROBE-NAMING，2026-11-12）：报文与 `/healthz` 相同，但响应带 `Deprecation: true` / `Link: </healthz>; rel="alternate"` / `Warning: 299 - "deprecated endpoint /health; use /healthz"`。排障一律用 `/healthz`；别名摘除条件见 `docs/api-schema.md` §1.1。
 
 ### 1.3 后台起 / 停（演练与日常排障用）
 
@@ -122,7 +124,7 @@ $rows | Group-Object route | ForEach-Object { $g=@($_.Group); $err=@($g | Where-
 真输出（对 §7 演练日志）：
 
 ```
-GET /health n=2 5xx=0 avg_ms=0.000000 max_ms=0.000000
+GET /healthz n=2 5xx=0 avg_ms=0.000000 max_ms=0.000000
 GET /readyz n=1 5xx=1 avg_ms=0.639000 max_ms=0.639000
 GET /datasets/resolve n=1 5xx=1 avg_ms=0.000000 max_ms=0.000000
 POST /ingest/points n=1 5xx=1 avg_ms=0.000000 max_ms=0.000000
@@ -212,7 +214,7 @@ ok  	tellurion-data/internal/schema	0.525s
 
 ## 5. 503 排查路径（按顺序，别跳）
 
-1. **`/health` 还是 200 吗？** 不是 ⇒ 进程死了或端口不对，先看 §1.3 的 `err.log` 尾部。
+1. **`/healthz` 还是 200 吗？** 不是 ⇒ 进程死了或端口不对，先看 §1.3 的 `err.log` 尾部。
 2. **看 `/readyz` 的 body**：
 
    ```powershell
@@ -381,7 +383,7 @@ Remove-Item Env:DATABASE_URL
 $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); $env:CGO_ENABLED='0'
 $body = '{"data_type":"ohlcv_daily","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"close":1685.5}}]}'
 Set-Content -Path "$env:TEMP\ingest.json" -Value $body -Encoding ASCII
-curl.exe -s -o "$env:TEMP\health.body"   -w '%{http_code}' http://127.0.0.1:18081/health
+curl.exe -s -o "$env:TEMP\health.body"   -w '%{http_code}' http://127.0.0.1:18081/healthz
 curl.exe -s -o "$env:TEMP\readyz.body"   -w '%{http_code}' http://127.0.0.1:18081/readyz
 curl.exe -s -o "$env:TEMP\resolve.body"  -w '%{http_code}' 'http://127.0.0.1:18081/datasets/resolve?symbols=600519.SH&from=2026-01-05T00:00:00Z&to=2026-01-09T00:00:00Z&freq=1d&adjustment=qfq&as_of=2026-01-10T00:00:00Z'
 curl.exe -s -o "$env:TEMP\ingest.body"   -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "@$env:TEMP\ingest.json" http://127.0.0.1:18081/ingest/points
@@ -451,7 +453,7 @@ READY_BACK=200 {"status":"ready","store":"postgres"}
 
 ```
 08:21:00 httpapi: route="GET /readyz" status=200
-08:21:15 … 08:21:23 httpapi: route="GET /readyz" status=503   （拔库区间，同时 /health 一直 200）
+08:21:15 … 08:21:23 httpapi: route="GET /readyz" status=503   （拔库区间，同时 /healthz 一直 200）
 08:21:24 httpapi: route="GET /readyz" status=200              （库回来后自愈）
 ```
 
@@ -491,7 +493,7 @@ docker stop -t 20 data-shutdown-probe
 09:11:32 data-service listening on 0.0.0.0:8081 (data ports wired to PG; write面 wired to PG, auth=false)
 09:11:32 syncjob: scheduler started (interval=30s)
 09:11:32 syncjob: worker 1678460421d8-1 started (poll=2s)
-09:11:36 httpapi: route="GET /health" status=200 dur_ms=0.36
+09:11:36 httpapi: route="GET /healthz" status=200 dur_ms=0.36
 09:11:53 data-service: shutdown signal received; draining in-flight HTTP requests
 09:11:53 data-service: stopped
 09:11:53 syncjob: scheduler stopped

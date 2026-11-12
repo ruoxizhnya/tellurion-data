@@ -1,12 +1,12 @@
 ---
 status: active
 last-verified: 2026-11-12
-verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐；2026-11-12 `X-LOW-CLEANUP` 登记「分页口径不一致」（`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`），只登记不改行为
+verified-by: 代码-文档对齐审计 —— 29 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`；同日 `X-PROBE-NAMING` 增 `/healthz` 规范名、`/health` 改过渡弃用别名）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐；2026-11-12 `X-LOW-CLEANUP` 登记「分页口径不一致」（`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`），只登记不改行为
 ---
 
 # API Schema — tellurion-data
 
-> **实现状态（2026-10-25 更新，QT-40 H4 ②）**：读面 `GET /datasets/resolve` 与 `GET /datasets/{hash}` 已落地；**写面第一条 `POST /ingest/points` 同日落地**（`internal/httpapi/server.go` handler + `internal/assembly` 装配层 + `cmd/dataservice` 接线）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（compose 出厂值 `market`；设空串回落 `public`，仅作兼容保留，**不是搬迁开关**——本机实例的物理搬迁已于 2026-11-10 执行）；DSN 为空 ⇒ 读面与写面都 fail-closed 503（`/health` 常绿）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
+> **实现状态（2026-10-25 更新，QT-40 H4 ②）**：读面 `GET /datasets/resolve` 与 `GET /datasets/{hash}` 已落地；**写面第一条 `POST /ingest/points` 同日落地**（`internal/httpapi/server.go` handler + `internal/assembly` 装配层 + `cmd/dataservice` 接线）。装配开关：`DATABASE_URL`（DSN）、`DATA_MARKET_SCHEMA`（compose 出厂值 `market`；设空串回落 `public`，仅作兼容保留，**不是搬迁开关**——本机实例的物理搬迁已于 2026-11-10 执行）；DSN 为空 ⇒ 读面与写面都 fail-closed 503（`/healthz` 常绿；`/health` 过渡别名等价）。`/factors/{name}@{hash}` **已于裁-14 撤掉**（路由不存在，不是恒 404 占位）：因子读面只在 core。同 hash 两次拉取逐位一致已由 wire 级测试钉住（`server_test.go` `TestSnapshotSameHashReturnsByteIdenticalBody`）。
 >
 > ⚠️ **写端点已于 2026-11-07 晚在真 PG 上跑过**（便携 PostgreSQL 16.2 @ 55432，`DATA_MARKET_SCHEMA=market`）：同内容两次 `200 {"received":1,"persisted":1,"skipped":0}`；同主键改内容 → `409 content_conflict`；空库/停库时 `503 dependency_unavailable`。此前只有替身 Exec 的测试腿；真库门禁现在由 `internal/store` 的 `DATABASE_URL`-gated PG 套件 + 这次真二进制演练共同覆盖。
 >
@@ -18,7 +18,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > 本文件是**本仓对外接口的唯一真相源**。代码与它不一致时，先判断谁错：契约错 → 改本文 + 立 ADR；实现错 → 改代码。
 > 跨仓消费方（core / agent / ui / 其他服务）按本文件编码，**不读本仓实现**。
 > **鉴权（2026-10-25 已接线，ADR-0005）**：机制在 kit `v0.1.4` 的 `auth/httpadapter`（2026-10-25 引入 `v0.1.1`，同日随 kit `KT-11` 升 `v0.1.4`——`v0.1.1` 会把 `sub=service:<repo>` 的非数字 subject 当场 401，服务间调用走不到策略表），策略表在本仓
-> `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
+> `internal/httpapi/policy.go`。`/healthz`（规范名）与 `/health`（过渡弃用别名）与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
 > `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；**`POST /api/ingest/raw` 沿用 REV-17 的 `trader` / `admin`（迁移不重拍角色），`GET /api/evidence[/{content_hash}]` = `service` + viewer / trader / admin**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。
 > **鉴权三态（2026-11-12）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret + 回环绑定 + 未显式声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 任意绑定全放行，启动 WARN 同时点名「写面无鉴权」与**实际**绑定地址（非回环时标注「已对外暴露」）；未知声明值 ⇒ 拒绝启动。**非回环绑定 + 无声明 ⇒ 拒绝启动**（与其余五仓同口径）。`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值；其容器绑 `0.0.0.0`，缺 secret 且未声明即拒启。
@@ -102,18 +102,26 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > **`as_of` 与 `adjustment` 为什么必须在参数里**：前者是第二道防前视的输入（aggregator 按 `visible_at <= as_of` 过滤，定义权在本仓，见对表 L2）；后者由**请求方（core）给**、本仓只按参数取数并回算 hash——本仓**不读** `backtest_adjustment_anchors`（owner = core 回测域），否则 hash 口径两处各自算一遍（对表 L3）。
 
 > **鉴权策略表（2026-10-25，裁-15 + H4 ②）**：
-> - **本仓实际路由**（`servedPolicy`）：`GET /health`、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。**G3（2026-11-10）**：5 条只读兼容 GET = `service` + viewer / trader / admin；`POST /api/v1/ohlcv/bulk` = any-authenticated（只读 POST，沿用 REV-17 口径，匿名仍拒）。**X1c 作业层（2026-11-10）**：`GET /api/sync/jobs`、`GET /api/sync/jobs/{id}`、`GET /api/sync/schedules` = `service` + viewer / trader / admin；`POST /api/sync/jobs`、`{id}/cancel`、`{id}/retry`、`schedules/{id}/run` = trader | admin；`POST /api/sync/schedules`、`PUT`、`DELETE`、`{id}/toggle` = admin（沿用 REV-17「排程管理 admin、其余变更 trader」的档位，迁移不重拍）。
+> - **本仓实际路由**（`servedPolicy`）：`GET /healthz`（规范名）、`GET /health`（过渡弃用别名）、`GET /readyz` = Public；`GET /datasets/resolve`、`GET /datasets/{hash}` = `service`（裁-17）+ viewer / trader / admin；**`POST /ingest/points` = 只 `service` + `admin`**。写面不放 `viewer`/`trader`，也不 Public：读档位与写档位混在同一档里，将来给写面收紧就说不清是谁在什么时候为什么放开的。`admin` 之所以必须在：core 的 `pkg/auth` 角色集今天仍是 {viewer, trader, admin}，`service` 要能签发是 QT-71 的活——不开 `admin` 这条腿今天就不可用（代价与订正条件见 ADR-0006「代价」节）。**G3（2026-11-10）**：5 条只读兼容 GET = `service` + viewer / trader / admin；`POST /api/v1/ohlcv/bulk` = any-authenticated（只读 POST，沿用 REV-17 口径，匿名仍拒）。**X1c 作业层（2026-11-10）**：`GET /api/sync/jobs`、`GET /api/sync/jobs/{id}`、`GET /api/sync/schedules` = `service` + viewer / trader / admin；`POST /api/sync/jobs`、`{id}/cancel`、`{id}/retry`、`schedules/{id}/run` = trader | admin；`POST /api/sync/schedules`、`PUT`、`DELETE`、`{id}/toggle` = admin（沿用 REV-17「排程管理 admin、其余变更 trader」的档位，迁移不重拍）。
 > - **REV-17 逐条移植**（`legacyREV17`）：旧 `core:cmd/data` 的 28 条策略（排程管理 admin / 其余变更 trader / `POST /screen` 与 `POST /api/v1/ohlcv/bulk` any-authenticated）已逐条搬入本仓；**`POST /api/v1/ohlcv/bulk` 已于 G3（2026-11-10）落地并移入 `servedPolicy`；8 条作业/排程策略已于 X1c（2026-11-10）落地并移入 `servedPolicy`（`{id}` 形状、角色结论不变）；`POST /api/ingest/raw` 已于 2026-11-12 随证据归档面落地并移入 `servedPolicy`（角色仍为 `trader|admin`）；**因子同步/派生 4 条已于 2026-11-12 按归属裁决退役删除**（`POST /sync/factors/:factor_name`、`POST /sync/factors/all`、`POST /api/sync/factor-attribution/:factor_name`、`POST /api/sync/factor-ic/:factor_name`）⇒ `legacyREV17` 余 14 条**。core `cmd/data` 已于 `a96d836`（2026-11-08）删除，这 14 条今天**没有任何进程提供服务**；保留这张表是为了端点迁入时「同一路由、同一角色」不再重新拍板。守卫 `TestLegacyREV17PolicyIsVerbatim` + `TestLegacyREV17DecisionsMatchOldService` 钉住档位与结论，且禁止同一路由同时出现在两张表；`TestFactorSyncPolicyIsRetired` 钉住退役的四条不许回流（策略表无条目 + 实际路由 404）。
 > - **factors 同步面已退役（2026-11-12）**：因子定义与因子值归 **core 按需求值**（ADR-037：消费点实时求值，data 只提供原始行情/参考数据），`data-service` **不提供** `/sync/factors*`、`/api/sync/factor-attribution*`、`/api/sync/factor-ic*` 任何写面；这些路径今天打过来是 404。core 侧因子缓存缺数据时应触发 core 自己的求值，而不要再提示调用 data 的 `sync/factors/all`（该路径不存在）。
-> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 26 条**）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 五条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）；作业层 HTTP 行为由 `internal/httpapi/sync_test.go` 覆盖（202/400/404/409/503、空数组、坏 cron、`run` 立即入队）；证据归档面由 `internal/httpapi/evidence_test.go` 覆盖（201/400/404/503、脱敏先于哈希、分页上限）。
+> - 守卫：`TestRouteTableEqualsServedPolicy`（路由表 ≡ 实际策略表，**逐条点名 29 条**）；`TestHealthAliasCarriesDeprecationSignals`（`/health` 别名必须带 Deprecation / Link / Warning 且报文与 `/healthz` 逐字节相同）；`TestServedPolicyWriteRouteRolesAreNarrow`（写面档位只有 service+admin，不 Public、不 any-authenticated）；`TestServedPolicyLegacyReadRoutes`（G3 五条档位 + bulk 不再属 legacy）；`TestIngestPointsAuthTiers`（service/admin 过闸到业务 503，viewer/trader/未知角色 403，无凭证 401）；`TestAuthWireThreeStates`（health 公开 / 无凭证 401 / viewer 可读 / 闸未装配 503）；`TestServedPolicyServiceRole`（service 过闸到 handler、未列角色仍 403、health 仍 Public）；作业层 HTTP 行为由 `internal/httpapi/sync_test.go` 覆盖（202/400/404/409/503、空数组、坏 cron、`run` 立即入队）；证据归档面由 `internal/httpapi/evidence_test.go` 覆盖（201/400/404/503、脱敏先于哈希、分页上限）。
 > - **跨仓前置**：core `proxyRequest` 已转发入站 `Authorization`（2026-10-25）；`POST /api/v1/ohlcv/bulk` 经 core 代理不再 401。**写端点调用方**：2026-11-08 起 core 已无投点作业（`INGEST_WRITE_*` 随之删除）；作业层 worker 在本仓进程内直接走 `assembly.Pipeline` → `store.BulkInsert`，不经 HTTP 投点。
 
 ### 1.1 服务探针与请求治理（G1，2026-11-07）—— ✅ 代码已落，真实 PG 腿当晚已跑
 
 | 方法 | 路径 | 用途 | 鉴权 |
 |---|---|---|---|
-| GET | `/health` | 进程存活（**不读库**，库挂了也 200） | 无（公开） |
+| GET | `/healthz` | 进程存活（**不读库**，库挂了也 200）。**规范名**（X-PROBE-NAMING，2026-11-12） | 无（公开） |
+| GET | `/health` | **过渡别名**，报文与 `/healthz` 逐字节相同；响应带 `Deprecation: true`、`Link: </healthz>; rel="alternate"`、`Warning: 299 - "deprecated endpoint /health; use /healthz"`。**新消费者不得使用** | 无（公开） |
 | GET | `/readyz` | 就绪：PG 池可连 + 本仓 DDL 已执行（`SELECT to_regclass('market.ohlcv_daily_qfq')`） | 无（公开） |
+
+> **`/health` 摘除前置条件**（三条全满足才删，删的动作单独 commit）：
+> ① core 的 `docker-compose.yml` healthcheck 与 `tools/local-stack.sh` 改打 `/healthz`；
+> ② 非 core 全仓 `grep -rn "/health\b"` 零残留（除本仓弃用实现/文档）；
+> ③ 本表删掉 `/health` 行、`servedPolicy` 同步删条目。守卫 `TestHealthAliasCarriesDeprecationSignals` 钉住别名三个信号，
+> 防止它安静地活成第二个规范名。
+
 
 `/readyz` 三态（`readyBody = {status, store, error?}`）：
 

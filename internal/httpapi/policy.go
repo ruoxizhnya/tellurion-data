@@ -3,7 +3,7 @@ package httpapi
 import kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 
 // servedPolicy 是本仓**实际对外**的「路由 × 角色」表（裁-15）。
-// `/health` 必须公开（探针不带 token）；数据面读端点按 viewer 起。
+// `/healthz`（及过渡别名 `/health`）必须公开（探针不带 token）；数据面读端点按 viewer 起。
 //
 // `service`（裁-17）：这两条的调用方是 core / analytics，用 `service` 角色的长期
 // token，不是人类会话的 `trader`。它就是一个普通 access token 上的角色串
@@ -18,6 +18,9 @@ import kithttp "github.com/ruoxizhnya/tellurion-kit/auth/httpadapter"
 //   - 刻意**不开** viewer/trader：读档位与写档位混在同一档里，将来给写面
 //     收紧就说不清谁在什么时候为什么放开的。
 var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
+	// `/healthz` 是规范名；`/health` 是过渡别名（X-PROBE-NAMING），两者
+	// 都必须公开且不限流，别名在摘除前置条件满足后连同路由一起删。
+	"GET /healthz":          {Public: true},
 	"GET /health":           {Public: true},
 	"GET /readyz":           {Public: true},
 	"GET /datasets/resolve": {Roles: []string{"service", "viewer", "trader", "admin"}},
