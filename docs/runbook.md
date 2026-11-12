@@ -28,9 +28,17 @@ $env:DATA_MARKET_SCHEMA = 'market'
 go run ./cmd/dataservice -addr 127.0.0.1:8081
 ```
 
-- 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸；无 secret + **回环绑定** + 未声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；无 secret + **非回环绑定** + 未声明 ⇒ **拒绝启动**（错误点名「缺 JWT_SECRET 且未声明，绑定地址不是回环」）；要本地开放写面，显式 `AUTH_INSECURE_EXPOSURE=loopback-published`（任意绑定放开，启动日志 WARN「当前写面无鉴权」）。
+- 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸；无 secret + **回环绑定** + 未声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；无 secret + **非回环绑定** + 未声明 ⇒ **拒绝启动**（错误点名「缺 JWT_SECRET 且未声明，绑定地址不是回环」）；要本地开放写面，显式 `AUTH_INSECURE_EXPOSURE=loopback-published`（任意绑定放开，启动 WARN 同时说出写面无鉴权与**实际**绑定地址）。
 - `AUTH_INSECURE_EXPOSURE` 只接受逐字 `loopback-published`；拼错 / 未知值 ⇒ **拒绝启动**（不静默落到默认态）。
 - 启动时会重放本仓 DDL（幂等）；PG 连不上**不再退出**，见 §1.2 与 §5。
+
+第 3 态真输出（2026-11-12，`AUTH_INSECURE_EXPOSURE=loopback-published`，`-addr 0.0.0.0:18092`）：
+
+```
+data-service: WARNING 写面无鉴权：write endpoints accept unauthenticated requests; 实际绑定 bind address="0.0.0.0:18092"; 声明 AUTH_INSECURE_EXPOSURE=loopback-published (声明值，不等于实际绑定)；绑定非回环，已对外暴露 (non-loopback bind)
+```
+
+WARN 里的 `bind address` 是**实际**监听地址，与声明值分开写；绑 `127.0.0.1` 时不带「已对外暴露」，绑 `0.0.0.0` / 空主机（`:8081`）时必带。
 
 ### 1.2 无库 / PG 不可达（降级形态，数据面 503）
 

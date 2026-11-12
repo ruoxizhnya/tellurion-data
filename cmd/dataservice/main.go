@@ -73,7 +73,7 @@ func main() {
 	case authOpen:
 		tokens = auth.NewTokenService(auth.Config{})
 		authOption = httpapi.WithAuthorizer(httpapi.NewOpenAuthorizer())
-		log.Printf("data-service: WARNING authentication disabled by explicit AUTH_INSECURE_EXPOSURE=%s: 当前写面无鉴权 (write surface has NO authentication); publish on loopback only", kithttp.InsecureExposureLoopbackPublished)
+		log.Print(authWarning(*addr))
 	}
 
 	srv, cleanup, err := build(authOption)
@@ -132,6 +132,17 @@ func decideAuthPosture(secret, exposure, addr string) (authPosture, error) {
 	default:
 		return authLocked, fmt.Errorf("auth: AUTH_INSECURE_EXPOSURE=%q is not recognized; the only accepted value is %q (or set JWT_SECRET)", exposure, kithttp.InsecureExposureLoopbackPublished)
 	}
+}
+
+// authWarning 是第 3 态启动 WARN 的文本：**声明值**与**实际绑定地址**分开写；
+// 实际绑定非回环时额外点名「已对外暴露」，避免运维只看声明值就以为发布层
+// 只在回环（容器里 `loopback-published` 常配 `-addr 0.0.0.0`，靠 ports 前缀收口）。
+func authWarning(addr string) string {
+	msg := fmt.Sprintf("data-service: WARNING 写面无鉴权：write endpoints accept unauthenticated requests; 实际绑定 bind address=%q; 声明 AUTH_INSECURE_EXPOSURE=%s (声明值，不等于实际绑定)", addr, kithttp.InsecureExposureLoopbackPublished)
+	if !isLoopbackAddr(addr) {
+		msg += "；绑定非回环，已对外暴露 (non-loopback bind)"
+	}
+	return msg
 }
 
 // bindHost 从 -addr 取绑定主机；取不到端口时原样当主机比（空 = 全网卡）。

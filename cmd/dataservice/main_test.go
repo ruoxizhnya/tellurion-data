@@ -69,6 +69,32 @@ func TestDecideAuthPosture(t *testing.T) {
 	}
 }
 
+// TestAuthWarningCarriesActualBind 钉住第 3 态 WARN 同时说出「写面无鉴权」与
+// **实际绑定地址**；声明值保留且标成「声明」；非回环绑定必须额外点名「已对外暴露」。
+func TestAuthWarningCarriesActualBind(t *testing.T) {
+	cases := []struct {
+		name, addr string
+		exposed    bool
+	}{
+		{"回环", "127.0.0.1:8081", false},
+		{"全网卡", "0.0.0.0:8081", true},
+		{"空主机", ":8081", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := authWarning(tc.addr)
+			for _, want := range []string{tc.addr, "写面无鉴权", "实际绑定", "声明", "loopback-published"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("WARN 少了 %q：%s", want, got)
+				}
+			}
+			if has := strings.Contains(got, "已对外暴露"); has != tc.exposed {
+				t.Fatalf("「已对外暴露」= %t, want %t：%s", has, tc.exposed, got)
+			}
+		})
+	}
+}
+
 // TestMainProcessRejectsNonLoopbackWithoutSecret 用真进程钉住第 2 态的非回环
 // 拒绝：退出码必须是 1，stderr 必须说清「缺 secret 且未声明、绑定地址不是回环」。
 func TestMainProcessRejectsNonLoopbackWithoutSecret(t *testing.T) {

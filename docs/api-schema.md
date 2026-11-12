@@ -21,7 +21,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > `internal/httpapi/policy.go`。`/health` 与 `/readyz` 公开；数据面读端点接受 `service`（服务间调用，裁-17）或
 > `viewer` 及以上（any-of 写全，不是层级）；**`POST /ingest/points` 只接受 `service` / `admin`**；**`POST /api/ingest/raw` 沿用 REV-17 的 `trader` / `admin`（迁移不重拍角色），`GET /api/evidence[/{content_hash}]` = `service` + viewer / trader / admin**；`/api/sync/*` 写端点沿用 REV-17 档位（作业创建/取消/重试与 `schedules/{id}/run` = `trader` / `admin`，排程增删改/切换 = `admin`）。**全部端点**
 > fail-closed：未装配 Authorizer → 503，无凭证 / 坏 token → 401，越权 → 403。
-> **鉴权三态（2026-11-12）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret + 回环绑定 + 未显式声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 任意绑定全放行，启动 WARN 点名「写面无鉴权」；未知声明值 ⇒ 拒绝启动。**非回环绑定 + 无声明 ⇒ 拒绝启动**（与其余五仓同口径）。`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值；其容器绑 `0.0.0.0`，缺 secret 且未声明即拒启。
+> **鉴权三态（2026-11-12）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret + 回环绑定 + 未显式声明 ⇒ 进程可起，**读面公开、写面一律 503 `auth_unavailable`**；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 任意绑定全放行，启动 WARN 同时点名「写面无鉴权」与**实际**绑定地址（非回环时标注「已对外暴露」）；未知声明值 ⇒ 拒绝启动。**非回环绑定 + 无声明 ⇒ 拒绝启动**（与其余五仓同口径）。`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值；其容器绑 `0.0.0.0`，缺 secret 且未声明即拒启。
 
 ## 1. 接口面
 
