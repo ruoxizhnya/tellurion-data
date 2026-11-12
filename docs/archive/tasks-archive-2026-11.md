@@ -828,4 +828,12 @@
      `--- FAIL: TestFetchFundamentalsRange_ParsesByResponseFields` / `missing columns must stay nil (nil≠0): pe=0xc00010a1b8 pb=…`、
      `--- FAIL: TestFetchFundamentalsRange_MissingColumnDoesNotShiftValues` / `column shift detected: pe=… roe=…`（EXIT=1）。
      逐字节还原后 `client.go` sha256 `FAE64CF240E5B5CBFEEC527A0C89D86C8C7B416B8BA3E983B4DA984FB9D75ED4` 与改前一致，复跑 `ok`（EXIT=0）。
-- **执行侧（待批后补记）**：真实库建表（DDL 原文先报批）、重建 data 镜像（先报命令）、22 只 symbol × 报告期 `2020-01-01..2025-12-31` 走 `POST /api/sync/jobs` 拉数（报作业 ID 与实际行数）、`600036.SH` / `300750.SZ` 的 `pe`/`roe` 与 Tushare 源逐值交叉核对。
+- **执行侧（2026-11-12 已执行，走 (b) 由镜像启动时 `schema.Statements()` 建表）**：
+  - 构建/重启：`docker compose --profile full build data-service` + `up -d --no-deps data-service`，容器 `healthy`、`GET /readyz` = 200；未 `compose down`、未动其他 7 个容器。
+  - `\d market.stock_fundamentals` 实测：16 个业务列 + 生成列 `available_date`（`COALESCE(ann_date, trade_date)`）+ 主键 `pk_stock_fundamentals (ts_code, trade_date)` + `idx_stock_fundamentals_available (ts_code, available_date DESC)`，与批准 DDL 一致。
+  - 拉数：22 只 symbol × 报告期 `2020-01-01..2025-12-31`，每票一个 `POST /api/sync/jobs`（`job_type=fundamentals`），22 个作业全部 `succeeded`；作业 ID 与 `fetched/persisted` 见 `ingest.sync_jobs`（`created_at >= '2026-11-12' AND job_type='fundamentals'`），合计 `fetched=841 / persisted=841`。源端同一报告期存在更正记录（重复计数），按主键 upsert 后库内 **528 行 = 22 只 × 24 期**，无缺期、无补零。
+  - 覆盖：`min(trade_date)=2020-03-31`、`max=2025-12-31`、`count(distinct ts_code)=22`。
+  - 交叉核对（同报告期）：`600036.SH` 2024-09-30 `roe=10.1561` / 2024-12-31 `roe=12.8902`，`300750.SZ` 2024-09-30 `roe=16.565` / 2024-12-31 `roe=22.8252`，与 Tushare `fina_indicator` 源值**逐值一致**；`ann_date`（10-30/2025-03-26、10-19/2025-03-15）与 `available_date` 同步落库。
+  - **`pe` 缺口（如实记）**：`fina_indicator` 响应 `fields` 不含 `pe/pb/ps`，三列全为 `NULL`；`value` 维度所需估值字段需另接 `daily_basic`，本单未取、未补零。
+  - 旧表只读校验：`SELECT count(*) FROM public.stock_fundamentals` = **0**（本次只写 `market`）。
+  - 遗留口径偏差：`persisted` 是 upsert **执行次数**（841），不是库内行数（528）；本轮不改代码，已在 `api-schema.md` 写明实际行数以库内 `count(*)` 为准。

@@ -60,7 +60,7 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 > - `stocks`：`params` 可给 `exchange`（空 = 全市场）、`list_status`（空 = `L` 上市中；退市要单独跑 `D`）。
 > - `trading_calendar`：`params` 可给 `exchange`（空 = `SSE`）、`start_date` / `end_date`（空 = 当年；需要历史必须显式给区间）。
 > - `index_constituents`：`params` 必须给 `index_code`（如 `000300.SH`），`start_date` / `end_date` 空 = `Now` 往前 120 天；只落**最新一期快照**（整期替换当前行，口径见 `db-schema.md` §9.6）。
-> - `fundamentals`：`params` 必须给 `symbols`（非空数组）与 `start_date` / `end_date`（**报告期**截止日，如 `2020-01-01`..`2025-12-31`），缺一即 400 `invalid_parameter`，`end_date < start_date` 同样 400。取 Tushare `fina_indicator` 一次拉全每个报告期；`ann_date` 原样保留（PIT 判据），源端没给的字段落 `NULL`（**不折成 0**）。`fetched` = 全部票的报告期行数之和，`persisted` = upsert 行数。
+> - `fundamentals`：`params` 必须给 `symbols`（非空数组）与 `start_date` / `end_date`（**报告期**截止日，如 `2020-01-01`..`2025-12-31`），缺一即 400 `invalid_parameter`，`end_date < start_date` 同样 400。取 Tushare `fina_indicator` 一次拉全每个报告期；`ann_date` 原样保留（PIT 判据），源端没给的字段落 `NULL`（**不折成 0**）；该接口**不提供 `pe/pb/ps`**，这三列恒 `NULL`（估值需另接 `daily_basic`）。`fetched` = 源端记录数之和（同一报告期的更正记录会重复计数），`persisted` = upsert **执行次数**之和；实际行数以按主键去重后的库内 `count(*)` 为准（2026-11-12 实测：22 只票各 24 期，`fetched`/`persisted` 合计各 841，库内 528 行）。
 > - 结果里的 `source` / `fetched` / `persisted` 与点位作业同形；无 `TUSHARE_TOKEN` 时这四类作业以 `misconfigured` 失败（不会静默写 0 行）。
 
 > **空参数 no-op 不再入队（2026-11-12）**：点位作业的「范围」在**入队期**校验（`syncjob.ValidateJobScope`，`POST /api/sync/jobs` 与排程创建/更新共用）：`symbols` 非空，或 `start_date` / `end_date` 至少一个，否则 400 `invalid_parameter`。调度 tick 遇到库里遗留的无范围排程只记日志并跳过，不建作业。参考数据四字面值不套这条规则（各自的范围校验在 `ReferenceRunner`）。
