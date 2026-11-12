@@ -307,6 +307,57 @@ LIMIT 5;
 判据：同 `(symbol, trade_date)` 的 `source` 或任一内容列与请求不同 ⇒ 409 是正确拒收；
 **不要**用 `UPDATE` 把它改成请求值来「消除 409」，那等于绕过 ADR-0004/0006 的受控修正。
 
+## 6.1 复权基准：什么时候必须手工推进（ADR-0011）
+
+**规则**：qfq 的基准日/基准因子由 `market.adjust_baseline_changes` 的最新一条记录固定，
+取数时**不自动推进**（`docs/dataflow.md` §「复权基准与重算」）。自动推进会每跑一次增量作业
+就把全部历史价格改一遍，且「同参回测结果随取数窗口变化」正是最难查的那类 bug。
+
+**因此以下情况必须由人显式推进基准**（不要等它自己动）：
+
+1. 数据源的除权除息/复权因子发生**回溯修正**（Tushare 的 `adj_factor` 历史值被重算），
+   旧基准已经不代表「以今天为起点」的前复权口径；
+2. 需要把某票的基准与全库统一（例如老数据是按各自窗口基准算的，见 2026-11-12 的
+   `600000.SH` / `600519.SH` 对齐）；
+3. 发现某票的账本基准日停在一个**已确认错误的交易日**（例如误用停牌日建账）。
+
+**推进方式**（正规 job，不要手改表、不要 `UPDATE` 价格）：
+
+```powershell
+$body = '{"job_type":"ohlcv_daily","params":{"symbols":["600000.SH"],"start_date":"2024-01-02","end_date":"2024-03-29","extra":{"baseline_date":"2025-12-31","overwrite":true}}}'
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8081/api/sync/jobs' -ContentType 'application/json' -Body $body
+```
+
+- `baseline_date` 必须同时给 `overwrite=true`，否则入队期 400 `invalid_parameter`；
+  只允许 `job_type=ohlcv_daily`。
+- 账本会 append 一条 `reason=manual`、带 `previous_date` / `previous_factor` 的记录
+  （账本中该 symbol 首次记账时 `previous_*` 为 `NULL`，属正常）。
+- 同一基准重放**不追加**账本行，价格重写幂等（行数不变、内容不变）。
+
+**核对**：
+
+```sql
+-- 当前基准（每 symbol 一条最新记录）
+SELECT DISTINCT ON (symbol) symbol, base_date, base_factor, previous_date, previous_factor, reason
+FROM market.adjust_baseline_changes ORDER BY symbol, changed_at DESC, id DESC;
+
+-- 全库有效基准是否唯一（账本优先，无账本按 MAX(trade_date) 重建口径）
+WITH eff AS (
+  SELECT d.symbol,
+         COALESCE((SELECT b.base_date FROM market.adjust_baseline_changes b
+                   WHERE b.symbol = d.symbol ORDER BY b.changed_at DESC, b.id DESC LIMIT 1),
+                  MAX(d.trade_date)) AS baseline
+  FROM market.ohlcv_daily_qfq d GROUP BY d.symbol
+)
+SELECT baseline, COUNT(*) FROM eff GROUP BY baseline;
+```
+
+判据：`baseline` 只有一行（或所有行都是有意保留的例外），没有某个 symbol 同时落在两个基准上。
+
+**回退**：用旧基准日再发一次同形状 job（`baseline_date=旧日期` + `overwrite=true`）。
+旧基准因子可从账本的 `previous_factor` 取；账本没有记录时，用任一日
+`close_new / close_old = base_old / base_new` 反推，别凭记忆填。
+
 ## 7. 故障演练记录（G4 ⑤）
 
 - 时间：2026-11-07 05:37（Asia/Shanghai）

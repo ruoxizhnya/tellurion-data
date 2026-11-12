@@ -796,3 +796,9 @@
        `store: row exists with different content for the same primary key: point[0] 600519.SH ohlcv_daily`（`FAIL tellurion-data/internal/store 0.357s`，EXIT=1）。
        逐字节还原后 `sha256 FB1D75EEEB1F1B336268F1ABAE095DCFFAC24D28DDE4A4A4E5404E79403872FE` 与改前一致，`ok tellurion-data/internal/store 2.112s`（EXIT=0）。
   - **未做（如实）**：`600000.SH` / `600519.SH` 既有行仍按各自旧窗口基准；对齐操作 = 对每只票 `POST /api/sync/jobs` 带 `baseline_date` + `overwrite=true` 重算，**执行前需报批**（会改写历史价格）。
+- **运维执行记录（2026-11-12，主任批准后的历史对齐）**：用 `baseline_date=2025-12-31` + `overwrite=true` 的正规 job 重算两只按旧窗口基准确立的票（范围 = 各自既有区间，不改行数）：
+  - `600000.SH`：58 行（2024-01-02..2024-03-29）不变；账本 `2025-12-31 / base_factor=16.5935 / reason=manual`；抽查 close 2024-01-02 `6.6 → 6.1789857474312235`、2024-02-01 `6.8 → 6.366227739777624`、2024-03-29 `7.13 → 6.675177027149185`（三行比例一致，旧基准因子 ≈ 15.5350，由 `close_new/close_old = base_old/base_new` 反推）。
+  - `600519.SH`：22 行（2024-01-02..2024-01-31）不变；账本 `2025-12-31 / base_factor=8.4464 / reason=manual`；抽查 close 2024-01-02 `1685.01 → 1567.5476624360674`、2024-01-15 `1640 → 1525.675317294942`、2024-01-31 `1604.91 → 1493.031447243796`（旧基准因子 ≈ 7.8576）。
+  - 两只票账本首次记账，`previous_date/previous_factor` 为 `NULL`（此前无账本）；此后同一基准重放不追加（重跑 600000 作业后账本仍 1 行，内容哈希 `d9c0d6d470cea66739765e5dbde0536d` 前后一致）。
+  - **全库核对**：22 个 symbol 的有效基准（账本优先，无账本按 `MAX(trade_date)`）`distinct_effective_baselines=1`、全部 `2025-12-31`、`off_2025_12_31=0`。
+  - **迁移**：新表由进程启动时 `schema.Statements()` 的幂等 DDL 自动创建（`CREATE TABLE IF NOT EXISTS`），已存在的 `tellurion` 库无需手工迁移；重启后 `\d market.adjust_baseline_changes` 直接可见。
