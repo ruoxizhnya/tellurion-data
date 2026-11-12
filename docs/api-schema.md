@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-12
-verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐
+verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11-12 补证据归档面 3 条：`POST /api/ingest/raw`、`GET /api/evidence[/{content_hash}]`）；传输/调度归属与哨兵坐标按 `a96d836`（2026-11-08）后的代码订正；G1/G2/G4 真库腿状态与归档台账对齐；2026-11-12 `X-LOW-CLEANUP` 登记「分页口径不一致」（`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`），只登记不改行为
 ---
 
 # API Schema — tellurion-data
@@ -55,6 +55,8 @@ verified-by: 代码-文档对齐审计 —— 26 条路由逐条核对（2026-11
 | DELETE | `/api/sync/schedules/{id}` | **排程**：204；不存在 404 `schedule_not_found` |
 | POST | `/api/sync/schedules/{id}/toggle` | **排程**：翻转 `is_active`；激活时从当前时刻推进 `next_run_at` |
 | POST | `/api/sync/schedules/{id}/run` | **排程**：立即入队一次（不改 `next_run_at`）⇒ 202 `{job_id, next_run_at}` |
+
+> **分页口径不一致（2026-11-12 登记，不改行为，X-LOW-CLEANUP）**：本仓两个列表端点现在不是同一套分页——`GET /api/evidence` 用 `limit + offset`（`limit` 缺省 20 / 上限 100，`offset` 缺省 0），`GET /api/sync/jobs` 只有 `limit`（缺省 50），没有 `offset`。这是**现状登记**，不是承诺：要统一（补 `offset`、或两者都改游标）属于改变对外形状，须另立单并同步消费方；本条只保证下一次读文档的人知道差异在哪，不用去翻 handler 猜。
 
 > **`job_type` 的五个保留字面值（2026-11-10 ADR-0008；`index_constituents` 2026-11-12 补；`fundamentals` / `daily_basic` 2026-11-12 补，ADR-0012）**：除 data_type 外，`stocks`、`trading_calendar`、`index_constituents`、`fundamentals`、`daily_basic` 是**参考数据作业**，走 `ReferenceRunner` 的写腿（`market.stocks` / `market.trading_calendar` / `market.index_constituents` / `market.stock_fundamentals` / `market.daily_basic`），**不经过**点位闸门与 `FetchRequestFromParams` 的 data_type 校验。`fundamentals` / `daily_basic` 与 data_type 同名，但**参考腿优先**：点位管线永远拿不到它们。`daily_basic` 原本的 B 集活跃度写面本就挂起（`market_activity` 被 `writeExcludedTypes` 拒绝），不存在两条腿抢同一字面值的活跃路径。
 > - `stocks`：`params` 可给 `exchange`（空 = 全市场）、`list_status`（空 = `L` 上市中；退市要单独跑 `D`）。

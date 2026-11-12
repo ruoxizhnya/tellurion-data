@@ -27,6 +27,7 @@
 | X-DEP-BUMP-CONSUMERS | 消费方依赖抬升（kit v0.5.0 / pgx v5.11.0 / go 1.26.11）+ govulncheck 门 | 2026-11-12 | 见本条 | [施工记录](#X-DEP-BUMP-CONSUMERS) |
 | X-AGENTS-DEPENDENCY-TABLE | `AGENTS.md` §4 依赖表按实际 `go.mod` 订正 | 2026-11-12 | 见本条 | [施工记录](#X-AGENTS-DEPENDENCY-TABLE) |
 | X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
+| X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
 
 ---
 
@@ -908,3 +909,17 @@
 > - **验收（真实输出）**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` EXIT=0；`staticcheck ./...` EXIT=0；`go test ./... -count=1` 12 包全 `ok`。
 > - **`-race` 本地覆盖（Docker 容器，非仅 CI）**：`docker run --rm -v "C:\Users\ruoxi\Workspace\tellurion-data:/tellurion-data" -v data_gomod_cache:/go -w /tellurion-data golang:1.26 sh -c "go test -race ./... -count=1"` → 12 包全 `ok`、EXIT=0。**注意挂载点必须是 `…/tellurion-data`**：`internal/repoguard` 的 `repoRoot` 断言仓库目录名以 `tellurion-data` 结尾，挂到 `/w` 会让该用例假红（首次执行即踩到，改正挂载点后通过，非代码问题）。
 > - **边界**：只动本仓 CI/两条死代码/文档；strategy / contracts 的同类告警与门由各自伞腿承担。
+
+---
+
+<a id="X-LOW-CLEANUP-data"></a>
+### X-LOW-CLEANUP（data 腿）· 登记分页口径不一致（跨仓伞 `tellurion:X-LOW-CLEANUP`）
+
+> **施工记录（2026-11-12）**：
+> - **原文取证**：ODR-069 W2-F7 与 ODR-073 W2-F7/F12 残余只有一句「分页 offset 不一致登记」，无仓 / 文件坐标；按非 core 八仓逐个 grep（`Get("offset")` / `Get("limit")`）后，唯一可确证的实证在本仓：
+>   - `GET /api/evidence`：`limit + offset`（`internal/httpapi/evidence.go:143/148`，缺省 20 / 上限 100，`offset` 缺省 0）；
+>   - `GET /api/sync/jobs`：只有 `limit`（`internal/httpapi/sync.go:104`，缺省 50），**没有** `offset`。
+> - **为什么只登记不改**：补 `offset` 是增加对外形状（消费方要跟着改），改成游标更是行为变更；伞单原文就写「登记」。
+> - **落在哪**：`docs/api-schema.md` §1 路由表末尾加一条显式「分页口径不一致（登记，不改行为）」；frontmatter 同批注明。这样读文档的人不用翻 handler 猜。
+> - **其它仓的核查结论（避免下一次重复调查）**：strategy 的 `/promotions` 与 `/evidence` 都是 `limit + offset`（`internal/httpapi/api.go:372/380`、`evidence.go:143/148`）；risk / analytics / orchestration / broker / agent / contracts 无 `offset` 分页面（analytics 明确「不提供列表端点」）；core 的列表面亦无 `offset`（`/api/backtest` 只 limit），core 禁碰，属 core 侧重开立单的事。**没有发现同一仓内两套分页互相矛盾的第二个样本。**
+> - **验收**：纯文档改动；`docs/api-schema.md` 新增段落引用了可复核的源码行号，未改任何 handler。
