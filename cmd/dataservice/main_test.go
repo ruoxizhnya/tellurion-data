@@ -17,11 +17,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ruoxizhnya/tellurion-kit/auth"
 
@@ -36,22 +39,26 @@ func tokensWithSecret() *auth.TokenService {
 	return auth.NewTokenService(auth.Config{JWTSecret: []byte("compose-root-test-secret")})
 }
 
-// TestDecideAuthPosture 钉住三态启动判定：缺省不再自动放行；只有逐字
-// loopback-published 才进入开放态；拼错的值必须拒绝启动而不是静默落默认。
+// TestDecideAuthPosture 钉住三态启动判定：缺省不再自动放行；第 2 态必须回环
+// 绑定（非回环 + 无声明 ⇒ 拒启）；只有逐字 loopback-published 才进入开放态；
+// 拼错的值同样拒绝，而不是静默落默认。
 func TestDecideAuthPosture(t *testing.T) {
 	cases := []struct {
-		name, secret, exposure string
-		want                   authPosture
-		wantErr                bool
+		name, secret, exposure, addr string
+		want                         authPosture
+		wantErr                      bool
 	}{
-		{"有 secret 全闸", "s3cret", "", authEnforced, false},
-		{"无 secret 未声明⇒写面锁定", "", "", authLocked, false},
-		{"无 secret 显式声明⇒开放", "", "loopback-published", authOpen, false},
-		{"无 secret 拼错声明⇒拒绝", "", "loopback_published", authLocked, true},
+		{"有 secret 全闸", "s3cret", "", "0.0.0.0:8081", authEnforced, false},
+		{"无 secret 回环未声明⇒写面锁定", "", "", "127.0.0.1:8081", authLocked, false},
+		{"无 secret localhost 未声明⇒写面锁定", "", "", "localhost:8081", authLocked, false},
+		{"无 secret 非回环未声明⇒拒绝", "", "", "0.0.0.0:8081", authLocked, true},
+		{"无 secret 空主机未声明⇒拒绝", "", "", ":8081", authLocked, true},
+		{"无 secret 显式声明⇒任意绑定开放", "", "loopback-published", "0.0.0.0:8081", authOpen, false},
+		{"无 secret 拼错声明⇒拒绝", "", "loopback_published", "127.0.0.1:8081", authLocked, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := decideAuthPosture(tc.secret, tc.exposure)
+			got, err := decideAuthPosture(tc.secret, tc.exposure, tc.addr)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %t", err, tc.wantErr)
 			}
@@ -60,6 +67,57 @@ func TestDecideAuthPosture(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMainProcessRejectsNonLoopbackWithoutSecret 用真进程钉住第 2 态的非回环
+// 拒绝：退出码必须是 1，stderr 必须说清「缺 secret 且未声明、绑定地址不是回环」。
+func TestMainProcessRejectsNonLoopbackWithoutSecret(t *testing.T) {
+	if os.Getenv("DATA_MAIN_HELPER") == "1" {
+		os.Args = []string{"dataservice", "-addr", "0.0.0.0:18081"}
+		main()
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestMainProcessRejectsNonLoopbackWithoutSecret")
+	cmd.Env = append(envWithout(os.Environ(), "JWT_SECRET", "AUTH_JWT_SECRET", "AUTH_INSECURE_EXPOSURE", "DATABASE_URL"), "DATA_MAIN_HELPER=1")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("进程未在 5s 内退出：非回环 + 无声明必须拒启，不能降级起服务；output=%s", out)
+	}
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("期望非零退出，实得 err=%v output=%s", err, out)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("退出码 = %d, want 1; output=%s", exitErr.ExitCode(), out)
+	}
+	for _, want := range []string{"不是回环", "JWT_SECRET", "AUTH_INSECURE_EXPOSURE"} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("stderr 少了 %q:\n%s", want, out)
+		}
+	}
+	t.Logf("exit=%d stderr=%s", exitErr.ExitCode(), strings.TrimSpace(string(out)))
+}
+
+// envWithout 去掉指定键，避免外层 shell 的 secret / 声明污染子进程判定。
+func envWithout(env []string, keys ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		drop := false
+		for _, k := range keys {
+			if strings.HasPrefix(strings.ToUpper(kv), strings.ToUpper(k)+"=") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // 未配 DATABASE_URL ⇒ 读写两面都不接线，且不是错误（503 是设定）。

@@ -47,8 +47,8 @@ docker compose -f deploy/compose.yaml down
 - 镜像多阶段构建（`golang:1.25-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/health`。
 - 取数传输（ADR-0008）：`TUSHARE_TOKEN` 有值才装 Tushare（点位作业 + `stocks` / `trading_calendar` 参考数据作业）；东财客户端无凭证恒装配；`ALPHA_VANTAGE_KEY` 有值才启用 Alpha Vantage。无 token 时取数作业在作业行上响亮失败（不会静默写 0 行）。
 
-> 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸（写面必须带 token + 角色）；无 secret ⇒ 进程能起，**读面公开、写面一律 503 `auth_unavailable`**；本地要开放写面必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published`，启动日志会 WARN「写面无鉴权」。
-> 默认 compose 不配 secret ⇒ 落在第 2 态（读可用、写锁定）；需要写面时 `JWT_SECRET=... docker compose -f deploy/compose.yaml up` 或写进 `.env`。
+> 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸（写面必须带 token + 角色）；无 secret + **回环绑定** + 未声明 ⇒ 进程能起，读面公开、写面一律 503 `auth_unavailable`；无 secret + **非回环绑定** + 未声明 ⇒ **拒绝启动**（错误会点名缺 secret 且绑定地址不是回环）；本地要开放写面必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published`（任意绑定放开，启动日志 WARN「写面无鉴权」）。
+> 本仓自带 `deploy/compose.yaml` 的 command 是 `-addr 0.0.0.0:8081`：缺 secret 且无声明会拒启，这是预期的 fail-closed；跑它请注入 `JWT_SECRET`，或显式声明 `AUTH_INSECURE_EXPOSURE=loopback-published`。
 
 ## 边界
 

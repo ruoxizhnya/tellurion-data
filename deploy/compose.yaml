@@ -32,11 +32,13 @@ services:
       DATA_MARKET_SCHEMA: market
       # 凭证来源（QT-77）：data 是**验签方**，只需要共享 JWT_SECRET，不持有任何
       # *_TOKEN；签发/轮换口径见 tellurion:docs/SPEC.md 的「服务间凭证」节。
-      # 不设默认值：缺 secret 时落到第 2 态（读面公开、写面 503 auth_unavailable），
-      # 而不是用仓库里公开的字符串当签名密钥。需要写面/全闸时从环境或 .env 注入。
+      # 不设默认值：缺 secret 且未声明时，第 2 态要求回环绑定；本容器 command 是
+      # `-addr 0.0.0.0:8081`（非回环），因此会**拒绝启动**——这是预期的 fail-closed，
+      # 不是配置坏了。跑本自证 compose 请二选一：注入 JWT_SECRET（全闸），或显式
+      # 声明 AUTH_INSECURE_EXPOSURE=loopback-published（全放行；端口仍只发布在回环）。
       JWT_SECRET: ${JWT_SECRET:-}
       # 本地要恢复无 secret 的开放写面时，在环境或 .env 显式声明
-      # AUTH_INSECURE_EXPOSURE=loopback-published；缺省空 ⇒ 第 2 态（写锁定）。
+      # AUTH_INSECURE_EXPOSURE=loopback-published；缺省空 + 0.0.0.0 绑定 ⇒ 拒启。
       AUTH_INSECURE_EXPOSURE: ${AUTH_INSECURE_EXPOSURE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

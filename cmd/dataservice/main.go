@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -46,15 +47,16 @@ import (
 func main() {
 	addr := flag.String("addr", ":8081", "listen address")
 	jwtSecret := flag.String("jwt-secret", envFirst("JWT_SECRET", "AUTH_JWT_SECRET"),
-		"JWT secret shared with analysis (empty = write surface locked, reads public)")
+		"JWT secret shared with analysis (empty = write surface locked on loopback bind; non-loopback bind refuses to start)")
 	exposure := flag.String("insecure-exposure", os.Getenv("AUTH_INSECURE_EXPOSURE"),
 		"explicit declaration allowing open access without a secret (only loopback-published is accepted)")
 	flag.Parse()
 
-	// 鉴权三态（2026-11-12）：有 secret 全闸；无 secret 默认「读公开、写 503」；
-	// 只有逐字声明 AUTH_INSECURE_EXPOSURE=loopback-published 才允许全放行。
+	// 鉴权三态（2026-11-12）：有 secret 全闸；无 secret + 回环绑定默认「读公开、写 503」；
+	// 无 secret + 非回环绑定且未声明 ⇒ 拒启；只有逐字声明
+	// AUTH_INSECURE_EXPOSURE=loopback-published 才允许任意绑定全放行。
 	// 修复前这里把 allowInsecure 硬编码成 true，等价于「没配 secret = 自动开放」。
-	posture, err := decideAuthPosture(*jwtSecret, *exposure)
+	posture, err := decideAuthPosture(*jwtSecret, *exposure, *addr)
 	if err != nil {
 		log.Fatalf("data-service: %v", err)
 	}
@@ -105,28 +107,51 @@ type authPosture int
 
 const (
 	authEnforced authPosture = iota // 有 JWT_SECRET：全闸，写面必须带 token + 角色
-	authLocked                      // 无 secret、未声明开放：读公开、写面 503 auth_unavailable
+	authLocked                      // 无 secret + 回环绑定、未声明开放：读公开、写面 503 auth_unavailable
 	authOpen                        // 无 secret + 逐字声明 loopback-published：全放行（启动 WARN）
 )
 
 // decideAuthPosture 只做三态判定，不碰网络也不读全局配置，便于单测。
 //
 // 与修复前的差别：无 secret 不再因为 allowInsecure 硬编码 true 而自动放行；
-// 只有逐字匹配的显式声明才进入第 3 态。第 2 态允许任意绑定地址：写面已经
-// 锁死、读面本来就是公开数据，进程能起比拒绝启动更可用。需要拒绝的是
-// 「声明了开放但拼错」——未知值一律拒绝，不静默落到默认态。
-func decideAuthPosture(secret, exposure string) (authPosture, error) {
+// 只有逐字匹配的显式声明才进入第 3 态。第 2 态与其余五仓同口径：**必须回环绑定**
+// ——写面虽然锁死，但无 secret 的数据面不允许绑到全网卡；非回环且未声明一律拒启。
+// 未知声明值同样拒绝，不静默落到默认态。
+func decideAuthPosture(secret, exposure, addr string) (authPosture, error) {
 	if strings.TrimSpace(secret) != "" {
 		return authEnforced, nil
 	}
 	switch strings.TrimSpace(exposure) {
 	case "":
+		if !isLoopbackAddr(addr) {
+			return authLocked, fmt.Errorf("auth: 缺 JWT_SECRET 且未声明 AUTH_INSECURE_EXPOSURE，绑定地址 %q 不是回环；第 2 态只允许回环绑定（例如 -addr 127.0.0.1:8081 或 localhost:8081）；容器请注入 JWT_SECRET，或显式声明 AUTH_INSECURE_EXPOSURE=%s", addr, kithttp.InsecureExposureLoopbackPublished)
+		}
 		return authLocked, nil
 	case kithttp.InsecureExposureLoopbackPublished:
 		return authOpen, nil
 	default:
 		return authLocked, fmt.Errorf("auth: AUTH_INSECURE_EXPOSURE=%q is not recognized; the only accepted value is %q (or set JWT_SECRET)", exposure, kithttp.InsecureExposureLoopbackPublished)
 	}
+}
+
+// bindHost 从 -addr 取绑定主机；取不到端口时原样当主机比（空 = 全网卡）。
+func bindHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// isLoopbackAddr 判定 -addr 是否只绑回环：localhost 或 IP 回环地址。
+// 空主机（":8081"）、0.0.0.0、:: 都算非回环。
+func isLoopbackAddr(addr string) bool {
+	host := bindHost(strings.TrimSpace(addr))
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // envFirst 按顺序取第一个非空环境变量（core 历史用法 JWT_SECRET、配置口径 AUTH_JWT_SECRET）。

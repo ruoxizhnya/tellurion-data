@@ -87,7 +87,7 @@ contracts（协议类型） + kit（logging/http/db）
 
 - 机制：kit `v0.1.4` 的 `auth/httpadapter`（Bearer → `Parse` → `kind=access` → 角色 any-of + 启动闸）；本仓只写策略表（`internal/httpapi/policy.go`）。`v0.1.4`（kit `KT-11`）起，`role=service` 的 token 不再要求 subject 可解析为 `int64`——这是 `sub=service:core` 能真走到本仓策略表的前置。
 - 策略：`/health` 公开；`/datasets/resolve`、`/datasets/{hash}` = `service`（裁-17，服务间长期 token）或 `viewer` 及以上。旧 `cmd/data` 的 REV-17 表（28 条）已逐条移植为 `legacyREV17`，等端点迁入时直接挂闸；**G3（2026-11-10）已把 `POST /api/v1/ohlcv/bulk` 落地并移入 `servedPolicy`；X1c（2026-11-10）把 8 条作业/排程策略落地并移入 `servedPolicy` ⇒ `legacyREV17` 余 19 条、`servedPolicy` 23 条路由**（作业读 = `service`+viewer/trader/admin，作业变更 = trader|admin，排程管理 = admin）。
-- 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。**鉴权三态（2026-11-12）**：有 `JWT_SECRET` ⇒ 全闸；无 secret 且未显式声明 ⇒ 进程可起、读面公开、写面一律 503 `auth_unavailable`；无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 全放行（启动 WARN 点名写面无鉴权），未知声明值 ⇒ 拒绝启动。
+- 失败面：未装配 Authorizer → 503；无凭证 / 坏 token → 401；越权 → 403。**鉴权三态（2026-11-12）**：有 `JWT_SECRET` ⇒ 全闸；无 secret + 回环绑定 + 未显式声明 ⇒ 进程可起、读面公开、写面一律 503 `auth_unavailable`；无 secret + 非回环绑定 + 未声明 ⇒ 拒绝启动；无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 任意绑定全放行（启动 WARN 点名写面无鉴权），未知声明值 ⇒ 拒绝启动。
 - 裁决落 [`adr/0005-鉴权接入-kit适配与REV-17移植.md`](adr/0005-鉴权接入-kit适配与REV-17移植.md)。
 
 ## 6. 关键决策

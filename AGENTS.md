@@ -18,7 +18,7 @@
 
 **今天的实现**：本仓 `cmd/dataservice`（`DATABASE_URL` 有值 ⇒ 建池 → 执行本仓 DDL → 装出读面 aggregator、写面 `assembly.Writer`、作业队列与 worker/scheduler；为空 ⇒ 数据端点一律 503）+ `internal/httpapi`（上述 26 路由；`auth.go` = kit 适配，`policy.go` = 策略表，`sync.go` = 作业层，`sync_status.go` = 作业层自省与 SSE 进度，`legacy_read.go` = G3 只读兼容面，`limit.go` = 按身份令牌桶，写端点档位只 `service` + `admin`）。`core:cmd/data` 与 `core:pkg/data` **已于 2026-11-08（`a96d836`）整体删除**；取数执行者只有本仓（`TUSHARE_TOKEN` 缺省时作业响亮失败，不静默写 0 行）。`capital_flow` / `top_list` 两条作业的落库仍可经 `POST /ingest/points` 投点。
 
-**鉴权三态（2026-11-12 安全修复）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret 且未显式声明 ⇒ 读面公开、**写面一律 503 `auth_unavailable`**（不再「鉴权没启用 = 已通过」）；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 全放行，启动必须 WARN 点名写面无鉴权；未知声明值 ⇒ 拒绝启动。第 ② 态不依赖绑定地址（写面已锁死、读面本就是公开数据）；第 ③ 态的 `loopback-published` 断言「发布层只在回环」，容器绑 `0.0.0.0` 时由该声明放行。判定在 `cmd/dataservice.decideAuthPosture`，闸门在 `internal/httpapi/auth.go`（`NewAuthorizer` = 第 1/2 态，`NewOpenAuthorizer` = 第 3 态），`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值。
+**鉴权三态（2026-11-12 安全修复）**：① 有 `JWT_SECRET` ⇒ 全闸；② 无 secret + **回环绑定** + 未显式声明 ⇒ 读面公开、**写面一律 503 `auth_unavailable`**（不再「鉴权没启用 = 已通过」）；③ 无 secret + 逐字 `AUTH_INSECURE_EXPOSURE=loopback-published` ⇒ 任意绑定全放行，启动必须 WARN 点名写面无鉴权；未知声明值 ⇒ 拒绝启动。非回环绑定 + 无声明同样是**拒绝启动**（错误原文点名「缺 JWT_SECRET 且未声明，绑定地址不是回环」），与其余五仓同口径。判定在 `cmd/dataservice.decideAuthPosture`，闸门在 `internal/httpapi/auth.go`（`NewAuthorizer` = 第 1/2 态，`NewOpenAuthorizer` = 第 3 态），`deploy/compose.yaml` 不再内置 `JWT_SECRET` 默认值（其容器绑 `0.0.0.0`，缺 secret 且无声明即拒启，属预期）。
 
 ## 2. 构建 / 测试（必须单仓可跑）
 
