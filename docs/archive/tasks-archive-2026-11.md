@@ -859,3 +859,17 @@
   `--- FAIL: TestFetchDailyBasicRange_MissingColumnsStayNil` / `daily_basic_range_test.go:80: pe = <nil>, want 5.5`（EXIT=1）。
   逐字节还原后 `daily_basic.go` sha256 `72AC54C4FDF7AFE361BC1AFC2315292D913357AEF3A6C509CFEF9A19C6EFED0A` 与改前一致，复跑 `ok tellurion-data/internal/transport/tushare 0.054s`（EXIT=0）。
 - **⑥ 边界**：本仓 schema / 传输 / 写腿 / 测试 / 文档 / 台账；镜像重建建表、22 只票 × `2024-01-01..2025-12-31` 的拉数、与 Tushare 源逐值交叉核对属**执行侧**，按「镜像命令先报」的约定另行执行并在此补记。
+- **执行侧（2026-11-12 已执行，走镜像启动时 `schema.Statements()` 幂等建表）**：
+  - 构建/重启：`docker compose --profile full build data-service` + `up -d --no-deps data-service`；容器 `healthy`、`GET /readyz` = 200；未 `compose down`、未动其他容器。
+  - `\d market.daily_basic` 实测：`ts_code varchar(20) NOT NULL` / `trade_date date NOT NULL` / `pe` / `pe_ttm` / `pb` / `ps` / `ps_ttm` / `dv_ratio` / `total_mv` / `circ_mv`（均 `double precision`，可空）+ `pk_daily_basic PRIMARY KEY, btree (ts_code, trade_date)`，与代码 DDL 一致。
+  - 拉数：22 只 symbol × `2024-01-01..2025-12-31`，每票一个 `POST /api/sync/jobs`（`job_type=daily_basic`），22 个作业全部 `succeeded`；`ingest.sync_jobs` 汇总 `jobs=22 / fetched=10670 / persisted=10670 / succeeded=22`。库内 **10670 行 = 22 只 × 485 个交易日**，与 `fetched`/`persisted` **三方相等**。
+  - **`persisted` 与去重行数这次相等（与财报不同）**：`persisted` 仍是 upsert 执行次数；财报出现过 841 次执行 vs 528 行（源端同一报告期有更正记录重复返回），而 `daily_basic` 源码口径是每票每交易日唯一、单轮拉取无重复，故三者相同。**该相等是数据形状给的，不是口径变了**：重跑同参数仍会记 10670 次执行。
+  - 覆盖：`count(*)=10670`、`count(distinct ts_code)=22`、`min(trade_date)=2024-01-02`、`max=2025-12-31`；`market.trading_calendar` 同区间交易日 = **485**，按 `(ts_code, trade_date)` 反查**缺口 0 行**（无停牌缺失、无未上市缺失）。
+  - **`pe_ttm` 的 NULL（如实记）**：`000002.SZ` 与 `601012.SH` 各有 **323** 行 `pe_ttm IS NULL`（源端在亏损期间不返回 `PE_TTM`），其余 20 只全非空；`pb` 22 只全非空。NULL 是源端缺失，**未折 0**。
+  - 交叉核对（2 只票 × 3 个交易日，库内 vs Tushare `daily_basic` 源，逐值一致）：
+    - `600036.SH` 2024-06-28：`pe_ttm=5.9124` / `pb=0.8903` / `total_mv=86226652.1098`；2025-06-30：`7.8513` / `1.0873` / `115885190.5366`；2025-12-31：`7.1269` / `0.9742` / `106175549.9802`。
+    - `300750.SZ` 2024-06-28：`pe_ttm=17.6732` / `pb=4.2653` / `total_mv=79191726.4177`；2025-06-30：`21.2178` / `4.1176` / `114994924.664`；2025-12-31：`26.2793` / `5.3318` / `167603223.8608`。
+    - `pe` / `ps` / `ps_ttm` / `dv_ratio` / `circ_mv` 同样逐值一致（6 行 × 8 列全对）。
+  - **`total_mv` / `circ_mv` 单位写死：万元（两端同单位）**。Tushare `daily_basic` 源端单位为万元，本仓原值入库、未做换算；例如 `600036.SH` 2025-12-31 `total_mv=106175549.9802` 万元 ≈ 1.06 万亿元。读方若需元，自行 ×1e4。
+  - 未碰 `public`：`SELECT count(*) FROM public.stock_fundamentals` = **0**（与上一单相同）；`information_schema.tables` 中 `daily_basic` 只存在于 `market` schema（`public` 无同名表）；`market.market_activity` = **0 行**（原 B 集活跃度写面未被启用）。
+  - **给 core 的交接**：`market.daily_basic` 已就绪；建议 `value` 维度改读它（按 `trade_date` 对齐，`pe_ttm` 优先、缺失回退 `pe`），`quality` 维度仍读 `market.stock_fundamentals`。本仓不改 core。
