@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-11-12
-verified-by: 2026-11-12 跨仓伞五腿——`X-LOW-CLEANUP`（登记分页口径不一致：`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`，当时只登记不改行为）、`X-DEP-BUMP-CONSUMERS`（kit `v0.2.0 → v0.5.0`、`go` 1.26.11、pgx 随 MVS 到 `v5.11.0`，CI 增 `govulncheck` 门，降版破坏验证复红、还原复绿；同日补 Dockerfile 工具链到 `golang:1.26.11-alpine`）、`X-AGENTS-DEPENDENCY-TABLE`（`AGENTS.md` §4 按实际 `go.mod` 订正 contracts v0.10.0 / kit v0.5.0 / pgx v5.11.0）、`X-CI-RACE-STATICCHECK`（CI 补 `-race` 与 `staticcheck`；存量 2 条按「先判死代码」清理：`yahooToFloat64` 与 `fakeExecutor.seenJob`；`-race` 用 Docker golang:1.26 全量跑通 EXIT=0）、`X-PROBE-NAMING`（`GET /healthz` 为规范名、`/health` 改过渡弃用别名：报文逐字节相同 + `Deprecation` / `Link` / `Warning` 三信号；路由总数按真实注册订正 28→29；真起服务双路径验证 `/healthz` 200 / `/health` 200 同报文 / `/readyz` 503；摘除前置条件与 core 两处消费者〔`tellurion:docker-compose.yml:160`、`tellurion:tools/local-stack.sh:82`，只记录不动〕见 `docs/api-schema.md` §1.1）；**同日收尾**：core 消费者清零 + e2e 转绿后摘除别名（路由 29→28，`/health` 现为 404，守卫 `TestHealthAliasIsRemoved`；e2e 复验在 core 侧）；同日新立并当日收口 `DATA-PAGINATION-ALIGN`（`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显，坏值一律 400 分表，`ORDER BY created_at DESC, id DESC` 稳定翻页；真 PG 分页不重不漏实证，见归档）；此前 2026-11-12 收口 `DATA-GRACEFUL-SHUTDOWN`（优雅停机 + 作业租约/心跳/stale 回收，见归档）并把 `DATA-INGEST-RAW` / `DATA-INDEX-CONSTITUENTS` / `DATA-FUNDAMENTALS-READ-PUBLIC` 三条已完成项移入归档，本表只留未做/挂起 —— `DATA-REFDATA-JOB-WRITE`（等真实 `TUSHARE_TOKEN` 部署）、`DATA-LISTING-WINDOWS`、`DATA-TRANSPORT-MULTI`、`DATA-MOOTDX`、`DATA-DIVIDENDS`、`DATA-SPLITS`、`DATA-MARKET-ACTIVITY` 均为 ⏸。此前 2026-11-11 W7 台账立单（A5 授权）——新立 2 条六字段单，证据坐标引 ODR-069/072（`tellurion-docs:docs/archive/odr/`）；`DATA-FUNDAMENTALS-READ-PUBLIC` 立单复核时实测前提已被主任 2026-11-12 归属裁决〔data `a454726` 删 `/fundamental` 读面 + core `c85abff` 建 `GET /api/fundamental/:symbol`〕取代，已标 ✅ 作废、不施工。此前 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
+verified-by: 2026-11-12 挂起任务处置批次（主任指令）——`DATA-REFDATA-JOB-WRITE` 重开 ⬜ 并收窄（作业级写入已证明：stocks 7 次 / calendar 3 次成功；剩约束核对表 + 退市覆盖口径，delist_date 实测全 NULL）、`DATA-LISTING-WINDOWS` 前提订正（「具备实现条件」作废，前置=退市腿）、`DATA-TRANSPORT-MULTI` 前提订正（东财恒装配已接线，剩 Juchao/Xueqiu/Yahoo 未验收 + 路由未定）；其余四条 ⏸ 维持。此前： 2026-11-12 跨仓伞五腿——`X-LOW-CLEANUP`（登记分页口径不一致：`/api/evidence` 有 `offset`、`/api/sync/jobs` 只有 `limit`，当时只登记不改行为）、`X-DEP-BUMP-CONSUMERS`（kit `v0.2.0 → v0.5.0`、`go` 1.26.11、pgx 随 MVS 到 `v5.11.0`，CI 增 `govulncheck` 门，降版破坏验证复红、还原复绿；同日补 Dockerfile 工具链到 `golang:1.26.11-alpine`）、`X-AGENTS-DEPENDENCY-TABLE`（`AGENTS.md` §4 按实际 `go.mod` 订正 contracts v0.10.0 / kit v0.5.0 / pgx v5.11.0）、`X-CI-RACE-STATICCHECK`（CI 补 `-race` 与 `staticcheck`；存量 2 条按「先判死代码」清理：`yahooToFloat64` 与 `fakeExecutor.seenJob`；`-race` 用 Docker golang:1.26 全量跑通 EXIT=0）、`X-PROBE-NAMING`（`GET /healthz` 为规范名、`/health` 改过渡弃用别名：报文逐字节相同 + `Deprecation` / `Link` / `Warning` 三信号；路由总数按真实注册订正 28→29；真起服务双路径验证 `/healthz` 200 / `/health` 200 同报文 / `/readyz` 503；摘除前置条件与 core 两处消费者〔`tellurion:docker-compose.yml:160`、`tellurion:tools/local-stack.sh:82`，只记录不动〕见 `docs/api-schema.md` §1.1）；**同日收尾**：core 消费者清零 + e2e 转绿后摘除别名（路由 29→28，`/health` 现为 404，守卫 `TestHealthAliasIsRemoved`；e2e 复验在 core 侧）；同日新立并当日收口 `DATA-PAGINATION-ALIGN`（`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显，坏值一律 400 分表，`ORDER BY created_at DESC, id DESC` 稳定翻页；真 PG 分页不重不漏实证，见归档）；此前 2026-11-12 收口 `DATA-GRACEFUL-SHUTDOWN`（优雅停机 + 作业租约/心跳/stale 回收，见归档）并把 `DATA-INGEST-RAW` / `DATA-INDEX-CONSTITUENTS` / `DATA-FUNDAMENTALS-READ-PUBLIC` 三条已完成项移入归档，本表只留未做/挂起 —— `DATA-REFDATA-JOB-WRITE`（等真实 `TUSHARE_TOKEN` 部署）、`DATA-LISTING-WINDOWS`、`DATA-TRANSPORT-MULTI`、`DATA-MOOTDX`、`DATA-DIVIDENDS`、`DATA-SPLITS`、`DATA-MARKET-ACTIVITY` 均为 ⏸。此前 2026-11-11 W7 台账立单（A5 授权）——新立 2 条六字段单，证据坐标引 ODR-069/072（`tellurion-docs:docs/archive/odr/`）；`DATA-FUNDAMENTALS-READ-PUBLIC` 立单复核时实测前提已被主任 2026-11-12 归属裁决〔data `a454726` 删 `/fundamental` 读面 + core `c85abff` 建 `GET /api/fundamental/:symbol`〕取代，已标 ✅ 作废、不施工。此前 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -14,30 +14,35 @@ verified-by: 2026-11-12 跨仓伞五腿——`X-LOW-CLEANUP`（登记分页口�
 
 > 本节 = 本轮（2026-11-11）台账重整时登记 / 承接的挂起项。此前已收口单的正文与施工记录全部在归档文件里；2026-11-12 收口的单（`DATA-GRACEFUL-SHUTDOWN`、`DATA-INGEST-RAW`、`DATA-INDEX-CONSTITUENTS`、`DATA-FUNDAMENTALS-READ-PUBLIC`、`DATA-PAGINATION-ALIGN`）已移入归档的「2026-11-12 收口」节。
 
-### DATA-REFDATA-JOB-WRITE · 参考数据作业级写入未验 + 既有库 DDL 不自动补齐 [P1] ⏸
+### DATA-REFDATA-JOB-WRITE · 参考数据作业级写入：约束核对 + 退市覆盖收口 [P1] ⬜
 
-- **① 目标**：证明「作业」这条路径（而不只是 writer 单测）真能把参考数据写进部署库，并把既有库的约束缺口交代清楚。
-- **② 上下文**：`c344ec2` 的契约测试走的是真实 `Client` → 真实 `ReferenceWriter`，`c58e783` / `4afe14c` 补齐了 `delist_date` 与日历写侧守卫；**作业级**（`internal/sync` 队列 → 调度 → 落库）在部署库上尚未跑过一次完整 `stocks` + `trading_calendar`。另外 `exchange` 的 `NOT NULL DEFAULT` / `CHECK` 只对**新建表**生效，既有库不会自动补约束。
-- **③ 要求**：① 部署后跑一次 `stocks` 与 `trading_calendar` 作业，记录行数、`delist_date` 回读值、失败行数；② 对既有库逐条核对 `db-schema.md` 里的约束是否在位（不在位就补 `ALTER`，或明确登记为「靠写侧守卫」）；③ 结果写进本节（或另立收口记录）。
-- **④ 约束与非目标**：不改 writer 契约与 DDL 形状；不在本单引入通用迁移框架。
-- **⑤ 验收**：两条作业的真实行数与 `delist_date` 回读；既有库约束核对表逐行有结论。
-- **⑥ 边界**：本仓作业面与 schema；生产库执行归运维。
-- **重开条件**：一次带真实 `TUSHARE_TOKEN` 的部署。
+> **重开记录（2026-11-12，挂起任务处置批次，主任指令）**：重开条件「一次带真实 TUSHARE_TOKEN 的部署」已满足——
+> 2026-11-12 实测部署库：stocks 作业成功 7 次（累计 processed 22,320，表 5,580 行）、
+> trading_calendar 成功 3 次（1,096 行），两类作业均无 failed。**作业级写入路径已证明**，
+> 原单收窄为两条小腿：约束核对表 + 退市覆盖口径。
+> 另：部署库 2026-11-10 刚从 `internal/schema` 整库重建，「既有库约束缺口」预期不存在，核对是走形式但必须留证据。
+
+- **① 目标**：用两份证据关闭本单——既有库约束逐条核对表 + 退市覆盖的明确口径（回读证据或验收改写）。
+- **② 上下文**：`c344ec2` 契约测试走真实 Client → ReferenceWriter，`c58e783` / `4afe14c` 补齐 delist_date 与日历写侧守卫；作业级写入已于 2026-11-12 前真跑（见重开记录）。**剩余缺口**：参考作业只取 L 状态（`internal/sync/reference.go:118` 缺省 `status="L"`）⇒ 部署库 `delist_date` 全 NULL（5,580 行 / 非 NULL 0），原验收「delist_date 回读」在 L-only 下永远无法满足。传输层已支持 D 状态（`internal/transport/tushare/stocks.go:34` 的 listStatus 参数；`live_test.go:85-92` 有真源 D 腿）。
+- **③ 要求**：① 对部署库逐条核对 `db-schema.md` 的约束（PK / NOT NULL DEFAULT / CHECK / 索引）是否在位，逐行留结论；不在位则补 ALTER 或登记「靠写侧守卫」；② 退市覆盖二选一（执行时定）：**a)** 跑一次 D 状态参考作业回读，验证 delist_date 写入 + COALESCE 不回退（**这是对部署库的写操作，执行前拿主任授权**）；**b)** 把验收改写为「L-only 口径，D 腿由 tagged 真源测试覆盖」，并把幸存者偏差风险显式登记到 `DATA-LISTING-WINDOWS` 的前置依赖。
+- **④ 约束与非目标**：不改 writer 契约与 DDL 形状；不引入通用迁移框架；除参考作业自身的 upsert 外不动部署库数据。
+- **⑤ 验收**：约束核对表逐行有结论；退市腿证据（a）或验收改写记录（b）在案 ⇒ 关单。
+- **⑥ 边界**：本仓作业面与 schema；D 回读若执行，走正常作业路径，不手写 SQL 改数。
 
 ### DATA-LISTING-WINDOWS · point-in-time 上市/退市窗口 [P3] ⏸
 
 - **① 目标**：给下游「取池子时按日在市」提供可判定的上市/退市窗口。
-- **② 上下文**：core QT-67 的 `POST /api/v1/listing-windows` 已随 `SVC-CORE-DATA-RETIRE` 退役，今天没有任何服务提供；agent 的偏差维曾调它，但只会 404 后静默退回 `PoolSourceCurrent`，已于 2026-11-11 删除该客户端腿与生产接线（`tellurion-agent:0eaed19`）。本仓 `market.stocks` 已有 `list_date` / `delist_date`，具备实现条件。
+- **② 上下文**：core QT-67 的 `POST /api/v1/listing-windows` 已随 `SVC-CORE-DATA-RETIRE` 退役，今天没有任何服务提供；agent 的偏差维曾调它，但只会 404 后静默退回 `PoolSourceCurrent`，已于 2026-11-11 删除该客户端腿与生产接线（`tellurion-agent:0eaed19`）。本仓 `market.stocks` 已有 `list_date` / `delist_date` 列，但部署库 `delist_date` 全 NULL（参考作业只取 L 状态；2026-11-12 实测 5,580 行 / 非 NULL 0）——**不具备实现条件**，前置 = `DATA-REFDATA-JOB-WRITE` 的退市腿先落地。
 - **③ 要求**：若重开——① 提供粗粒度只读端点（一次覆盖整批 symbol / 整个区间，不做逐 symbol 远程）；② 明确 `NULL` 语义（未知 ≠ 一个看起来合理的日期）与 PIT 口径；③ 一条契约测试 + 与 agent 的对拍。
 - **④ 约束与非目标**：不为「补端点」而造无消费者的数据；不改 `market.stocks` 的既有列语义。
 - **⑤ 验收**：agent 的偏差维能据真实窗口报 `PoolSourcePointInTime`，且 `DelistedInPool` 有回读证据。
 - **⑥ 边界**：数据形状与读端口归本仓；消费口径归 agent。
-- **重开条件**：下游出现 point-in-time 上市/退市窗口的真实需求（回测票池按日在市、退市偏差维），届时由本仓提供；`market.stocks.delist_date` 已存在。
+- **重开条件**：下游出现 point-in-time 上市/退市窗口的真实需求（回测票池按日在市、退市偏差维），届时由本仓提供；且 `market.stocks.delist_date` 已有真实覆盖（见 `DATA-REFDATA-JOB-WRITE` 退市腿，当前全 NULL）。
 
-### DATA-TRANSPORT-MULTI · 传输多门（除 Tushare 外的门均未真接线）[P2] ⏸
+### DATA-TRANSPORT-MULTI · 传输多门（Juchao/Xueqiu/Yahoo 未验收，多门路由未定）[P2] ⏸
 
 - **① 目标**：把「多门传输」从代码在仓里、实际只有一门在跑的状态交代清楚，并给每门一个可判定的重开条件。
-- **② 上下文**：真装配且真取数的只有 Tushare（`TUSHARE_TOKEN`）；东财客户端代码在仓内但**未接线**；Juchao / Xueqiu / Yahoo 自带默认端点、connector 恒启用但无验收；Alpha Vantage 需 key；Mootdx 无实现（见 `DATA-MOOTDX`）。多门路由策略尚未定。
+- **② 上下文（2026-11-12 实测订正）**：已接线的门有三门——Tushare（`TUSHARE_TOKEN` 有值）、东财（**恒装配**，`cmd/dataservice/main.go:325-332`；原「未接线」表述作废）、Alpha Vantage（`ALPHA_VANTAGE_KEY` 有值才启用）。Juchao / Xueqiu / Yahoo 自带默认端点、connector 恒启用但**无真取数验收**；Mootdx 无实现（见 `DATA-MOOTDX`）。多门路由 / 优先级 / 去重口径未定。
 - **③ 要求**：重开某门时——① 接入装配与健康检查；② 与 Tushare 同形状的 fail-closed 与数据质量闸；③ 一门一条契约测试 + 一次真取数；④ 写清多门路由/优先级/去重口径。
 - **④ 约束与非目标**：不为「门多」而接门；不给未验证的 connector 发「已支持」表述。
 - **⑤ 验收**：每门有独立可复现的真取数记录与失败语义。
@@ -75,7 +80,7 @@ verified-by: 2026-11-12 跨仓伞五腿——`X-LOW-CLEANUP`（登记分页口�
 | 事项 | 去哪 |
 |---|---|
 | core 侧旧数据面退役（`pkg/data` / `cmd/data` 删除） | `tellurion:docs/TASKS.md` |
-| X1d 生产物理搬迁 + `visible_at` 回填（运维动作） | `tellurion:docs/TASKS.md` → `OPS-X1D-PROD-MIGRATION` |
+| X1d 生产物理搬迁 + `visible_at` 回填（运维动作） | `tellurion:docs/TASKS.md` → `OPS-X1D-PROD-MIGRATION`（**已收口 2026-11-12**：部署库 2026-11-10 已整库重建为目标形状，见 core 关闭记录） |
 | 6 个 `market` 别名（零写者表引用的形状） | `tellurion-contracts:docs/TASKS.md` → `CT-06-ALIAS-EXIT`。**本仓已零引用**（2026-11-11：根别名 `Fundamental` → `market.Fundamental`，其余 5 个别名 0 命中；根 `domain` 仅剩非别名类型 `MacroSeries` / `MarketActivity`；pin `v0.9.0`，`build/vet/test` 全绿）⇒ contracts 侧可删别名 |
 
 ## 维护本文件
