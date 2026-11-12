@@ -71,7 +71,8 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"POST /api/sync/schedules/{id}/run":    {Roles: []string{"trader", "admin"}},
 })
 
-// legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**。
+// legacyREV17 是 core `cmd/data/route_policy.go`（REV-17）的**逐条移植**，
+// 唯一例外是按归属裁决**退役**的因子同步/派生面（见文件末尾说明）。
 //
 // core `cmd/data` 已于 2026-11-08（`a96d836`）整体删除，本仓路由表也不再使用
 // 这些路径；保留这张表是为了「未来端点迁入时沿用同一档位结论」，不重新拍角色。
@@ -88,23 +89,26 @@ var legacyREV17 = map[string]kithttp.Rule{
 	// ── Trader：其余全部变更端点 ──
 	// `POST /api/ingest/raw` 已于 2026-11-12 落地本仓归档面，移入 servedPolicy
 	//（此前是「权限表有、路由表无」的僵尸条目）。
-	"POST /api/ingest/equitydeep":                    {Roles: []string{"trader", "admin"}},
-	"POST /sync/stocks":                              {Roles: []string{"trader", "admin"}},
-	"POST /sync/ohlcv":                               {Roles: []string{"trader", "admin"}},
-	"POST /sync/ohlcv/all":                           {Roles: []string{"trader", "admin"}},
-	"POST /sync/fundamental":                         {Roles: []string{"trader", "admin"}},
-	"POST /sync/fundamentals":                        {Roles: []string{"trader", "admin"}},
-	"POST /sync/dividends":                           {Roles: []string{"trader", "admin"}},
-	"POST /sync/splits":                              {Roles: []string{"trader", "admin"}},
-	"POST /sync/calendar":                            {Roles: []string{"trader", "admin"}},
-	"POST /sync/sectors":                             {Roles: []string{"trader", "admin"}},
-	"POST /sync/index-constituents/:index_code":      {Roles: []string{"trader", "admin"}},
-	"POST /sync/index-daily/:index_code":             {Roles: []string{"trader", "admin"}},
-	"POST /sync/factors/:factor_name":                {Roles: []string{"trader", "admin"}},
-	"POST /sync/factors/all":                         {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/factor-attribution/:factor_name": {Roles: []string{"trader", "admin"}},
-	"POST /api/sync/factor-ic/:factor_name":          {Roles: []string{"trader", "admin"}},
-	"POST /api/v1/cache/warm":                        {Roles: []string{"trader", "admin"}},
+	//
+	// **因子同步/派生面已退役（2026-11-12）**：`POST /sync/factors/:factor_name`、
+	// `POST /sync/factors/all`、`POST /api/sync/factor-attribution/:factor_name`、
+	// `POST /api/sync/factor-ic/:factor_name` 四条已从本表删除。因子定义与值归
+	// core（ADR-037：消费点按需实时求值），data 不提供因子写面；core 的运维
+	// 提示曾指向 `sync/factors/all`，两边互相指路到死胡同。守卫
+	// `TestFactorSyncPolicyIsRetired` 钉住这四条不再出现在任何策略表里。
+	"POST /api/ingest/equitydeep":               {Roles: []string{"trader", "admin"}},
+	"POST /sync/stocks":                         {Roles: []string{"trader", "admin"}},
+	"POST /sync/ohlcv":                          {Roles: []string{"trader", "admin"}},
+	"POST /sync/ohlcv/all":                      {Roles: []string{"trader", "admin"}},
+	"POST /sync/fundamental":                    {Roles: []string{"trader", "admin"}},
+	"POST /sync/fundamentals":                   {Roles: []string{"trader", "admin"}},
+	"POST /sync/dividends":                      {Roles: []string{"trader", "admin"}},
+	"POST /sync/splits":                         {Roles: []string{"trader", "admin"}},
+	"POST /sync/calendar":                       {Roles: []string{"trader", "admin"}},
+	"POST /sync/sectors":                        {Roles: []string{"trader", "admin"}},
+	"POST /sync/index-constituents/:index_code": {Roles: []string{"trader", "admin"}},
+	"POST /sync/index-daily/:index_code":        {Roles: []string{"trader", "admin"}},
+	"POST /api/v1/cache/warm":                   {Roles: []string{"trader", "admin"}},
 }
 
 // ServedPolicyEntries 返回实际生效的策略表副本（守卫测试用）。

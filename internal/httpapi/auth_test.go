@@ -122,28 +122,28 @@ func TestServedPolicyLegacyReadRoutes(t *testing.T) {
 // TestLegacyREV17PolicyIsVerbatim 钉住「逐条移植」：条目与档位必须与旧
 // `cmd/data/route_policy.go`（REV-17）一致。端点迁进本仓时按这张表挂闸，
 // 不再重新拍一次角色。
+//
+// 唯一例外是**按归属裁决退役**的因子同步/派生面（2026-11-12）：ADR-037 把
+// 因子值归 core 按需求值，data 不出因子写面。退役条目不在此表的期望里，
+// 由 `TestFactorSyncPolicyIsRetired` 单独钉住「不许回流」。
 func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 	want := map[string]string{
 		// ReadOnlyPOST
 		"POST /screen": "any",
 		// Trader
-		"POST /api/ingest/equitydeep":                    "trader",
-		"POST /sync/stocks":                              "trader",
-		"POST /sync/ohlcv":                               "trader",
-		"POST /sync/ohlcv/all":                           "trader",
-		"POST /sync/fundamental":                         "trader",
-		"POST /sync/fundamentals":                        "trader",
-		"POST /sync/dividends":                           "trader",
-		"POST /sync/splits":                              "trader",
-		"POST /sync/calendar":                            "trader",
-		"POST /sync/sectors":                             "trader",
-		"POST /sync/index-constituents/:index_code":      "trader",
-		"POST /sync/index-daily/:index_code":             "trader",
-		"POST /sync/factors/:factor_name":                "trader",
-		"POST /sync/factors/all":                         "trader",
-		"POST /api/sync/factor-attribution/:factor_name": "trader",
-		"POST /api/sync/factor-ic/:factor_name":          "trader",
-		"POST /api/v1/cache/warm":                        "trader",
+		"POST /api/ingest/equitydeep":               "trader",
+		"POST /sync/stocks":                         "trader",
+		"POST /sync/ohlcv":                          "trader",
+		"POST /sync/ohlcv/all":                      "trader",
+		"POST /sync/fundamental":                    "trader",
+		"POST /sync/fundamentals":                   "trader",
+		"POST /sync/dividends":                      "trader",
+		"POST /sync/splits":                         "trader",
+		"POST /sync/calendar":                       "trader",
+		"POST /sync/sectors":                        "trader",
+		"POST /sync/index-constituents/:index_code": "trader",
+		"POST /sync/index-daily/:index_code":        "trader",
+		"POST /api/v1/cache/warm":                   "trader",
 	}
 	got := LegacyREV17Entries()
 	if len(got) != len(want) {
@@ -177,6 +177,43 @@ func TestLegacyREV17PolicyIsVerbatim(t *testing.T) {
 	for key := range got {
 		if _, served := ServedPolicyEntries()[key]; served {
 			t.Errorf("legacy entry %q overlaps the served policy; move it out of legacy when the route lands", key)
+		}
+	}
+}
+
+// TestFactorSyncPolicyIsRetired 钉住因子同步/派生面**已退役**（2026-11-12）：
+// 因子定义与值归 core 按需求值（ADR-037），data 不出因子写面。
+//
+// 这两件事必须同时成立，否则 core 的运维提示（"先跑 sync/factors/all"）会继续
+// 把人指到死路径：
+//  1. 四条路径不在任何策略表里（legacy 与 served 都不许回流）；
+//  2. 实际路由返回 404（不是「有策略没路由」的自相矛盾）。
+//
+// 文档侧的退役说明在 `docs/api-schema.md`。
+func TestFactorSyncPolicyIsRetired(t *testing.T) {
+	retired := []string{
+		"POST /sync/factors/:factor_name",
+		"POST /sync/factors/all",
+		"POST /api/sync/factor-attribution/:factor_name",
+		"POST /api/sync/factor-ic/:factor_name",
+	}
+	h := New(nil).Routes()
+	for _, key := range retired {
+		method, path, ok := strings.Cut(key, " ")
+		require.True(t, ok, "policy key %q must be \"METHOD /path\"", key)
+		if _, found := LegacyREV17Entries()[key]; found {
+			t.Errorf("%q is still in legacyREV17; factors were retired to core (ADR-037)", key)
+		}
+		if _, found := ServedPolicyEntries()[key]; found {
+			t.Errorf("%q is in servedPolicy but data has no such route", key)
+		}
+
+		// 路由必须真的不在：按策略表的占位符形状换成一个具体值再打。
+		reqPath := strings.NewReplacer(":factor_name", "momentum_20d", "{factor_name}", "momentum_20d").Replace(path)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, reqPath, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404 (data must not expose a factor write face)", method, reqPath, rec.Code)
 		}
 	}
 }

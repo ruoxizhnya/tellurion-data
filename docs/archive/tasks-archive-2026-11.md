@@ -20,6 +20,7 @@
 | DATA-FUNDAMENTALS-READ-PUBLIC | `/fundamental` 跨 schema 读面止血（作废·前提被归属裁决取代） | 2026-11-12 | —（原文未记） | [原文](#DATA-FUNDAMENTALS-READ-PUBLIC) |
 | DATA-GRACEFUL-SHUTDOWN | 优雅停机 + 作业租约/心跳/stale 回收 | 2026-11-12 | 本笔（`git log --grep DATA-GRACEFUL-SHUTDOWN`） | [原文](#DATA-GRACEFUL-SHUTDOWN) |
 | DATA-SYNC-JOB-NOOP | 空参数 no-op 作业不再记 succeeded（入队期拒绝无范围点位作业） | 2026-11-12 | 本笔（`git log --grep DATA-SYNC-JOB-NOOP`） | [原文](#DATA-SYNC-JOB-NOOP) |
+| DATA-POLICY-FACTORS-DEAD | 删除策略表里不存在的因子同步/派生端点（ADR-037 归属退役） | 2026-11-12 | 本笔（`git log --grep DATA-POLICY-FACTORS-DEAD`） | [原文](#DATA-POLICY-FACTORS-DEAD) |
 
 ---
 
@@ -743,3 +744,21 @@
   - **文档**：`docs/api-schema.md` §1 建作业行 + 新增「空参数 no-op 不再入队」说明。
   - **破坏验证（实做并逐字节还原）**：把 `NewJob` 内的 `ValidateJobScope` 调用摘掉 ⇒ `TestCreateSyncJob_RejectsUnscopedNoOp` 三个子用例全红（`status = 202, want 400`，响应体 `params:{}` 的 pending 作业）；逐字节还原后 `sha256 F81A553B3B1DD2D1617A094C98DE1083F56499AA730325139FD3D37561DCDDD2` 与改前一致，`ok tellurion-data/internal/sync 0.192s` / `ok tellurion-data/internal/httpapi 0.160s`。
   - **未做（如实）**：库里已有的 13 条 0/0 历史行未删（不属代码修复，清理前会先报）。
+
+<a id="DATA-POLICY-FACTORS-DEAD"></a>
+### DATA-POLICY-FACTORS-DEAD · 策略表里留着不存在的因子同步/派生端点 [P1] ✅（2026-11-12）
+
+- **① 目标**：让「策略表声明」不再指向不存在的路由。因子同步/派生面按归属裁决退役，表与文档都不再宣称这些路径可用。
+- **② 上下文**：`internal/httpapi/policy.go` 的 `legacyREV17` 仍声明 `POST /sync/factors/:factor_name`、`POST /sync/factors/all`、`POST /api/sync/factor-attribution/:factor_name`、`POST /api/sync/factor-ic/:factor_name`，但 `server.go` 从未注册、实测 404。core 侧因子缓存缺数据时的运维提示正好照着这张旧表指向 `sync/factors/all`，两边互相指路到死胡同。
+- **③ 要求（已落地）**：① 删除上述 4 条策略（**不补路由**——ADR-037 把因子定义与值归 core 按需实时求值，data 不出因子写面）；② `docs/api-schema.md` 明确「factors 同步面已退役，因子值由 core 按需求值」；③ 新增守卫 `TestFactorSyncPolicyIsRetired`；④ 同步 ADR-0005 追加与 `docs/ARCHITECTURE.md` 的余量口径（18→14）。
+- **④ 约束与非目标**：不改 core 侧提示文案（另派）；不新增任何因子端点；`POST /api/v1/cache/warm` 是行情缓存预热、不属因子同步面，保留；不碰 `SERVICE.md`。
+- **⑤ 验收**：`go build ./... && go vet ./internal/httpapi && go test ./internal/httpapi -count=1` 全绿；四条路径 HTTP 断言 404；策略表条目数 14 与路由表守卫不回归。
+- **⑥ 边界**：仅策略表 + 文档 + 守卫；运行中的 data-service 无需为此重建镜像（该表不参与运行时路由）。
+- **收口（2026-11-12）**：
+  - **代码**：`internal/httpapi/policy.go` 删除 4 条因子策略并补「已退役」说明；`internal/httpapi/auth_test.go` 的 `TestLegacyREV17PolicyIsVerbatim` 期望表同步收窄（显式点名 14 条），新增 `TestFactorSyncPolicyIsRetired`（策略表无条目 + 实际路由 404）。
+  - **文档**：`docs/api-schema.md` §1 鉴权段落注明退役与 ADR-037；`docs/ARCHITECTURE.md` §5.1 余量 18→14；ADR-0005 新增「追加（2026-11-12）」。
+  - **破坏验证（实做并逐字节还原）**：把 `"POST /sync/factors/all"` 重新加回 `legacyREV17` ⇒
+    `TestLegacyREV17PolicyIsVerbatim: legacy REV-17 has 15 entries, want 14: [... POST /sync/factors/all ...]`、
+    `TestFactorSyncPolicyIsRetired: "POST /sync/factors/all" is still in legacyREV17; factors were retired to core (ADR-037)`；
+    逐字节还原后 `sha256 35774E01A26C13FE55DD7713A4744092417BD211EE4B9D8E46778C3B5D3A8873` 与改前一致，`ok tellurion-data/internal/httpapi 0.171s`。
+  - **未做（如实）**：core 侧「先跑 sync/factors/all」提示文案未改（父会话另派）。
