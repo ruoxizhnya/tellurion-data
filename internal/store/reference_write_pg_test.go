@@ -219,3 +219,80 @@ func TestReferenceWriter_PG_UpsertFundamentalsKeepsAnnDateAndIsIdempotent(t *tes
 			".stock_fundamentals WHERE ts_code = '600036.SH' AND trade_date = '2024-06-30'").Scan(&available))
 	assert.Equal(t, "2024-06-30", available.Format("2006-01-02"))
 }
+
+// 行情面估值的真库腿：`(ts_code, trade_date)` 复合主键去重、缺失列落 NULL
+// （nil≠0）、同参数重跑逐字节不变、后到者只覆盖非 NULL 列。
+func TestReferenceWriter_PG_UpsertDailyBasicIsIdempotentAndKeepsNulls(t *testing.T) {
+	pool := pgPool(t)
+	scratch := scratchSchema(t, pool)
+	writer, err := store.NewReferenceWriter(store.PoolWriteDB(pool), store.Options{MarketSchema: scratch})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	day := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	pe, peTTM, pb, totalMV := 10.1, 12.5, 0.9, 1.1e8
+	row := store.DailyBasic{
+		Symbol: "600036.SH", Date: day,
+		PE: &pe, PETTM: &peTTM, PB: &pb, TotalMV: &totalMV,
+	}
+
+	written, err := writer.UpsertDailyBasic(ctx, []store.DailyBasic{row})
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+
+	rowHash := func() string {
+		var h string
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT md5(row_to_json(d)::text) FROM "+scratch+".daily_basic d").Scan(&h))
+		return h
+	}
+	first := rowHash()
+
+	var (
+		gotPE, gotPETTM, gotPB, gotTotalMV *float64
+		gotPS, gotDV, gotCirc              *float64
+	)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT pe, pe_ttm, pb, ps, dv_ratio, total_mv, circ_mv FROM "+scratch+
+			".daily_basic WHERE ts_code = '600036.SH' AND trade_date = $1", day).
+		Scan(&gotPE, &gotPETTM, &gotPB, &gotPS, &gotDV, &gotTotalMV, &gotCirc))
+	require.NotNil(t, gotPE)
+	require.NotNil(t, gotPETTM)
+	require.NotNil(t, gotPB)
+	require.NotNil(t, gotTotalMV)
+	assert.InDelta(t, 10.1, *gotPE, 1e-9)
+	assert.InDelta(t, 12.5, *gotPETTM, 1e-9, "pe_ttm must land in its own column, not pe")
+	assert.InDelta(t, 0.9, *gotPB, 1e-9)
+	assert.InDelta(t, 1.1e8, *gotTotalMV, 1e-9)
+	assert.Nil(t, gotPS, "missing ps must stay NULL (nil≠0)")
+	assert.Nil(t, gotDV, "missing dv_ratio must stay NULL (nil≠0)")
+	assert.Nil(t, gotCirc, "missing circ_mv must stay NULL (nil≠0)")
+
+	// 同参数重跑：行数不增加、内容逐字节不变。
+	written, err = writer.UpsertDailyBasic(ctx, []store.DailyBasic{row})
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+	assert.Equal(t, first, rowHash(), "same-parameter rerun must be byte-identical (idempotent upsert)")
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT count(*) FROM "+scratch+".daily_basic").Scan(&count))
+	assert.Equal(t, 1, count, "composite key must dedupe, not append")
+
+	// 第二轮：只给 pe 新值，NULL 列不许把已写入的 pe_ttm 擦掉。
+	newPE := 11.2
+	_, err = writer.UpsertDailyBasic(ctx, []store.DailyBasic{{
+		Symbol: "600036.SH", Date: day, PE: &newPE,
+	}})
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT pe, pe_ttm FROM "+scratch+
+			".daily_basic WHERE ts_code = '600036.SH' AND trade_date = $1", day).
+		Scan(&pe, &peTTM))
+	assert.InDelta(t, 11.2, pe, 1e-9, "non-NULL pe must overwrite")
+	assert.InDelta(t, 12.5, peTTM, 1e-9, "NULL pe_ttm must not erase the stored value")
+
+	// 空 ts_code / 零交易日拒写（交易日是主键的一半）。
+	_, err = writer.UpsertDailyBasic(ctx, []store.DailyBasic{{Symbol: "600036.SH"}})
+	require.Error(t, err)
+}

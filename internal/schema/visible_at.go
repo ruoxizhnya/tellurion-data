@@ -54,6 +54,7 @@ var cSetExemptions = []struct {
 	{"trading_calendar", "是 calendar_hash 的输入，不是观测数据流"},
 	{"stocks", "参考数据，无「何时可见」语义"},
 	{"index_constituents", "前视风险在成分变更时点，归 resolve 的 as_of 语义"},
+	{"daily_basic", "行情面估值截面：PIT 判据是 trade_date（收盘后可见），不是公告日；表无 visible_at 列，写面走参考数据腿（ADR-0012 追加节）"},
 	{"dividends", "公司行为事件，可见性由公告侧承担"},
 	{"splits", "公司行为事件，同上"},
 	{"ingest.raw", "原始归档，按 content_hash + fetched_at 寻址"},

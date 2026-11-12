@@ -167,6 +167,25 @@ func MarketStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_cf_symbol_date ON market.capital_flow (symbol, trade_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_cf_date_main_net ON market.capital_flow (trade_date DESC, main_net DESC)`,
 
+		// 行情面估值（C 集：粒度是「每个交易日一个截面值」，与财报的
+		// 「每个报告期一个人点值」分表，见 ADR-0012 追加节）。
+		// PIT 判据是 `trade_date`（收盘后可见），不是公告日；因此本表没有
+		// `ann_date`，也不加 `visible_at`（同表两个锚点会漂移）。
+		// 列只取 Tushare `daily_basic` 里本仓确实要用的估值字段，多余的不塞。
+		`CREATE TABLE IF NOT EXISTS market.daily_basic (
+			ts_code    VARCHAR(20) NOT NULL,
+			trade_date DATE NOT NULL,
+			pe         DOUBLE PRECISION,
+			pe_ttm     DOUBLE PRECISION,
+			pb         DOUBLE PRECISION,
+			ps         DOUBLE PRECISION,
+			ps_ttm     DOUBLE PRECISION,
+			dv_ratio   DOUBLE PRECISION,
+			total_mv   DOUBLE PRECISION,
+			circ_mv    DOUBLE PRECISION,
+			CONSTRAINT pk_daily_basic PRIMARY KEY (ts_code, trade_date)
+		)`,
+
 		// 板块快照
 		`CREATE TABLE IF NOT EXISTS market.sectors (
 			sector_code     VARCHAR(32) PRIMARY KEY,

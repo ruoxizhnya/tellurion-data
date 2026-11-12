@@ -19,6 +19,8 @@ type fakeReferenceTransport struct {
 	rows         []market.IndexConstituent
 	fundamentals []market.Fundamental
 	fundBySymbol map[string][]market.Fundamental
+	dailyBasic   []ingest.DailyBasic
+	dbBySymbol   map[string][]ingest.DailyBasic
 	err          error
 
 	gotStockExchange string
@@ -31,6 +33,10 @@ type fakeReferenceTransport struct {
 	gotFundStart     string
 	gotFundEnd       string
 	fundSymbols      []string
+	gotDBSymbol      string
+	gotDBStart       string
+	gotDBEnd         string
+	dbSymbols        []string
 }
 
 func (f *fakeReferenceTransport) FetchStocks(_ context.Context, exchange, listStatus string) ([]market.Stock, error) {
@@ -67,11 +73,26 @@ func (f *fakeReferenceTransport) FetchFundamentalsRange(_ context.Context, symbo
 	return f.fundamentals, nil
 }
 
+func (f *fakeReferenceTransport) FetchDailyBasicRange(_ context.Context, symbol, startDate, endDate string) ([]ingest.DailyBasic, error) {
+	f.gotDBSymbol = symbol
+	f.dbSymbols = append(f.dbSymbols, symbol)
+	f.gotDBStart = startDate
+	f.gotDBEnd = endDate
+	if f.err != nil {
+		return nil, f.err
+	}
+	if rows, ok := f.dbBySymbol[symbol]; ok {
+		return rows, nil
+	}
+	return f.dailyBasic, nil
+}
+
 type fakeReferenceWriter struct {
 	stocks       []market.Stock
 	days         []store.TradingDay
 	rows         []market.IndexConstituent
 	fundamentals []market.Fundamental
+	dailyBasic   []store.DailyBasic
 }
 
 func (f *fakeReferenceWriter) UpsertStocks(_ context.Context, stocks []market.Stock) (int, error) {
@@ -91,6 +112,11 @@ func (f *fakeReferenceWriter) ReplaceIndexConstituents(_ context.Context, rows [
 
 func (f *fakeReferenceWriter) UpsertFundamentals(_ context.Context, rows []market.Fundamental) (int, error) {
 	f.fundamentals = rows
+	return len(rows), nil
+}
+
+func (f *fakeReferenceWriter) UpsertDailyBasic(_ context.Context, rows []store.DailyBasic) (int, error) {
+	f.dailyBasic = rows
 	return len(rows), nil
 }
 
@@ -264,6 +290,75 @@ func TestReferenceRunner_FundamentalsAggregatesSymbols(t *testing.T) {
 	if len(wr.fundamentals) != 3 || wr.fundamentals[0].AnnDate == nil ||
 		wr.fundamentals[0].AnnDate.Format("2006-01-02") != "2024-10-25" {
 		t.Fatalf("writer did not receive ann_date: %+v", wr.fundamentals)
+	}
+}
+
+// daily_basic：逐票按交易日区间取估值截面、汇总后一次 upsert。
+func TestReferenceRunner_DailyBasicAggregatesSymbols(t *testing.T) {
+	pe := 10.0
+	peTTM := 12.0
+	tr := &fakeReferenceTransport{dbBySymbol: map[string][]ingest.DailyBasic{
+		"600036.SH": {{
+			Symbol: "600036.SH",
+			Date:   time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			PE:     &pe,
+			PETTM:  &peTTM,
+		}},
+		"300750.SZ": {
+			{Symbol: "300750.SZ", Date: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+			{Symbol: "300750.SZ", Date: time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), PETTM: &peTTM},
+		},
+	}}
+	wr := &fakeReferenceWriter{}
+	runner := &ReferenceRunner{Transport: tr, Writer: wr}
+
+	res, err := runner.Execute(context.Background(), Job{
+		JobType: JobTypeDailyBasic,
+		Params: map[string]any{
+			"symbols":    []any{"600036.SH", "300750.SZ"},
+			"start_date": "2024-01-01",
+			"end_date":   "2024-12-31",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Join(tr.dbSymbols, ",") != "600036.SH,300750.SZ" {
+		t.Fatalf("fetched symbols = %v", tr.dbSymbols)
+	}
+	if tr.gotDBStart != "2024-01-01" || tr.gotDBEnd != "2024-12-31" {
+		t.Fatalf("period = %s..%s", tr.gotDBStart, tr.gotDBEnd)
+	}
+	if res.Fetched != 3 || res.Persisted != 3 || res.DataType != JobTypeDailyBasic {
+		t.Fatalf("result = %+v", res)
+	}
+	if len(wr.dailyBasic) != 3 || wr.dailyBasic[0].PETTM == nil || *wr.dailyBasic[0].PETTM != 12.0 {
+		t.Fatalf("writer did not receive pe_ttm: %+v", wr.dailyBasic)
+	}
+}
+
+// daily_basic：symbols 与交易日区间全部必填；参数不合法时一次请求都不发。
+func TestReferenceRunner_DailyBasicRequiresSymbolsAndPeriod(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{"no symbols", map[string]any{"start_date": "2024-01-01", "end_date": "2024-12-31"}},
+		{"no period", map[string]any{"symbols": []any{"600036.SH"}}},
+		{"reversed", map[string]any{"symbols": []any{"600036.SH"}, "start_date": "2024-12-31", "end_date": "2024-01-01"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &fakeReferenceTransport{}
+			runner := &ReferenceRunner{Transport: tr, Writer: &fakeReferenceWriter{}}
+			_, err := runner.Execute(context.Background(), Job{JobType: JobTypeDailyBasic, Params: tc.params})
+			if !errors.Is(err, ErrInvalidParams) {
+				t.Fatalf("err = %v, want ErrInvalidParams", err)
+			}
+			if len(tr.dbSymbols) != 0 {
+				t.Fatalf("invalid params must not fetch: %v", tr.dbSymbols)
+			}
+		})
 	}
 }
 

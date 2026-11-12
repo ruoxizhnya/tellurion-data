@@ -43,7 +43,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 ### 1.3 因子（不属本仓）
 
-> **归属现状（2026-11-11 订正，2026-11-12 增至 24 张）**：本仓 `internal/schema/schema.go` 的 `TableNames()` 实测 **24 张表**（`market` 20 + `ingest` 4），全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**。下表列的是因子域的历史/目标说明，**不是本仓物理表清单**；这些表的物理 DDL 与写者今天都在 `tellurion`（core）的 `public` schema。
+> **归属现状（2026-11-11 订正，2026-11-12 增至 25 张）**：本仓 `internal/schema/schema.go` 的 `TableNames()` 实测 **25 张表**（`market` 21 + `ingest` 4），全部是 `ingest.*` / `market.*`，**不含任何 `factor_*`**。下表列的是因子域的历史/目标说明，**不是本仓物理表清单**；这些表的物理 DDL 与写者今天都在 `tellurion`（core）的 `public` schema。
 
 | 表 | 内容与今天的 owner |
 |---|---|
@@ -66,6 +66,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `limit_up_pool` / `top_list` / `capital_flow` / `hot_search` / `realtime_quote` | 涨停池 / 龙虎榜 / 资金流 / 热搜 / 实时快照 |
 | `news` / `announcements` | 新闻 / 公告 |
 | `market_activity` | 市场活跃度 |
+| `daily_basic` | **行情面估值截面**（`pe` / `pe_ttm` / `pb` / `ps` / `ps_ttm` / `dv_ratio` / `total_mv` / `circ_mv`），主键 `(ts_code, trade_date)`；PIT 判据是 `trade_date`（收盘后可见），与财报表的 `available_date` 分表，见 ADR-0012 追加节 |
 | `quant.sw_industry_tree` / `quant.industry_vitality` | 申万行业树 / 行业活力（**已在 `quant` 前缀下**） |
 | `quant.supply_chain_edge` / `quant.etf_constituent` / `quant.macro_series` | 产业链边 / ETF 成分 / 宏观序列 |
 
@@ -243,12 +244,12 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 ## 9. 逐表 writer / reader 清单（SVC-DATA-G3 ③，2026-11-10）
 
-> **表名口径** = `internal/schema.TableNames()` 的 **23 张**（`market` 19 + `ingest` 4）。
+> **表名口径** = `internal/schema.TableNames()` 的 **25 张**（`market` 21 + `ingest` 4）。
 > **取证方式**：本仓写者/读方逐条点名 `internal/store`、`internal/sync`、`internal/schema` 的 SQL 常量与端口实现；core 侧实测
-> `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 23 张**）。
+> `git grep -nE '(INSERT INTO|UPDATE|DELETE FROM|TRUNCATE)[[:space:]]+(market|ingest)\.' -- '*.go' ':!*_test.go'` ⇒ 唯一命中 `pkg/storage/index_daily.go:31`（`market.index_daily`，**不属本仓 25 张**）。
 > core `cmd/data` / `pkg/data` 已于 `a96d836`（2026-11-08）整体删除；`Test-Path cmd/data` / `Test-Path pkg/data` 均为 False。
 
-### 9.1 有本仓写者的表（18 张）
+### 9.1 有本仓写者的表（21 张）
 
 | 表 | 本仓写者 | 本仓读方 |
 |---|---|---|
@@ -269,6 +270,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
 | `market.index_constituents` | `store.ReferenceWriter.ReplaceIndexConstituents`（作业类型 `index_constituents`；取 Tushare `index_weight` 最新一期快照，**整期替换当前行**，口径见 §9.6） | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定（`pit_eligible=false`） |
 | `market.stock_fundamentals` | `store.ReferenceWriter.UpsertFundamentals`（作业类型 `fundamentals`；取 Tushare `fina_indicator` 按**报告期**区间拉全，`ON CONFLICT (ts_code, trade_date)` upsert，后到者覆盖非 NULL 列；`available_date` 是生成列 `COALESCE(ann_date, trade_date)`，PIT 判据靠它，见 ADR-0012） | 本仓暂无读端点；待 core 把 `GetFundamentalsPIT*` 从 `public` 切到 `market`（2026-11-12 只报不改） |
+| `market.daily_basic` | `store.ReferenceWriter.UpsertDailyBasic`（作业类型 `daily_basic`；取 Tushare `daily_basic` 按**交易日**区间逐票拉回，`ON CONFLICT (ts_code, trade_date)` upsert，后到者覆盖非 NULL 列；缺失字段落 NULL 不折 0；PIT 判据是 `trade_date`，见 ADR-0012 追加节） | 本仓暂无读端点；待 core 的 `value` 维度改读它（按 `trade_date` 对齐，`pe_ttm` 优先，2026-11-12 只报不改） |
 | `ingest.sync_jobs` | `internal/sync`（`PGStore`，11 条作业/排程端点） | 同左（`GET /api/sync/jobs*`） |
 | `ingest.sync_schedules` | 同上 | 同上 |
 | `ingest.raw` | `store.EvidenceStore.Put`（`POST /api/ingest/raw`；单写者 = 本仓；`ON CONFLICT (content_hash) DO NOTHING`，冲突内容比对） | `GET /api/evidence/{content_hash}`、`GET /api/evidence`；保留期清理 `PurgeExpired`（§9.5） |
@@ -287,7 +289,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 > `market.index_constituents` 已于 2026-11-12 移出本表（重开 `DATA-INDEX-CONSTITUENTS`，写者 `ReplaceIndexConstituents`，见 §9.1 与 §9.6）。
 > `ingest.raw` 已移出本表：2026-11-12 起由本仓证据归档面接管（ADR-0010，见 §9.1 与 §9.5）。
 
-### 9.3 与本仓相关但不属 24 张的一张表
+### 9.3 与本仓相关但不属 25 张的一张表
 
 | 表 | 归属 | 写者 | 本仓读方 |
 |---|---|---|---|
@@ -299,7 +301,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 
 - **G3 ①「唯一 writer 变成本仓」成立**：core 非测试代码对 `market.*` / `ingest.*` 的写点 = 0（唯一例外是裁决 ⑰ 显式留给 core 的 `market.index_daily`）。
 - **零写者已从 7 张降到 3 张**：`stocks` / `trading_calendar` 补了参考数据写者（ADR-0008），`ingest.raw` 由证据归档面接管（ADR-0010），`index_constituents` 由指数成分腿接管（2026-11-12，§9.6）；剩余 `dividends` / `splits` / `market_activity` 登记为 **⏸ 挂起**（各带重开条件，不计开放项），不再有「无归属」的零写者。
-- **读方覆盖**：9 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `ingest.raw` / `sync_jobs` / `sync_schedules`）；其余 14 张中 10 张 A 集只写不读、3 张挂起零写零读、1 张回填哨兵；新增的 `market.stock_fundamentals` 也**只写不读**（core 切读前，2026-11-12，ADR-0012）。
+- **读方覆盖**：9 张业务表 + 2 张作业表有本仓读端点（`ohlcv_daily_qfq` / `ohlcv_minute` / `stocks` / `trading_calendar` / `index_constituents` / `ingest.raw` / `sync_jobs` / `sync_schedules`）；其余 15 张中 11 张只写不读、3 张挂起零写零读、1 张回填哨兵；新增的 `market.stock_fundamentals` 与 `market.daily_basic` 也**只写不读**（core 切读前，2026-11-12，ADR-0012）。
 - **X1d 物理 `SET SCHEMA` + `visible_at` 回填已在本机实例执行（2026-11-10）**：22 张目标表搬迁、`public` 归 0、A 集 NULL 归 0、哨兵 12、幂等复跑通过（`docs/archive/x1d-local-replay-2026-11-10.md`）；未接触远端/生产库。
 
 ### 9.5 `ingest.raw` 证据归档面口径（2026-11-12，ADR-0010）

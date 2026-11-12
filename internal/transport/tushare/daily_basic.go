@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain"
+
+	"tellurion-data/internal/ingest"
 )
 
 // ActivitySourceTushare 是 `market_activity.source` 的 tushare 取值。
@@ -60,6 +62,74 @@ func (c *Client) FetchDailyBasic(ctx context.Context, tradeDate string) ([]domai
 		return nil, nil
 	}
 	return rows, nil
+}
+
+// valuationFields 是本仓 `market.daily_basic` 需要的列（只取估值字段）。
+const valuationFields = "ts_code,trade_date,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,total_mv,circ_mv"
+
+// FetchDailyBasicRange 按交易日区间取**单只票**的估值截面，
+// 落 `market.daily_basic`（每票每交易日一个点）。
+//
+// 与 `FetchDailyBasic` 的区别：后者是「全市场单日 → market_activity」的
+// 活跃度腿；这里按 `ts_code + start_date/end_date` 拉，字段全是估值列。
+// 缺失字段落 nil（缺失≠0），日期不可解析的行跳过（trade_date 是主键一半）。
+func (c *Client) FetchDailyBasicRange(ctx context.Context, symbol, startDate, endDate string) ([]ingest.DailyBasic, error) {
+	params := map[string]interface{}{"ts_code": symbol}
+	if s := strings.TrimSpace(startDate); s != "" {
+		params["start_date"] = compactDate(s)
+	}
+	if s := strings.TrimSpace(endDate); s != "" {
+		params["end_date"] = compactDate(s)
+	}
+	resp, err := c.call(ctx, "daily_basic", params, valuationFields)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeDailyBasicValuation(resp), nil
+}
+
+// normalizeDailyBasicValuation 按**响应自报 fields** 解包估值列。
+//
+// 不按固定下标：上游会剔除该区间全空的列，错位只会静默写错数据。
+func normalizeDailyBasicValuation(resp *response) []ingest.DailyBasic {
+	iCode := columnIndex(resp, "ts_code")
+	iDate := columnIndex(resp, "trade_date")
+	if iCode < 0 || iDate < 0 {
+		return nil
+	}
+	iPE := columnIndex(resp, "pe")
+	iPETTM := columnIndex(resp, "pe_ttm")
+	iPB := columnIndex(resp, "pb")
+	iPS := columnIndex(resp, "ps")
+	iPSTTM := columnIndex(resp, "ps_ttm")
+	iDVRatio := columnIndex(resp, "dv_ratio")
+	iTotalMV := columnIndex(resp, "total_mv")
+	iCircMV := columnIndex(resp, "circ_mv")
+
+	out := make([]ingest.DailyBasic, 0, len(resp.Data.Items))
+	for _, item := range resp.Data.Items {
+		symbol := strings.TrimSpace(tushareCell(item, iCode))
+		if symbol == "" {
+			continue
+		}
+		d, ok := parseTradeDateCell(tushareCell(item, iDate))
+		if !ok {
+			continue
+		}
+		out = append(out, ingest.DailyBasic{
+			Symbol:  symbol,
+			Date:    d,
+			PE:      fieldFloatPtr(item, iPE),
+			PETTM:   fieldFloatPtr(item, iPETTM),
+			PB:      fieldFloatPtr(item, iPB),
+			PS:      fieldFloatPtr(item, iPS),
+			PSTTM:   fieldFloatPtr(item, iPSTTM),
+			DVRatio: fieldFloatPtr(item, iDVRatio),
+			TotalMV: fieldFloatPtr(item, iTotalMV),
+			CircMV:  fieldFloatPtr(item, iCircMV),
+		})
+	}
+	return out
 }
 
 // ProbeDailyBasic 是只取不落的连通性探针（不 normalize、不落库）。

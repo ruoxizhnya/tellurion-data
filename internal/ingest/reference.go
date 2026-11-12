@@ -28,6 +28,24 @@ type TradingDay struct {
 	IsTradingDay bool
 }
 
+// DailyBasic 是 `market.daily_basic` 的一行（Tushare `daily_basic` 的估值截面）。
+//
+// 与 `market.Fundamental` 的区别是**粒度**：这里每个交易日一个截面值，
+// PIT 判据是 `trade_date`（收盘后可见），不是报告期/公告日。因此两者分表，
+// 不共用唯一键（见 ADR-0012 追加节）。
+type DailyBasic struct {
+	Symbol  string
+	Date    time.Time
+	PE      *float64
+	PETTM   *float64
+	PB      *float64
+	PS      *float64
+	PSTTM   *float64
+	DVRatio *float64
+	TotalMV *float64
+	CircMV  *float64
+}
+
 // ReferenceTransport 是参考数据同步依赖的取数面。
 //
 // `FetchStocks` 与 `TushareTransport` 上的同名方法逐字一致；重复声明而不是

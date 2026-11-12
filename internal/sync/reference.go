@@ -1,21 +1,25 @@
 package syncjob
 
-// 参考数据同步：`stocks` / `trading_calendar` / `index_constituents` / `fundamentals`。
+// 参考数据同步：`stocks` / `trading_calendar` / `index_constituents` / `fundamentals` / `daily_basic`。
 //
 // 为什么旁路 ETL：见 `internal/store/reference_write.go` 的头注释。这些表
 // 是 C 集参照数据，没有 visible_at 锚点，走不了
 // `FetchRequestFromParams → Pipeline → BulkInsert` 那条链。
 //
-// 作业类型因此是四个**保留字面值**：
+// 作业类型因此是五个**保留字面值**：
 //
 //	`stocks`             → FetchStocks + UpsertStocks
 //	`trading_calendar`   → FetchTradeCalendar + UpsertTradingDays
 //	`index_constituents` → FetchIndexConstituents + ReplaceIndexConstituents
 //	`fundamentals`       → FetchFundamentalsRange + UpsertFundamentals
+//	`daily_basic`        → FetchDailyBasicRange + UpsertDailyBasic
 //
 // 判定发生在 `Runner.Execute` 的最前面；命中即走本文件，不经过
 // `FetchRequestFromParams` 的 data_type 一致性校验（那层只属于点位管线）。
-// 注意 `fundamentals` 与 data_type 同名：参考腿优先，点位管线永远拿不到它。
+// 注意 `fundamentals` / `daily_basic` 与 data_type 同名：参考腿优先，
+// 点位管线永远拿不到它们。`daily_basic` 原本的 B 集活跃度写面本就挂起
+// （`market_activity` 在 `writeExcludedTypes` 里被拒，db-schema §9.2），
+// 因此不存在「两条腿抢同一字面值」的活跃路径。
 
 import (
 	"context"
@@ -35,12 +39,13 @@ const (
 	JobTypeTradingCalendar   = "trading_calendar"
 	JobTypeIndexConstituents = "index_constituents"
 	JobTypeFundamentals      = "fundamentals"
+	JobTypeDailyBasic        = "daily_basic"
 )
 
 // IsReferenceJobType 判断一个 job_type 是否属于参考数据腿。
 func IsReferenceJobType(jobType string) bool {
 	switch jobType {
-	case JobTypeStocks, JobTypeTradingCalendar, JobTypeIndexConstituents, JobTypeFundamentals:
+	case JobTypeStocks, JobTypeTradingCalendar, JobTypeIndexConstituents, JobTypeFundamentals, JobTypeDailyBasic:
 		return true
 	default:
 		return false
@@ -53,6 +58,7 @@ type ReferenceTransport interface {
 	FetchTradeCalendar(ctx context.Context, exchange string, start, end time.Time) ([]ingest.TradingDay, error)
 	FetchIndexConstituents(ctx context.Context, indexCode string, start, end time.Time) ([]market.IndexConstituent, error)
 	FetchFundamentalsRange(ctx context.Context, symbol, startPeriod, endPeriod string) ([]market.Fundamental, error)
+	FetchDailyBasicRange(ctx context.Context, symbol, startDate, endDate string) ([]ingest.DailyBasic, error)
 }
 
 // ReferenceWriter 是参考数据的写面（`*store.ReferenceWriter` 满足）。
@@ -61,6 +67,7 @@ type ReferenceWriter interface {
 	UpsertTradingDays(ctx context.Context, days []store.TradingDay) (int, error)
 	ReplaceIndexConstituents(ctx context.Context, rows []market.IndexConstituent) (int, error)
 	UpsertFundamentals(ctx context.Context, rows []market.Fundamental) (int, error)
+	UpsertDailyBasic(ctx context.Context, rows []store.DailyBasic) (int, error)
 }
 
 // ReferenceRunner 执行参考数据作业。
@@ -93,6 +100,8 @@ func (r *ReferenceRunner) Execute(ctx context.Context, job Job) (ingest.ProcessR
 		return r.syncIndexConstituents(ctx, job)
 	case JobTypeFundamentals:
 		return r.syncFundamentals(ctx, job)
+	case JobTypeDailyBasic:
+		return r.syncDailyBasic(ctx, job)
 	default:
 		return ingest.ProcessResult{}, fmt.Errorf("%w: %q is not a reference job type", ErrInvalidParams, job.JobType)
 	}
@@ -288,6 +297,72 @@ func (r *ReferenceRunner) syncFundamentals(ctx context.Context, job Job) (ingest
 	written, err := r.Writer.UpsertFundamentals(ctx, rows)
 	if err != nil {
 		return ingest.ProcessResult{}, fmt.Errorf("reference fundamentals: persist: %w", err)
+	}
+	return ingest.ProcessResult{
+		DataType:  job.JobType,
+		Source:    r.source(),
+		Fetched:   len(rows),
+		Persisted: written,
+	}, nil
+}
+
+// syncDailyBasic 按交易日区间逐票取估值截面并 upsert。
+//
+// 参数全部必填：`symbols`、`start_date` / `end_date`（**交易日**区间，
+// 不是报告期）。不给默认窗口的理由同 `syncFundamentals`：静默截断等于
+// 让作业「成功但少数据」。
+func (r *ReferenceRunner) syncDailyBasic(ctx context.Context, job Job) (ingest.ProcessResult, error) {
+	symbols, err := stringSliceField(job.Params, "symbols")
+	if err != nil {
+		return ingest.ProcessResult{}, err
+	}
+	if len(symbols) == 0 {
+		return ingest.ProcessResult{}, fmt.Errorf("%w: symbols is required", ErrInvalidParams)
+	}
+	start, err := dateField(job.Params, "start_date")
+	if err != nil {
+		return ingest.ProcessResult{}, err
+	}
+	end, err := dateField(job.Params, "end_date")
+	if err != nil {
+		return ingest.ProcessResult{}, err
+	}
+	if start.IsZero() || end.IsZero() {
+		return ingest.ProcessResult{}, fmt.Errorf("%w: start_date and end_date (trade dates) are required", ErrInvalidParams)
+	}
+	if end.Before(start) {
+		return ingest.ProcessResult{}, fmt.Errorf("%w: end_date %s is before start_date %s",
+			ErrInvalidParams, end.Format("2006-01-02"), start.Format("2006-01-02"))
+	}
+
+	const layout = "2006-01-02"
+	startDate := start.Format(layout)
+	endDate := end.Format(layout)
+
+	rows := make([]store.DailyBasic, 0, len(symbols)*250)
+	for _, symbol := range symbols {
+		batch, err := r.Transport.FetchDailyBasicRange(ctx, symbol, startDate, endDate)
+		if err != nil {
+			return ingest.ProcessResult{}, fmt.Errorf("reference daily basic: fetch %s: %w", symbol, err)
+		}
+		for _, row := range batch {
+			rows = append(rows, store.DailyBasic{
+				Symbol:  row.Symbol,
+				Date:    row.Date,
+				PE:      row.PE,
+				PETTM:   row.PETTM,
+				PB:      row.PB,
+				PS:      row.PS,
+				PSTTM:   row.PSTTM,
+				DVRatio: row.DVRatio,
+				TotalMV: row.TotalMV,
+				CircMV:  row.CircMV,
+			})
+		}
+	}
+	written, err := r.Writer.UpsertDailyBasic(ctx, rows)
+	if err != nil {
+		return ingest.ProcessResult{}, fmt.Errorf("reference daily basic: persist: %w", err)
 	}
 	return ingest.ProcessResult{
 		DataType:  job.JobType,

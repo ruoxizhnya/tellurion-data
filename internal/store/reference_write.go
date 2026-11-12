@@ -336,6 +336,90 @@ func (w *ReferenceWriter) UpsertFundamentals(ctx context.Context, rows []market.
 	return written, nil
 }
 
+// DailyBasic 是 `market.daily_basic` 的行（store 侧镜像，与 `ingest.DailyBasic` 同形）。
+//
+// 与 `market.Fundamental` 分开：这里是每个交易日一个截面值，PIT 判据是
+// `trade_date`（收盘后可见），不是报告期/公告日。
+type DailyBasic struct {
+	Symbol  string
+	Date    time.Time
+	PE      *float64
+	PETTM   *float64
+	PB      *float64
+	PS      *float64
+	PSTTM   *float64
+	DVRatio *float64
+	TotalMV *float64
+	CircMV  *float64
+}
+
+// UpsertDailyBasic 按 `(ts_code, trade_date)` 覆盖估值列。
+//
+// 参考数据语义：后到者用非 NULL 覆盖，NULL 保留旧值（源端某次没给不该擦掉
+// 上一轮写好的值）；不做内容比对整批回滚。空 `ts_code` / 零交易日拒写：
+// 交易日是主键的一半，静默丢行等于让作业「成功但少数据」。
+func (w *ReferenceWriter) UpsertDailyBasic(ctx context.Context, rows []DailyBasic) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	for i, row := range rows {
+		if strings.TrimSpace(row.Symbol) == "" || row.Date.IsZero() {
+			return 0, fmt.Errorf("store: daily basic row %d has empty ts_code or zero trade date", i)
+		}
+	}
+
+	tx, err := w.db.BeginTx(ctx)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	const stmt = `INSERT INTO %s AS d
+		(ts_code, trade_date, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, total_mv, circ_mv)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (ts_code, trade_date) DO UPDATE SET
+			pe       = COALESCE(EXCLUDED.pe, d.pe),
+			pe_ttm   = COALESCE(EXCLUDED.pe_ttm, d.pe_ttm),
+			pb       = COALESCE(EXCLUDED.pb, d.pb),
+			ps       = COALESCE(EXCLUDED.ps, d.ps),
+			ps_ttm   = COALESCE(EXCLUDED.ps_ttm, d.ps_ttm),
+			dv_ratio = COALESCE(EXCLUDED.dv_ratio, d.dv_ratio),
+			total_mv = COALESCE(EXCLUDED.total_mv, d.total_mv),
+			circ_mv  = COALESCE(EXCLUDED.circ_mv, d.circ_mv)`
+	sql := fmt.Sprintf(stmt, w.table("daily_basic"))
+
+	written := 0
+	for _, row := range rows {
+		tag, err := tx.Exec(ctx, sql,
+			row.Symbol,
+			utcDate(row.Date),
+			row.PE,
+			row.PETTM,
+			row.PB,
+			row.PS,
+			row.PSTTM,
+			row.DVRatio,
+			row.TotalMV,
+			row.CircMV,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("store: upsert daily basic %s/%s: %w",
+				row.Symbol, row.Date.Format("2006-01-02"), err)
+		}
+		written += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	committed = true
+	return written, nil
+}
+
 // normalizeExchange 把缺省/大小写差异折成 DDL CHECK 认可的取值。
 func normalizeExchange(exchange string) string {
 	exchange = strings.ToUpper(strings.TrimSpace(exchange))

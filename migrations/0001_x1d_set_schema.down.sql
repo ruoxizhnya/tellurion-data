@@ -27,6 +27,7 @@ BEGIN
             ('market', 'adjust_baseline_changes'),
             ('market', 'announcements'),
             ('market', 'capital_flow'),
+            ('market', 'daily_basic'),
             ('market', 'dividends'),
             ('market', 'global_ohlcv'),
             ('market', 'hot_search'),

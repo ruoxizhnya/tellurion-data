@@ -64,13 +64,14 @@ core（回测/实盘）   analytics（基准/归因）   strategy（资产）   
 > **这条红线现在执法在本仓**（2026-10-25，H4 ②）：`POST /ingest/points` 有 `assembly.MaxPointsPerRequest = 10000` 与 8 MiB 报文上限两道门，超限**整批拒收 413**，既不截断也不「写前 N 条」。代价如实登记：调用方必须按上界分片，一片一个请求，于是一次作业跨请求失败时**已落的那片不回滚**——作业层的「整池一次」原子性从来就不在跨仓这一侧，读 `sync_jobs.error_message` 时要按分片理解。
 
 ### 参考数据（旁路点位链，ADR-0008 / ADR-0012）
-`stocks` / `trading_calendar` / `index_constituents` / `fundamentals` 是 C 集参照表（无 `visible_at`、无 data_type 声明），不走上图，走一条短链：
+`stocks` / `trading_calendar` / `index_constituents` / `fundamentals` / `daily_basic` 是 C 集参照表（无 `visible_at`、无 data_type 声明），不走上图，走一条短链：
 
-1. `POST /api/sync/jobs` 或排程以**保留 job_type**（`stocks` / `trading_calendar` / `index_constituents` / `fundamentals`）入队；
-2. `Runner.Execute` 在 `FetchRequestFromParams` **之前**分流给 `ReferenceRunner`（参考数据作业不会掉进点位管线）。`fundamentals` 与 data_type 同名，但参考腿优先；
-3. `ReferenceTransport` 取数（`stock_basic` / `trade_cal` / `index_weight` / `fina_indicator`）→ `store.ReferenceWriter` 用 `ON CONFLICT` upsert：**后到者覆盖可变列**，不做内容比对整批回滚。
+1. `POST /api/sync/jobs` 或排程以**保留 job_type**（`stocks` / `trading_calendar` / `index_constituents` / `fundamentals` / `daily_basic`）入队；
+2. `Runner.Execute` 在 `FetchRequestFromParams` **之前**分流给 `ReferenceRunner`（参考数据作业不会掉进点位管线）。`fundamentals` / `daily_basic` 与 data_type 同名，但参考腿优先；
+3. `ReferenceTransport` 取数（`stock_basic` / `trade_cal` / `index_weight` / `fina_indicator` / `daily_basic`）→ `store.ReferenceWriter` 用 `ON CONFLICT` upsert：**后到者覆盖可变列**，不做内容比对整批回滚。
 4. **字段契约 fail-closed**：`stock_basic` 必填 `ts_code` / `symbol` / `name` / `list_date` / `delist_date`，`trade_cal` 必填 `cal_date` / `is_open`；缺列或改名 ⇒ `ErrTransportDataQuality`，作业在开事务前失败（不会把退市票静默写成 `active`，也不会把整天静默写成非交易日）。多余列显式忽略。fixture 与线上核对见 `internal/sync/testdata/` + `internal/sync/reference_contract_test.go`。
-5. **财报口径（2026-11-12，ADR-0012）**：`fina_indicator` 按**报告期**区间（`start_date` / `end_date` = 报告期截止日）一次拉全；`trade_date` = 报告期 `end_date`，`ann_date` 原样保留。PIT 只认 `available_date`（生成列 `COALESCE(ann_date, trade_date)`）——三季报 9/30 截止、10/25 披露，回测在 10/25 前看不到它。源端没给的字段落 `NULL`，**不折成 0**；响应 `fields` 会剔除全空列，解析必须按响应自报的列名建映射（按固定下标会把 `roe` 写进 `pe`）。另：`fina_indicator` **不提供 `pe/pb/ps`**（实测 `fields` 无这三列），估值字段需另接 `daily_basic`。
+5. **财报口径（2026-11-12，ADR-0012）**：`fina_indicator` 按**报告期**区间（`start_date` / `end_date` = 报告期截止日）一次拉全；`trade_date` = 报告期 `end_date`，`ann_date` 原样保留。PIT 只认 `available_date`（生成列 `COALESCE(ann_date, trade_date)`）——三季报 9/30 截止、10/25 披露，回测在 10/25 前看不到它。源端没给的字段落 `NULL`，**不折成 0**；响应 `fields` 会剔除全空列，解析必须按响应自报的列名建映射（按固定下标会把 `roe` 写进 `pe`）。另：`fina_indicator` **不提供 `pe/pb/ps`**（实测 `fields` 无这三列），估值字段由下一条的 `daily_basic` 腿补。
+6. **行情面估值口径（2026-11-12，ADR-0012 追加节）**：`daily_basic` 按**交易日**区间（`start_date` / `end_date`）逐票拉回，落 `market.daily_basic`，主键 `(ts_code, trade_date)`。PIT 判据是 `trade_date`（收盘后可见），不是公告日——所以它与财报**分表**：财报是「每个报告期一个人点值」，估值是「每个交易日一个截面值」，粒度与唯一键都不同。源端没给的估值列落 `NULL`（**不折成 0**）；解析按响应自报的 `fields` 建列名映射（与财报同一条教训：按固定下标会把 `pe_ttm` 读成 `pe`）。
 
 它不经过 `ValidatePoints` / `GatePoints` / `Deduplicate` / `BulkInsert`。参照表的语义是「后到者覆盖」而不是「历史不可改」，硬套点位闸门只会把合法的名称/状态变更判成冲突；财报更正/追溯调整同理。
 

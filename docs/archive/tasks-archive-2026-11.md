@@ -23,6 +23,7 @@
 | DATA-POLICY-FACTORS-DEAD | 删除策略表里不存在的因子同步/派生端点（ADR-037 归属退役） | 2026-11-12 | 本笔（`git log --grep DATA-POLICY-FACTORS-DEAD`） | [原文](#DATA-POLICY-FACTORS-DEAD) |
 | DATA-ADJUST-BASELINE | 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值，ADR-0011） | 2026-11-12 | 本笔（`git log --grep DATA-ADJUST-BASELINE`） | [原文](#DATA-ADJUST-BASELINE) |
 | DATA-FUNDAMENTALS-WRITER | 财报写面归本仓（`market.stock_fundamentals` + 参考腿；补写者 + 表归属落定，ADR-0012） | 2026-11-12 | 本笔（`git log --grep DATA-FUNDAMENTALS-WRITER`） | [原文](#DATA-FUNDAMENTALS-WRITER) |
+| DATA-DAILY-BASIC-VALUATION | 行情面估值表 `market.daily_basic`（`value` 维度缺口；`job_type=daily_basic` 参考腿，ADR-0012 追加节） | 2026-11-12 | 本笔（`git log --grep DATA-DAILY-BASIC-VALUATION`） | [原文](#DATA-DAILY-BASIC-VALUATION) |
 
 ---
 
@@ -837,3 +838,24 @@
   - **`pe` 缺口（如实记）**：`fina_indicator` 响应 `fields` 不含 `pe/pb/ps`，三列全为 `NULL`；`value` 维度所需估值字段需另接 `daily_basic`，本单未取、未补零。
   - 旧表只读校验：`SELECT count(*) FROM public.stock_fundamentals` = **0**（本次只写 `market`）。
   - 遗留口径偏差：`persisted` 是 upsert **执行次数**（841），不是库内行数（528）；本轮不改代码，已在 `api-schema.md` 写明实际行数以库内 `count(*)` 为准。
+
+<a id="DATA-DAILY-BASIC-VALUATION"></a>
+### DATA-DAILY-BASIC-VALUATION · 行情面估值表 `market.daily_basic`（补 `value` 维度缺口） [P0] ✅（2026-11-12，ADR-0012 追加节）
+
+- **① 目标**：补上 `value` 维度缺的估值数据（`pe` / `pe_ttm` / `pb` / `ps` / `ps_ttm` / `dv_ratio` / `total_mv` / `circ_mv`），**另立行情面估值表**，不往财报表里塞估值。
+- **② 上下文**：财报腿已收编（`DATA-FUNDAMENTALS-WRITER`），但 `fina_indicator` 不提供 `pe/pb/ps`，三列在 `market.stock_fundamentals` 恒 `NULL`。估值是「每个交易日一个截面值」，财报是「每个报告期一个人点值」，粒度、PIT 判据（`trade_date` vs `ann_date`）、更新频率都不同；塞进一张表会让唯一键与 PIT 过滤打架（ADR-0012 追加节的完整理由）。`job_type=daily_basic` 与既有 data_type 同名，但原 B 集 `market_activity` 写面本就挂起（`writeExcludedTypes` 拒绝），参考腿认领该字面值无活跃路径冲突。
+- **③ 要求（本仓已落地）**：
+  1. **建表**：`market.daily_basic`（`internal/schema/market.go`），列 `ts_code` / `trade_date` / `pe` / `pe_ttm` / `pb` / `ps` / `ps_ttm` / `dv_ratio` / `total_mv` / `circ_mv`，主键 `(ts_code, trade_date)`；`TableNames()` 24 → 25；`migrations/0001_x1d_set_schema.{sql,down.sql,verify.sql}` 三份同步；C 集豁免登记（`visible_at.go`，PIT 判据已是 `trade_date`）。
+  2. **传输**：`FetchDailyBasicRange(symbol, startDate, endDate)` 按交易日区间逐票拉回；解析按响应自报 `fields` 建列名→下标映射（同财报 DBT-07 教训：按固定下标会把 `pe_ttm` 读成 `pe`）；缺字段落 `NULL`（**不折成 0**）。
+  3. **写腿**：参考数据旁路（`job_type=daily_basic` → `ReferenceRunner.syncDailyBasic` → `ReferenceWriter.UpsertDailyBasic`），`ON CONFLICT (ts_code, trade_date)` 后到者覆盖非 NULL 列；`symbols` 与交易日区间必填。
+  4. **文档**：`db-schema.md`（§1.4 表行、§9.1 写者行、25 张计数）、`api-schema.md`（第五个字面值 + 参数/计数口径）、`dataflow.md`（参考数据节新增估值口径一条）、ADR-0012 追加节。
+- **④ 约束与非目标**：core 的 `value` 维度读取切换**不在本单**，只报「`market.daily_basic` 已就绪，建议按 `trade_date` 对齐、`pe_ttm` 优先」；不写 `public`、不动其他仓；不删/放宽断言换绿；不 `compose down` 整栈。
+- **⑤ 验收（代码侧）**：
+  - `go build ./...` = 0；`go vet ./...` = 0；`gofmt -l .` 无输出；`go test ./... -count=1`（PG DSN 指向 `tellurion_data_test`）= 12 包全 `ok`。
+  - 新增用例：`TestFetchDailyBasicRange_MapsPETTMFromItsOwnColumn`（`fields` 乱序且 `pe_ttm` 在 `pe` 前，逐值断言不错位）、`TestFetchDailyBasicRange_MissingColumnsStayNil`（`nil≠0`）、`TestFetchDailyBasicRange_SkipsBadTradeDate`、`TestReferenceRunner_DailyBasicAggregatesSymbols`、`TestReferenceRunner_DailyBasicRequiresSymbolsAndPeriod`（3 个子用例，参数不合法不发请求）、`TestReferenceWriter_PG_UpsertDailyBasicIsIdempotentAndKeepsNulls`（真库：复合主键去重、`nil≠0`、同参数重跑 md5 不变、NULL 不擦已有 `pe_ttm`、空 `ts_code`/零日期拒写）。
+  - 一致性：`TestTableNames_MatchCreateStatements` 断言 25 张；`TestStatements_AreIdempotent` + `TestSchemaReplay_TwoRunsLeaveShapeUnchanged`（真 PG 重放两遍形状不变）保持绿。
+- **破坏验证（实做并逐字节还原）**：把 `normalizeDailyBasicValuation` 的 `PE` / `PETTM` 取值索引互换（`PE←iPETTM`、`PETTM←iPE`；只换索引不删变量，否则只会编译失败而不是「数据错位」）⇒
+  `--- FAIL: TestFetchDailyBasicRange_MapsPETTMFromItsOwnColumn` / `daily_basic_range_test.go:33: pe = 0xc00010a1f0, want 10.1`、
+  `--- FAIL: TestFetchDailyBasicRange_MissingColumnsStayNil` / `daily_basic_range_test.go:80: pe = <nil>, want 5.5`（EXIT=1）。
+  逐字节还原后 `daily_basic.go` sha256 `72AC54C4FDF7AFE361BC1AFC2315292D913357AEF3A6C509CFEF9A19C6EFED0A` 与改前一致，复跑 `ok tellurion-data/internal/transport/tushare 0.054s`（EXIT=0）。
+- **⑥ 边界**：本仓 schema / 传输 / 写腿 / 测试 / 文档 / 台账；镜像重建建表、22 只票 × `2024-01-01..2025-12-31` 的拉数、与 Tushare 源逐值交叉核对属**执行侧**，按「镜像命令先报」的约定另行执行并在此补记。
