@@ -203,16 +203,20 @@ func TestIngestPointsThroughRealWriter(t *testing.T) {
 	reg, err := assembly.DeclarationsRegistry()
 	require.NoError(t, err)
 
-	// B 集（daily_basic）与 C 集（fundamentals）都有合法声明 ⇒ 闸门放行，
+	// B 集（daily_basic）与非点位类型（fundamentals）都有合法声明 ⇒ 闸门放行，
 	// 但真写面必须拒。上面那条替身腿拦不到这一层。
 	// 两条的锚点各在自己的 Data 列上（trade_date / ann_date），所以要带着
-	// 锚点投——不然先被闸门拦下，测的就不是 A 集门了。
+	// 锚点投——不然先被闸门拦下，测的就不是写面这一层了。
+	//
+	// `fundamentals` 自 2026-11-12 起由参考数据腿认领，点位写面对它是
+	// 「未映射」；daily_basic 仍是 B 集（`write_table_not_in_a_set`）。
 	cases := []struct {
 		dataType string
 		body     string
+		wantCode string
 	}{
-		{dataprotocol.DataTypeDailyBasic, `{"data_type":"daily_basic","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"trade_date":"2026-01-15","close":1}}]}`},
-		{dataprotocol.DataTypeFundamental, `{"data_type":"fundamentals","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"ann_date":"2026-01-15","roe":1}}]}`},
+		{dataprotocol.DataTypeDailyBasic, `{"data_type":"daily_basic","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"trade_date":"2026-01-15","close":1}}]}`, "write_table_not_in_a_set"},
+		{dataprotocol.DataTypeFundamental, `{"data_type":"fundamentals","points":[{"symbol":"600519.SH","trade_time":"2026-01-15T00:00:00Z","source":"tushare","data":{"ann_date":"2026-01-15","roe":1}}]}`, "data_type_unmapped"},
 	}
 	for _, tc := range cases {
 		db := &recordingWriteDB{}
@@ -223,7 +227,7 @@ func TestIngestPointsThroughRealWriter(t *testing.T) {
 
 		rec := postPoints(New(nil, WithAuthorizer(allowAllAuthorizer{}), WithPoints(points)), tc.body)
 		require.Equal(t, http.StatusBadRequest, rec.Code, tc.dataType+": "+rec.Body.String())
-		assert.Equal(t, "write_table_not_in_a_set", errorCodeOf(t, rec.Body.Bytes()), tc.dataType)
+		assert.Equal(t, tc.wantCode, errorCodeOf(t, rec.Body.Bytes()), tc.dataType)
 		assert.Zero(t, db.execs, tc.dataType+": 被拒的批次不许已经发过 INSERT")
 	}
 

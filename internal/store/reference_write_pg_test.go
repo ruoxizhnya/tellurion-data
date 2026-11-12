@@ -142,3 +142,80 @@ func TestReferenceWriter_PG_ReplaceIndexConstituentsKeepsOnlyCurrentSnapshot(t *
 			".index_constituents WHERE symbol = '600000.SH' AND out_date IS NOT NULL").Scan(&history))
 	assert.Equal(t, 1, history, "historical interval rows must survive a current-snapshot replace")
 }
+
+// 财报的真库腿：`ann_date` 落库、生成列 `available_date` 按它取值；
+// 同参数重跑内容哈希不变（幂等 upsert）；NULL 不擦掉已有值。
+func TestReferenceWriter_PG_UpsertFundamentalsKeepsAnnDateAndIsIdempotent(t *testing.T) {
+	pool := pgPool(t)
+	scratch := scratchSchema(t, pool)
+	writer, err := store.NewReferenceWriter(store.PoolWriteDB(pool), store.Options{MarketSchema: scratch})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	period := time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC)
+	ann := time.Date(2024, 10, 25, 0, 0, 0, 0, time.UTC)
+	roe := 12.5
+	row := market.Fundamental{Symbol: "600036.SH", Date: period, AnnDate: &ann, ROE: &roe}
+
+	written, err := writer.UpsertFundamentals(ctx, []market.Fundamental{row})
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+
+	rowHash := func() string {
+		var h string
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT md5(row_to_json(f)::text) FROM "+scratch+".stock_fundamentals f").Scan(&h))
+		return h
+	}
+	first := rowHash()
+
+	// 同参数重跑：行数不增加、内容逐字节不变。
+	written, err = writer.UpsertFundamentals(ctx, []market.Fundamental{row})
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+	assert.Equal(t, first, rowHash(), "same-parameter rerun must be byte-identical (idempotent upsert)")
+
+	var (
+		storedAnn  *time.Time
+		available  time.Time
+		storedPE   *float64
+		storedROE  *float64
+		storedDate time.Time
+	)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT trade_date, ann_date, available_date, pe, roe FROM "+scratch+
+			".stock_fundamentals WHERE ts_code = '600036.SH'").Scan(
+		&storedDate, &storedAnn, &available, &storedPE, &storedROE))
+	assert.Equal(t, "2024-09-30", storedDate.Format("2006-01-02"))
+	require.NotNil(t, storedAnn, "ann_date must be persisted")
+	assert.Equal(t, "2024-10-25", storedAnn.Format("2006-01-02"))
+	assert.Equal(t, "2024-10-25", available.Format("2006-01-02"),
+		"available_date must follow ann_date (PIT), not the report period")
+	assert.Nil(t, storedPE, "missing pe must stay NULL (nil≠0)")
+	require.NotNil(t, storedROE)
+	assert.InDelta(t, 12.5, *storedROE, 1e-9)
+
+	// 第二轮：只给 roe 新值，NULL 列不许把已有的 ann_date 擦掉。
+	newROE := 13.0
+	_, err = writer.UpsertFundamentals(ctx, []market.Fundamental{{
+		Symbol: "600036.SH", Date: period, ROE: &newROE,
+	}})
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT ann_date, roe FROM "+scratch+
+			".stock_fundamentals WHERE ts_code = '600036.SH'").Scan(&storedAnn, &storedROE))
+	require.NotNil(t, storedAnn, "NULL ann_date must not erase the stored value")
+	assert.Equal(t, "2024-10-25", storedAnn.Format("2006-01-02"))
+	require.NotNil(t, storedROE)
+	assert.InDelta(t, 13.0, *storedROE, 1e-9)
+
+	// 没有 ann_date 的期：available_date 退化成报告期（生成列的兜底语义）。
+	_, err = writer.UpsertFundamentals(ctx, []market.Fundamental{{
+		Symbol: "600036.SH", Date: time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT available_date FROM "+scratch+
+			".stock_fundamentals WHERE ts_code = '600036.SH' AND trade_date = '2024-06-30'").Scan(&available))
+	assert.Equal(t, "2024-06-30", available.Format("2006-01-02"))
+}

@@ -237,12 +237,14 @@ var writeSpecs = map[string]writeSpec{
 	},
 }
 
-// writeExcludedTypes 让 B 集 / C 集有明确的类型名可查：写面见到它们必须报
+// writeExcludedTypes 让 B 集有明确的类型名可查：写面见到它们必须报
 // ErrWriteTableNotInASet（带分类），而不是「未知类型」——两者对运维的处置不同。
+//
+// `fundamentals` 于 2026-11-12 移出本表：它已改由参考数据腿认领
+// （`ReferenceRunner.syncFundamentals`），不再是点位写面的类型。
 var writeExcludedTypes = map[string]string{
 	"daily_basic":  "market_activity",    // B 集：as_of，走 daily_basic 同步腿
 	"macro_series": "quant.macro_series", // B 集：as_of，走 macro 同步腿
-	"fundamentals": "stock_fundamentals", // C 集：判据走 ann_date（§6.3）
 }
 
 // specFor 解析 data_type 的写面形状，并过三集合门。

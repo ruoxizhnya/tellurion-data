@@ -11,9 +11,9 @@
 //     data_type 跑一遍，以及结果怎么记账」；
 //   - 作业类型 = data_type（`job_type` 就是 data_type 的字面值）：本仓的
 //     声明表已经回答了「哪些类型可跑、锚点在哪」，再造一套 job_type 别名
-//     就是双真相。**唯二例外**是参考数据腿的两个保留字面值
-//     （`stocks` / `trading_calendar`）：它们不是点位流，走 upsert 而不是
-//     `BulkInsert`，见 `reference.go`；
+//     就是双真相。**例外**是参考数据腿的四个保留字面值
+//     （`stocks` / `trading_calendar` / `index_constituents` / `fundamentals`）：
+//     它们不是点位流，走 upsert 而不是 `BulkInsert`，见 `reference.go`；
 //   - 队列状态只有五种（pending / running / succeeded / failed / cancelled），
 //     不引入「部分成功」——部分成功会让「这个作业到底补没补完」变成猜谜。
 package syncjob

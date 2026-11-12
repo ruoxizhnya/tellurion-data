@@ -127,12 +127,25 @@ func TestWriter_RejectsTablesOutsideASet(t *testing.T) {
 	w, err := NewWriter(db, Options{MarketSchema: "market"})
 	require.NoError(t, err)
 
-	for _, dataType := range []string{"daily_basic", "macro_series", "fundamentals"} {
+	for _, dataType := range []string{"daily_basic", "macro_series"} {
 		_, _, err := w.BulkInsert(context.Background(), dataType, []Point{validPoint("600519.SH")})
 		require.Error(t, err, dataType)
 		assert.ErrorIs(t, err, ErrWriteTableNotInASet, dataType)
 	}
 	assert.Zero(t, db.beginCalls)
+}
+
+// `fundamentals` 已改由参考数据腿认领、不再是点位类型：点位写面见到它只能
+// 报「未映射」，不能悄悄落进任何一张表。
+func TestWriter_FundamentalsIsNotAPointType(t *testing.T) {
+	db := &fakeWriteDB{tx: &fakeWriteTx{}}
+	w, err := NewWriter(db, Options{MarketSchema: "market"})
+	require.NoError(t, err)
+
+	_, _, err = w.BulkInsert(context.Background(), "fundamentals", []Point{validPoint("600519.SH")})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnmappedDataType)
+	assert.Zero(t, db.beginCalls, "被拒的批次不得开启事务")
 }
 
 func TestWriter_RejectsUnknownDataType(t *testing.T) {

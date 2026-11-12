@@ -22,6 +22,7 @@
 | DATA-SYNC-JOB-NOOP | 空参数 no-op 作业不再记 succeeded（入队期拒绝无范围点位作业） | 2026-11-12 | 本笔（`git log --grep DATA-SYNC-JOB-NOOP`） | [原文](#DATA-SYNC-JOB-NOOP) |
 | DATA-POLICY-FACTORS-DEAD | 删除策略表里不存在的因子同步/派生端点（ADR-037 归属退役） | 2026-11-12 | 本笔（`git log --grep DATA-POLICY-FACTORS-DEAD`） | [原文](#DATA-POLICY-FACTORS-DEAD) |
 | DATA-ADJUST-BASELINE | 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值，ADR-0011） | 2026-11-12 | 本笔（`git log --grep DATA-ADJUST-BASELINE`） | [原文](#DATA-ADJUST-BASELINE) |
+| DATA-FUNDAMENTALS-WRITER | 财报写面归本仓（`market.stock_fundamentals` + 参考腿；补写者 + 表归属落定，ADR-0012） | 2026-11-12 | 本笔（`git log --grep DATA-FUNDAMENTALS-WRITER`） | [原文](#DATA-FUNDAMENTALS-WRITER) |
 
 ---
 
@@ -802,3 +803,29 @@
   - 两只票账本首次记账，`previous_date/previous_factor` 为 `NULL`（此前无账本）；此后同一基准重放不追加（重跑 600000 作业后账本仍 1 行，内容哈希 `d9c0d6d470cea66739765e5dbde0536d` 前后一致）。
   - **全库核对**：22 个 symbol 的有效基准（账本优先，无账本按 `MAX(trade_date)`）`distinct_effective_baselines=1`、全部 `2025-12-31`、`off_2025_12_31=0`。
   - **迁移**：新表由进程启动时 `schema.Statements()` 的幂等 DDL 自动创建（`CREATE TABLE IF NOT EXISTS`），已存在的 `tellurion` 库无需手工迁移；重启后 `\d market.adjust_baseline_changes` 直接可见。
+
+<a id="DATA-FUNDAMENTALS-WRITER"></a>
+### DATA-FUNDAMENTALS-WRITER · 财报写面归本仓（补写者 + 表归属落定） [P0] ✅（2026-11-12，ADR-0012）
+
+- **① 目标**：补上 `stock_fundamentals` 归零的写者，让多因子回测的 `value` / `quality` 重新有数据；并把这张表的**归属**从「core 的 `public`」落定到「本仓的 `market`」（裁决 A：data 写 data 的 schema，core 读 data 的 schema，将来拆库可整体搬走）。
+- **② 上下文**：`public.stock_fundamentals` 实测 **0 行**，宽表写者随 core `pkg/data` 退役（`a96d836`）归零；core `GetFundamentalsPIT*` 用裸表名读到 `public`。`value` / `quality` 按设计 fail-closed，仅 `momentum` 撑 0.3 权重。方案 B（data 跨 schema 写 `public`）被否：不为省一周破坏「每服务一个 schema」的边界。
+- **③ 要求（本仓已落地）**：
+  1. **建表**：`market.stock_fundamentals`，列形状对齐 core 的 `public.stock_fundamentals`（含 `ann_date`、生成列 `available_date`、主键 `ts_code+trade_date`），`TableNames()` 23 → 24，`migrations/0001_x1d_set_schema.{sql,down.sql,verify.sql}` 同步。
+  2. **传输**：`FetchFundamentalsRange(symbol, startPeriod, endPeriod)` 用 `fina_indicator` 按报告期一次拉全；`ann_date` 原样保留，缺失数值列落 `NULL`（**不折成 0**）；解析按响应自报 `fields` 建列名→下标映射（修掉固定下标在缺列时把 `roe` 写进 `pe` 的 DBT-07 形状）。
+  3. **写腿**：参考数据旁路（`job_type=fundamentals` → `ReferenceRunner.syncFundamentals` → `ReferenceWriter.UpsertFundamentals`），`ON CONFLICT (ts_code, trade_date)` 后到者覆盖非 NULL 列；`fundamentals` 从 `store.writeExcludedTypes` 移出。
+  4. **文档**：`db-schema.md`（§1.2 归属、§9.1 写者行、§9.3 过期结论订正、24 张计数）、`api-schema.md`（第四个字面值 + 参数/400）、`dataflow.md`（参考数据节 + 财报口径）、ADR-0012。
+- **④ 约束与非目标**：**不写 `public`**、不对 core schema 执行任何 DDL/DML；core 的读取切换（`GetFundamentalsPIT*` 改读 `market`）**不在本单**，只报「表已就绪」；不删/放宽断言换绿；不碰其他仓；不 `compose down` 整栈。
+- **⑤ 验收（代码侧）**：
+  - `go build ./...` = 0；`go vet ./...` = 0；`gofmt -l .` 无输出；`go test ./... -count=1`（PG DSN 指向 `tellurion_data_test`）= 12 包全 `ok`（`cmd/dataservice`、`assembly`、`evidence`、`httpapi`、`ingest`、`normalize`、`repoguard`、`schema`、`serving`、`store`、`sync`、`transport/tushare`），EXIT=0。
+  - 新增用例：`TestFetchFundamentalsRange_ParsesByResponseFields`（列序打乱/缺列不错位、`ann_date` 保留、`nil≠0`）、`TestFetchFundamentalsRange_MissingColumnDoesNotShiftValues`、`TestFetchFundamentalsRange_SkipsUnparseableReportPeriod`、`TestReferenceRunner_FundamentalsAggregatesSymbols`、`TestReferenceRunner_FundamentalsRequiresSymbolsAndPeriod`、`TestReferenceWriter_PG_UpsertFundamentalsKeepsAnnDateAndIsIdempotent`（同参数重跑内容哈希不变、NULL 不擦已有值）、`TestWriter_FundamentalsIsNotAPointType`。
+  - 一致性：`TestTableNames_MatchCreateStatements` 断言 24 张；DDL 幂等重放用例保持绿。
+- **⑥ 边界**：本仓 schema / 传输 / 写腿 / 文档 / 台账；真实库建表与 22 只票的拉数属**执行侧**，按「建表前贴 DDL 原文待批、重建镜像先报」的约定另行执行并补记。
+- **破坏验证（实做并逐字节还原）**：
+  1. 把 `normalizeFundamentals` 的 `ann_date` 解析结果丢掉（`annDate` 恒 `nil`）⇒
+     `--- FAIL: TestFetchFundamentalsRange_ParsesByResponseFields` / `fundamentals_test.go:36: ann_date must be preserved: <nil>`（EXIT=1）。
+     逐字节还原后 `stocks.go` sha256 `6A3CE1DBFB403E74490B364696D4D945FFE8D64FC3A856DBA5B3A29BDFF7CD38` 与改前一致，`ok tellurion-data/internal/transport/tushare 0.059s`（EXIT=0）。
+  2. 把 `fieldFloatPtr` 的缺失分支 `return nil` 改成 `return &f`（`nil` 折成 0）⇒
+     `--- FAIL: TestFetchFundamentalsRange_ParsesByResponseFields` / `missing columns must stay nil (nil≠0): pe=0xc00010a1b8 pb=…`、
+     `--- FAIL: TestFetchFundamentalsRange_MissingColumnDoesNotShiftValues` / `column shift detected: pe=… roe=…`（EXIT=1）。
+     逐字节还原后 `client.go` sha256 `FAE64CF240E5B5CBFEEC527A0C89D86C8C7B416B8BA3E983B4DA984FB9D75ED4` 与改前一致，复跑 `ok`（EXIT=0）。
+- **执行侧（待批后补记）**：真实库建表（DDL 原文先报批）、重建 data 镜像（先报命令）、22 只 symbol × 报告期 `2020-01-01..2025-12-31` 走 `POST /api/sync/jobs` 拉数（报作业 ID 与实际行数）、`600036.SH` / `300750.SZ` 的 `pe`/`roe` 与 Tushare 源逐值交叉核对。

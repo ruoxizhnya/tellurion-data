@@ -137,6 +137,9 @@ func TestBackfill_GlobalOHLCVDoesNotUseAShareClose(t *testing.T) {
 
 // 建表清单与 DDL 必须互相对账：新增表忘了登记 → 红。
 func TestTableNames_MatchCreateStatements(t *testing.T) {
+	// 2026-11-12 收编财报写面后为 24 张（原 23 + market.stock_fundamentals）。
+	require.Len(t, TableNames(), 24)
+
 	declared := make(map[string]struct{})
 	for _, n := range TableNames() {
 		declared[n] = struct{}{}

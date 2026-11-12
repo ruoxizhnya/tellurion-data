@@ -251,6 +251,91 @@ func (w *ReferenceWriter) ReplaceIndexConstituents(ctx context.Context, rows []m
 	return written, nil
 }
 
+// UpsertFundamentals 按 `(ts_code, trade_date)` 覆盖财报可变列。
+//
+// 为什么走参考数据语义而不是 `BulkInsert`：`market.stock_fundamentals` 是
+// C 集（可见性判据是生成列 `available_date = COALESCE(ann_date, trade_date)`，
+// 没有 `visible_at`），而且财报会被**更正/追溯调整**——「同主键异内容整批
+// 回滚」会让一份更正永远写不进去。这里的口径是「后到者覆盖可变列」：
+// 新值非 NULL 才覆盖，NULL 保留旧值（源端某次没给不该擦掉上一轮写好的值）。
+//
+// `available_date` 是生成列，不出现在 INSERT 列表里。空 `ts_code` / 零报告期
+// 拒写：报告期是主键的一半，静默丢行等于让作业「成功但少数据」。
+func (w *ReferenceWriter) UpsertFundamentals(ctx context.Context, rows []market.Fundamental) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	for i, row := range rows {
+		if strings.TrimSpace(row.Symbol) == "" || row.Date.IsZero() {
+			return 0, fmt.Errorf("store: fundamentals row %d has empty ts_code or zero report date", i)
+		}
+	}
+
+	tx, err := w.db.BeginTx(ctx)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	const stmt = `INSERT INTO %s AS f
+		(ts_code, trade_date, ann_date, end_date, pe, pb, ps, roe, roa, debt_to_equity,
+		 gross_margin, net_margin, revenue, net_profit, total_assets, total_liab)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT (ts_code, trade_date) DO UPDATE SET
+			ann_date       = COALESCE(EXCLUDED.ann_date, f.ann_date),
+			end_date       = COALESCE(EXCLUDED.end_date, f.end_date),
+			pe             = COALESCE(EXCLUDED.pe, f.pe),
+			pb             = COALESCE(EXCLUDED.pb, f.pb),
+			ps             = COALESCE(EXCLUDED.ps, f.ps),
+			roe            = COALESCE(EXCLUDED.roe, f.roe),
+			roa            = COALESCE(EXCLUDED.roa, f.roa),
+			debt_to_equity = COALESCE(EXCLUDED.debt_to_equity, f.debt_to_equity),
+			gross_margin   = COALESCE(EXCLUDED.gross_margin, f.gross_margin),
+			net_margin     = COALESCE(EXCLUDED.net_margin, f.net_margin),
+			revenue        = COALESCE(EXCLUDED.revenue, f.revenue),
+			net_profit     = COALESCE(EXCLUDED.net_profit, f.net_profit),
+			total_assets   = COALESCE(EXCLUDED.total_assets, f.total_assets),
+			total_liab     = COALESCE(EXCLUDED.total_liab, f.total_liab)`
+	sql := fmt.Sprintf(stmt, w.table("stock_fundamentals"))
+
+	written := 0
+	for _, row := range rows {
+		tag, err := tx.Exec(ctx, sql,
+			row.Symbol,
+			utcDate(row.Date),
+			nullIfNilTime(row.AnnDate),
+			utcDate(row.Date),
+			row.PE,
+			row.PB,
+			row.PS,
+			row.ROE,
+			row.ROA,
+			row.DebtToEquity,
+			row.GrossMargin,
+			row.NetMargin,
+			row.Revenue,
+			row.NetProfit,
+			row.TotalAssets,
+			row.TotalLiab,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("store: upsert fundamentals %s/%s: %w",
+				row.Symbol, row.Date.Format("2006-01-02"), err)
+		}
+		written += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	committed = true
+	return written, nil
+}
+
 // normalizeExchange 把缺省/大小写差异折成 DDL CHECK 认可的取值。
 func normalizeExchange(exchange string) string {
 	exchange = strings.ToUpper(strings.TrimSpace(exchange))

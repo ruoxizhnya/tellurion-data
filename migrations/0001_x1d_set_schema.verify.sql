@@ -27,6 +27,7 @@ WITH expected(target_schema, table_name) AS (
         ('market', 'realtime_quote'),
         ('market', 'sectors'),
         ('market', 'splits'),
+        ('market', 'stock_fundamentals'),
         ('market', 'stock_sector_map'),
         ('market', 'stocks'),
         ('market', 'top_list'),
@@ -63,6 +64,7 @@ BEGIN
             ('market', 'news'), ('market', 'ohlcv_daily_qfq'),
             ('market', 'ohlcv_minute'), ('market', 'realtime_quote'),
             ('market', 'sectors'), ('market', 'splits'),
+            ('market', 'stock_fundamentals'),
             ('market', 'stock_sector_map'), ('market', 'stocks'),
             ('market', 'top_list'), ('market', 'trading_calendar')
         ) AS v(target_schema, table_name)

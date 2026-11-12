@@ -70,6 +70,35 @@ func MarketStatements() []string {
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_adjust_baseline_bootstrap
 			ON market.adjust_baseline_changes (symbol) WHERE reason = 'bootstrap'`,
 
+		// 财报（C 集：可见性判据走 ann_date，`available_date` 是生成列）。
+		// 2026-11-12 归属裁决：本仓成为唯一写者（`public.stock_fundamentals`
+		// 由 core 的 DDL 持有、写点已随 pkg/data 退役归零，待 core 切读本表）。
+		// 列形状逐字对齐 core 的 public 表：`ts_code + trade_date` 唯一，
+		// `available_date = COALESCE(ann_date, trade_date)` —— 三季报 9/30 截止、
+		// 10/25 披露，PIT 只认 10/25。
+		`CREATE TABLE IF NOT EXISTS market.stock_fundamentals (
+			ts_code VARCHAR(20) NOT NULL,
+			trade_date DATE NOT NULL,
+			ann_date DATE,
+			end_date DATE,
+			pe DOUBLE PRECISION,
+			pb DOUBLE PRECISION,
+			ps DOUBLE PRECISION,
+			roe DOUBLE PRECISION,
+			roa DOUBLE PRECISION,
+			debt_to_equity DOUBLE PRECISION,
+			gross_margin DOUBLE PRECISION,
+			net_margin DOUBLE PRECISION,
+			revenue DOUBLE PRECISION,
+			net_profit DOUBLE PRECISION,
+			total_assets DOUBLE PRECISION,
+			total_liab DOUBLE PRECISION,
+			available_date DATE GENERATED ALWAYS AS (COALESCE(ann_date, trade_date)) STORED,
+			CONSTRAINT pk_stock_fundamentals PRIMARY KEY (ts_code, trade_date)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_stock_fundamentals_available
+			ON market.stock_fundamentals (ts_code, available_date DESC)`,
+
 		// 分钟线
 		`CREATE TABLE IF NOT EXISTS market.ohlcv_minute (
 			symbol      VARCHAR(20) NOT NULL,

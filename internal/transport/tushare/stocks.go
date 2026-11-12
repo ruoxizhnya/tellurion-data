@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
@@ -255,29 +256,79 @@ func (c *Client) normalizeDailyOHLCV(resp *response, symbol string, factors map[
 func (c *Client) FetchFundamentals(ctx context.Context, symbol, date string) ([]market.Fundamental, error) {
 	resp, err := c.call(ctx, "fina_indicator", map[string]interface{}{
 		"ts_code":  symbol,
-		"ann_date": date,
-	}, "ts_code,ann_date,end_date,pe,pb,ps,roe,roa,debt_to_equity,gross_margin,net_margin,revenue,net_profit,total_assets,total_liab")
+		"ann_date": compactDate(date),
+	}, fundamentalsFields)
 	if err != nil {
 		return nil, err
 	}
 	return normalizeFundamentals(resp), nil
 }
 
+// FetchFundamentalsRange 按**报告期**区间一次拉全一只票的财报。
+//
+// 与 `FetchFundamentals`（按 `ann_date` 单日）的区别：`fina_indicator` 的
+// `start_date/end_date` 指报告期截止日，一次调用即可覆盖多个季度；补历史
+// 必须用这一路，按披露日逐日调用会把一次作业拆成上千次请求。
+//
+// `ann_date` 由源端返回并原样保留（PIT 判据靠它，不靠报告期）。
+func (c *Client) FetchFundamentalsRange(ctx context.Context, symbol, startPeriod, endPeriod string) ([]market.Fundamental, error) {
+	params := map[string]interface{}{"ts_code": symbol}
+	if s := strings.TrimSpace(startPeriod); s != "" {
+		params["start_date"] = compactDate(s)
+	}
+	if s := strings.TrimSpace(endPeriod); s != "" {
+		params["end_date"] = compactDate(s)
+	}
+	resp, err := c.call(ctx, "fina_indicator", params, fundamentalsFields)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeFundamentals(resp), nil
+}
+
+// fundamentalsFields 是要提醒源端返回的列；**解析不看它**（见下）。
+const fundamentalsFields = "ts_code,ann_date,end_date,pe,pb,ps,roe,roa,debt_to_equity,gross_margin,net_margin,revenue,net_profit,total_assets,total_liab"
+
 // normalizeFundamentals 把 fina_indicator 响应转成 market.Fundamental。
+//
+// 必须按**响应自带的 `fields` 名单**建名字→下标映射再解包，不能按请求字段
+// 的固定下标：Tushare 会剔除该期全空的列（DBT-07，2026-10-17 实测 600000.SH
+// 2024Q3 只回 6 列），固定下标会让整行左移——roe 的值被写进 pe 列，且作业
+// 显示成功。取不到的列一律 nil（缺失≠0）。
 func normalizeFundamentals(resp *response) []market.Fundamental {
+	iSym := columnIndex(resp, "ts_code")
+	iEnd := columnIndex(resp, "end_date")
+	if iSym < 0 || iEnd < 0 {
+		return nil
+	}
+	iAnn := columnIndex(resp, "ann_date")
+	iPE := columnIndex(resp, "pe")
+	iPB := columnIndex(resp, "pb")
+	iPS := columnIndex(resp, "ps")
+	iROE := columnIndex(resp, "roe")
+	iROA := columnIndex(resp, "roa")
+	iDE := columnIndex(resp, "debt_to_equity")
+	iGM := columnIndex(resp, "gross_margin")
+	iNM := columnIndex(resp, "net_margin")
+	iRev := columnIndex(resp, "revenue")
+	iNP := columnIndex(resp, "net_profit")
+	iTA := columnIndex(resp, "total_assets")
+	iTL := columnIndex(resp, "total_liab")
+
 	out := make([]market.Fundamental, 0, len(resp.Data.Items))
 	for _, item := range resp.Data.Items {
-		if len(item) < 3 {
-			continue
-		}
-		symbol := tushareCell(item, 0)
+		symbol := tushareCell(item, iSym)
 		if symbol == "" {
 			continue
 		}
-		endDate, _ := time.Parse("20060102", tushareCell(item, 2))
+		endDate, err := time.Parse("20060102", tushareCell(item, iEnd))
+		if err != nil || endDate.IsZero() {
+			// 报告期是主键的一半，解析不出来就不该猜。
+			continue
+		}
 
 		var annDate *time.Time
-		if s := tushareCell(item, 1); s != "" {
+		if s := tushareCell(item, iAnn); s != "" {
 			if a, err := time.Parse("20060102", s); err == nil {
 				annDate = &a
 			}
@@ -287,19 +338,25 @@ func normalizeFundamentals(resp *response) []market.Fundamental {
 			Symbol:       symbol,
 			Date:         endDate,
 			AnnDate:      annDate,
-			PE:           fieldFloatPtr(item, 3),
-			PB:           fieldFloatPtr(item, 4),
-			PS:           fieldFloatPtr(item, 5),
-			ROE:          fieldFloatPtr(item, 6),
-			ROA:          fieldFloatPtr(item, 7),
-			DebtToEquity: fieldFloatPtr(item, 8),
-			GrossMargin:  fieldFloatPtr(item, 9),
-			NetMargin:    fieldFloatPtr(item, 10),
-			Revenue:      fieldFloatPtr(item, 11),
-			NetProfit:    fieldFloatPtr(item, 12),
-			TotalAssets:  fieldFloatPtr(item, 13),
-			TotalLiab:    fieldFloatPtr(item, 14),
+			PE:           fieldFloatPtr(item, iPE),
+			PB:           fieldFloatPtr(item, iPB),
+			PS:           fieldFloatPtr(item, iPS),
+			ROE:          fieldFloatPtr(item, iROE),
+			ROA:          fieldFloatPtr(item, iROA),
+			DebtToEquity: fieldFloatPtr(item, iDE),
+			GrossMargin:  fieldFloatPtr(item, iGM),
+			NetMargin:    fieldFloatPtr(item, iNM),
+			Revenue:      fieldFloatPtr(item, iRev),
+			NetProfit:    fieldFloatPtr(item, iNP),
+			TotalAssets:  fieldFloatPtr(item, iTA),
+			TotalLiab:    fieldFloatPtr(item, iTL),
 		})
 	}
 	return out
+}
+
+// compactDate 把 `YYYY-MM-DD` / `YYYYMMDD` 统一成 Tushare 的 `YYYYMMDD`。
+func compactDate(s string) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "-", "")
+	return s
 }

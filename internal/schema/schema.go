@@ -53,6 +53,7 @@ func TableNames() []string {
 		"market.realtime_quote",
 		"market.sectors",
 		"market.splits",
+		"market.stock_fundamentals",
 		"market.stock_sector_map",
 		"market.stocks",
 		"market.top_list",
