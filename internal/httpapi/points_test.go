@@ -326,7 +326,7 @@ func TestIngestPointsAuthTiers(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
-// `/health` 与三条数据端点的发布面对得上 `docs/api-schema.md` §1：
+// `/healthz` 与三条数据端点的发布面对得上 `docs/api-schema.md` §1：
 // 写端点在位（不是 404），且 GET 不被接受（405 由 ServeMux 给）。
 func TestRouteTableIsThePublishedSurfaceWithWriteRoute(t *testing.T) {
 	sink := &capturedSink{}

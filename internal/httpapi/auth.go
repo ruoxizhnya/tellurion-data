@@ -110,7 +110,7 @@ func (a kitAuthorizer) Authorize(r *http.Request) (string, error) {
 }
 
 // authorizeWithoutSecret 是第 2 态（无 secret、未声明开放）的判定：
-//   - 公开路由（/healthz、/health 过渡别名、/readyz）放行；
+//   - 公开路由（/healthz、/readyz）放行；
 //   - 读方法（GET / HEAD / OPTIONS / TRACE）保持公开；
 //   - 变更方法一律 ErrAuthUnavailable ⇒ 503 auth_unavailable。
 //

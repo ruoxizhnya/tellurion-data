@@ -62,7 +62,7 @@ curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:18082/readyz
 
 真输出：`200`、`503`。
 
-> **`/health` 是过渡弃用别名**（X-PROBE-NAMING，2026-11-12）：报文与 `/healthz` 相同，但响应带 `Deprecation: true` / `Link: </healthz>; rel="alternate"` / `Warning: 299 - "deprecated endpoint /health; use /healthz"`。排障一律用 `/healthz`；别名摘除条件见 `docs/api-schema.md` §1.1。
+> **`/health` 过渡弃用别名已于 2026-11-12 摘除**（X-PROBE-NAMING 收尾；core 消费者清零 + core e2e 复验通过后单独 commit）。现在请求 `GET /health` 返回 **404**，排障一律用 `/healthz`。若某探针/脚本仍在打旧名，那是它自己的缺陷——把调用点补到 `/healthz`，**不要**加回别名。
 
 ### 1.3 后台起 / 停（演练与日常排障用）
 

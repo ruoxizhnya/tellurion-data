@@ -28,7 +28,7 @@
 | X-AGENTS-DEPENDENCY-TABLE | `AGENTS.md` §4 依赖表按实际 `go.mod` 订正 | 2026-11-12 | 见本条 | [施工记录](#X-AGENTS-DEPENDENCY-TABLE) |
 | X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
 | X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
-| X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（三信号 + 摘除前置条件） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
+| X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（同日收尾摘除别名，`/health` 现为 404） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
 | DATA-PAGINATION-ALIGN | 列表分页统一：`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显 + `created_at DESC, id DESC` 稳定排序 | 2026-11-12 | 见本条 | [施工记录](#DATA-PAGINATION-ALIGN) |
 
 ---
@@ -942,6 +942,7 @@
 > - **消费者核查（非 core）**：全工作区 `grep 8081/health` 的非 core 命中只有 `tellurion-agent:docs/hermes/e2e-acceptance-test.md:48` 一处，已改打 `/healthz`（agent 同批单独 commit）；其余均为本仓自身（已改）或历史归档（不改写）。
 > - **core 两处消费者（只记录，不动）**：`tellurion:docker-compose.yml:160`（`curl -f http://localhost:8081/health`）与 `tellurion:tools/local-stack.sh:82`；core 改打 `/healthz` 之前，别名**不得删**，core 侧改动按裁决另立单项。
 > - **边界**：只动本仓；`quant-trading` / `quant-trading-agent` 是历史仓，不在本次 12 仓范围，未碰。
+> - **收尾（同日 2026-11-12，单独 commit）**：前置三条全满足后摘除别名——① core `docker-compose.yml` healthcheck 与 `tools/local-stack.sh` 已改打 `/healthz`，非 core 消费者由 agent 同批改完；② core 侧消费者清零并实测转绿（e2e 三条 PASS、`data-service is responding (status 200)`、`origin/main` = `4122287`）；③ 本笔删 `handleHealthDeprecated` 与 `GET /health` 路由、`servedPolicy` 同步删条目（路由 29→28）、`docs/api-schema.md` §1 表格删行并改写为摘除记录。守卫改为 `TestHealthAliasIsRemoved`（`/health` 必须 **404**，不是 200 也不是 405）。重建镜像后实测：`/healthz` 200、`/health` 404、`/readyz` 200 `{"status":"ready","store":"postgres"}`，容器与 core compose 的 healthcheck 均判 healthy。**e2e 复验在 core 侧**（本仓只提供方自证）。
 
 <a id="DATA-PAGINATION-ALIGN"></a>
 ### DATA-PAGINATION-ALIGN · 两个列表端点分页口径统一（`/api/evidence` vs `/api/sync/jobs`）[P2] ✅（2026-11-12）

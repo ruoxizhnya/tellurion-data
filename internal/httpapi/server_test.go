@@ -221,14 +221,14 @@ func TestFactorRouteIsRemoved(t *testing.T) {
 	}
 }
 
-// TestRouteTableIsThePublishedSurface 钉住对外路由集合：`/health` + 两条数据面。
+// TestRouteTableIsThePublishedSurface 钉住对外路由集合：`/healthz` + 两条数据面。
 // 新增端点必须先改 `docs/api-schema.md`（路由表与契约双向对拍），再加到这里。
 func TestRouteTableIsThePublishedSurface(t *testing.T) {
 	srv := newServer(newTestAggregator(t, []string{"600519.SH"}))
 	r := srv.Routes()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	// resolve 缺参数 ⇒ 400（说明路由存在且 handler 在位），不是 404。
@@ -245,13 +245,13 @@ func TestRouteTableIsThePublishedSurface(t *testing.T) {
 	assert.Equal(t, "snapshot_not_found", body.Error.Code)
 }
 
-// 端口未接线：/health 常绿，数据端点 fail-closed 503 dependency_unavailable。
+// 端口未接线：/healthz 常绿，数据端点 fail-closed 503 dependency_unavailable。
 func TestUnwiredAggregatorFailsClosed(t *testing.T) {
 	srv := newServer(nil)
 	r := srv.Routes()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	for _, path := range []string{resolveQuery, "/datasets/deadbeef"} {

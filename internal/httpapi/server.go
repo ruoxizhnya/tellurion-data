@@ -3,7 +3,7 @@
 // aggregator 是唯一读入口：本包只做参数解析、哨兵 → HTTP 状态码映射与
 // JSON 编码，不实现任何取数/哈希/写入语义。写面只有一条 `POST /ingest/points`
 // —— 它把批次交给 `internal/assembly`，闸门与幂等判定都在那一边。
-// 端口未接线的进程仍然可起（`/healthz` 常绿，`/health` 过渡别名同），数据端点一律 fail-closed 成
+// 端口未接线的进程仍然可起（`/healthz` 常绿），数据端点一律 fail-closed 成
 // 503 dependency_unavailable —— 与 tellurion-analytics 的同款处置。
 package httpapi
 
@@ -33,7 +33,7 @@ const maxIngestBodyBytes = 8 << 20
 
 // Server 持读面 aggregator 与写面装配。两者为 nil 都表示端口未接线
 // （本仓唯一合法的两态：接了 PG 就可用，没接就 503）。
-// 所有业务端点都过鉴权闸（裁-15）；`/healthz`（`/health` 过渡别名）与 `/readyz` 是公开探针（G1），
+// 所有业务端点都过鉴权闸（裁-15）；`/healthz` 与 `/readyz` 是公开探针（G1），
 // 不鉴权、不限流。
 type Server struct {
 	agg        *serving.Aggregator
@@ -118,14 +118,11 @@ type routeSpec struct {
 
 func (s *Server) routes() []routeSpec {
 	return []routeSpec{
-		// 存活探针的规范名是 `/healthz`（X-PROBE-NAMING，2026-11-12）。
-		// `/health` 是**过渡别名**，只为已有消费者保留：它会在
-		// 「core 两处消费者改完（docker-compose.yml healthcheck /
-		// tools/local-stack.sh）且非 core 全仓 grep /health 零残留」后删除，
-		// 删除动作单独 commit，并在 docs/api-schema.md §1 更新。不要给新
-		// 消费者用 `/health`。
+		// 存活探针规范名是 `/healthz`（X-PROBE-NAMING，2026-11-12）。
+		// 过渡别名 `/health` 已于 2026-11-12 摘除（core 消费者清零、e2e 复验
+		// 通过后单独 commit 删除）——**不要重新加回**，否则「存活探针只有一个
+		// 名字」这条不变量又会被两个入口稀释。
 		{"GET /healthz", s.handleHealth},
-		{"GET /health", s.handleHealthDeprecated},
 		{"GET /readyz", s.handleReadyz},
 		// `/datasets/resolve` 与 `/datasets/{hash}`：Go 1.22 ServeMux 里字面段优先
 		// 于通配段，"resolve" 不会被当成 hash。
@@ -263,25 +260,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleHealthDeprecated 是 `/health` 的过渡别名（X-PROBE-NAMING）。
-//
-// 报文与 `/healthz` 逐字节相同（老探针只读状态码），但带三个标准弃用信号，
-// 让抓包/日志能区分「还在打旧名」：
-//   - Deprecation: true
-//   - Link: </healthz>; rel="alternate"
-//   - Warning: 299 - "..."（299 = 持久性杂项警告）
-//
-// 摘除前置条件（三条全满足才删本函数与路由）：
-//  1. core 的 `docker-compose.yml` healthcheck 与 `tools/local-stack.sh` 改打 /healthz；
-//  2. 非 core 全仓 `grep -rn "/health\b"` 零残留（除 data 自身的弃用实现/文档）；
-//  3. `docs/api-schema.md` §1 已把 /health 行删除。
-func (s *Server) handleHealthDeprecated(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Deprecation", "true")
-	w.Header().Set("Link", `</healthz>; rel="alternate"`)
-	w.Header().Set("Warning", `299 - "deprecated endpoint /health; use /healthz"`)
-	s.handleHealth(w, nil)
-}
-
 // readyBody 是 `/readyz` 的报文。`store` 说明检查的是哪一档
 // （`postgres` = 真库检查已注入；`unwired` = 没接库）。
 type readyBody struct {
@@ -292,7 +270,7 @@ type readyBody struct {
 
 // handleReadyz 是就绪探针（G1）：PG 池可连 + 本仓 DDL 已执行。
 //
-// 与 `/health` 的分工：`/health` 只回答「进程活着」，不读库——库挂了它也 200；
+// 与 `/healthz` 的分工：`/healthz` 只回答「进程活着」，不读库——库挂了它也 200；
 // `/readyz` 回答「能不能接业务」，没接库或库不可达一律 503。两者都不鉴权、
 // 不限流（探针被限流会被读成未登录，core AUD-57 的坑）。
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {

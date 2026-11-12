@@ -46,9 +46,9 @@ func TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal(t *testing.T) 
 	assert.Equal(t, "dependency_unavailable", errorCodeOf(t, downIngest.Body.Bytes()))
 	assert.Zero(t, sink.calls, "依赖不可用时不许碰写面")
 
-	// 探针不读库：库挂了 /health 仍然 200，这是「进程活着」与「能接单」的分工。
+	// 探针不读库：库挂了 /healthz 仍然 200，这是「进程活着」与「能接单」的分工。
 	health := httptest.NewRecorder()
-	routes.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	routes.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	require.Equal(t, http.StatusOK, health.Code, health.Body.String())
 
 	up.Store(true)

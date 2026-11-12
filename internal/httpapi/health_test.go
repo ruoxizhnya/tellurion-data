@@ -16,19 +16,17 @@ import (
 	"tellurion-data/internal/serving"
 )
 
-// TestProbesArePublicAndReadinessFlips 钉住 G1 ⑥：`/healthz`（规范名）与
-// `/health`（过渡别名）= 进程活着，`/readyz` = 接线就绪；三者都不鉴权、不限流。
+// TestProbesArePublicAndReadinessFlips 钉住 G1 ⑥：`/healthz` = 进程活着，
+// `/readyz` = 接线就绪；两者都不鉴权、不限流。
 func TestProbesArePublicAndReadinessFlips(t *testing.T) {
 	// 没接库（readiness 未注入）⇒ 存活探针 200、/readyz 503。
 	unwired := New(nil, WithAuthorizer(allowAllAuthorizer{})).Routes()
 
-	for _, path := range []string{"/healthz", "/health"} {
-		rec := httptest.NewRecorder()
-		unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		require.Equal(t, http.StatusOK, rec.Code, path)
-	}
-
 	rec := httptest.NewRecorder()
+	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	rec = httptest.NewRecorder()
 	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	var notReady readyBody
@@ -65,7 +63,7 @@ func TestProbesArePublicAndReadinessFlips(t *testing.T) {
 	// 鉴权开启（真 kit）但探针仍公开：无 token 可达，不返回 401。
 	svc := auth.NewTokenService(auth.Config{JWTSecret: []byte("data-probe-test")})
 	gated := New(nil, WithAuthorizer(NewAuthorizer(svc))).Routes()
-	for _, path := range []string{"/healthz", "/health", "/readyz"} {
+	for _, path := range []string{"/healthz", "/readyz"} {
 		rec = httptest.NewRecorder()
 		gated.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		assert.NotEqual(t, http.StatusUnauthorized, rec.Code, path)
@@ -74,18 +72,18 @@ func TestProbesArePublicAndReadinessFlips(t *testing.T) {
 
 	// 闸未装配时探针也必须可用：鉴权配置坏了不等于进程死了。
 	noAuth := New(nil, WithReadiness(func(context.Context) error { return nil })).Routes()
-	for _, path := range []string{"/healthz", "/health", "/readyz"} {
+	for _, path := range []string{"/healthz", "/readyz"} {
 		rec = httptest.NewRecorder()
 		noAuth.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		assert.Equal(t, http.StatusOK, rec.Code, path)
 	}
 }
 
-// TestHealthAliasCarriesDeprecationSignals 钉住 X-PROBE-NAMING 的过渡契约：
-// `/health` 与 `/healthz` 报文逐字节相同（老探针只读状态码），
-// 但 `/health` 必须额外带 Deprecation / Link / Warning 三个信号——
-// 没有它们，别名会安静地活成「第二个规范名」，摘除条件永远触发不了。
-func TestHealthAliasCarriesDeprecationSignals(t *testing.T) {
+// TestHealthAliasIsRemoved 钉住 X-PROBE-NAMING 的收尾形态：过渡别名
+// `/health` 已摘除（2026-11-12，core 消费者清零 + e2e 复验通过后的单独
+// commit）。它必须是 **404**——不是 200（别名又活了）、也不是 405（说明
+// 还留着只接 GET 的注册，等于半个别名）。
+func TestHealthAliasIsRemoved(t *testing.T) {
 	h := New(nil, WithAuthorizer(allowAllAuthorizer{})).Routes()
 
 	canonical := httptest.NewRecorder()
@@ -93,13 +91,10 @@ func TestHealthAliasCarriesDeprecationSignals(t *testing.T) {
 	require.Equal(t, http.StatusOK, canonical.Code)
 	assert.Empty(t, canonical.Header().Get("Deprecation"), "/healthz 不得带弃用信号")
 
-	alias := httptest.NewRecorder()
-	h.ServeHTTP(alias, httptest.NewRequest(http.MethodGet, "/health", nil))
-	require.Equal(t, http.StatusOK, alias.Code)
-	assert.Equal(t, "true", alias.Header().Get("Deprecation"))
-	assert.Equal(t, `</healthz>; rel="alternate"`, alias.Header().Get("Link"))
-	assert.Contains(t, alias.Header().Get("Warning"), "deprecated endpoint /health")
-	assert.Equal(t, canonical.Body.String(), alias.Body.String(), "报文必须与规范名逐字节一致")
+	gone := httptest.NewRecorder()
+	h.ServeHTTP(gone, httptest.NewRequest(http.MethodGet, "/health", nil))
+	assert.Equal(t, http.StatusNotFound, gone.Code, "/health 必须 404，不能以别名身份回来")
+	assert.Empty(t, gone.Header().Get("Link"), "404 不应再带 /healthz 的 alternate 链接")
 }
 
 // TestRateLimitDistinctFromAuthAndProbesExempt 钉住 G1 ⑤：429 与 401 可区分，
@@ -123,13 +118,11 @@ func TestRateLimitDistinctFromAuthAndProbesExempt(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "rate_limited", body.Error.Code)
 
-	// 探针豁免：同一进程里连打 5 次，不会被 429（规范名与别名都豁免）。
-	for _, path := range []string{"/healthz", "/health"} {
-		for i := 0; i < 5; i++ {
-			rec = httptest.NewRecorder()
-			limited.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-			require.Equal(t, http.StatusOK, rec.Code, "probe %s %d", path, i)
-		}
+	// 探针豁免：同一进程里连打 5 次，不会被 429。
+	for i := 0; i < 5; i++ {
+		rec = httptest.NewRecorder()
+		limited.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		require.Equal(t, http.StatusOK, rec.Code, "probe attempt %d", i)
 	}
 
 	// 鉴权先于限流：无 token 连打三次仍 401，不会被 429 顶替。

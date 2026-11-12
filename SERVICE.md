@@ -76,8 +76,7 @@ verified-by: 2026-11-11 实读 README / AGENTS / ARCHITECTURE / api-schema / db-
 
 - **常驻进程**：`cmd/dataservice`；无额外 worker 进程（作业 worker 与 scheduler 在进程内）。
 - **存活/就绪语义**：
-  - `GET /healthz`：进程存活，**不读库**；库挂了也返回 200。**规范名**。
-  - `GET /health`：**过渡弃用别名**，报文与 `/healthz` 一致，响应带 `Deprecation` / `Link` / `Warning`；新消费者用 `/healthz`（摘除条件见 `docs/api-schema.md` §1.1）。
+  - `GET /healthz`：进程存活，**不读库**；库挂了也返回 200。唯一的存活探针名（过渡别名 `/health` 已于 2026-11-12 摘除，现为 404）。
   - `GET /readyz`：PG 池可连 **且** 本仓 DDL 已执行；未装配 / PG 不可达 / DDL 未执行均为 503。
   - 探针公开且豁免限流；路径是稳定身份，不是接口清单。
 - **部署真相**：`deploy/compose.yaml`、`Dockerfile`、`README.md` 快速开始（启动参数与环境变量）。
@@ -98,7 +97,7 @@ verified-by: 2026-11-11 实读 README / AGENTS / ARCHITECTURE / api-schema / db-
 
 - **影响面**：core 的行情读路径与同步作业降级 / 503；已落库数据仍可被 core 直读的部分不受影响。数据面 fail-closed，不回落成「空数据成功」。
 - **先确认（按顺序）**：
-  1. `GET /healthz` 是否 200（旧名 `/health` 仍可用但已弃用）；不是则看进程日志与启动参数。
+  1. `GET /healthz` 是否 200；不是则看进程日志与启动参数。
   2. `GET /readyz` 是否 200；503 时看 `store` / `error`，按 runbook §5「503 排查路径」走。
   3. 作业失败看 `GET /api/sync/jobs/{id}` 的 `error_message`；按 runbook §6「投递失败排查路径」走。
 - **升级路径**：`owner` → 跨仓争议 → core `docs/TASKS.md`

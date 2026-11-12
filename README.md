@@ -2,7 +2,7 @@
 
 > 5 分钟了解本服务：[SERVICE.md](SERVICE.md)
 
-> module: `tellurion-data` ｜ 状态：**X1c / X1d 已落地（2026-11-10）** —— `internal/ingest` / `internal/normalize` / `internal/serving` / `internal/store` / `internal/schema` / `internal/transport/tushare` / `internal/sync` 已落地；HTTP 面（**29 路由** + 鉴权闸：`GET /healthz`（规范名）、`GET /health`（过渡弃用别名）、`GET /readyz`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，**6 条 G3 只读兼容端点** `GET /ohlcv/{symbol}`、`GET /stocks`、`GET /index/{code}/constituents`、`GET /api/v1/trading/calendar`、`GET /api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`，以及 **14 条作业/排程端点** `/api/sync/jobs*`、`/api/sync/schedules*`、`/api/evidence*`、`POST /api/ingest/raw`）与取数存储 port 已接线，REV-17 策略已移植（路由真相源见 `docs/api-schema.md` §1，收口记录见 `docs/archive/tasks-archive-2026-11.md`）
+> module: `tellurion-data` ｜ 状态：**X1c / X1d 已落地（2026-11-10）** —— `internal/ingest` / `internal/normalize` / `internal/serving` / `internal/store` / `internal/schema` / `internal/transport/tushare` / `internal/sync` 已落地；HTTP 面（**28 路由** + 鉴权闸：`GET /healthz`、`GET /readyz`、`GET /datasets/resolve`、`GET /datasets/{hash}`、`POST /ingest/points`，**6 条 G3 只读兼容端点** `GET /ohlcv/{symbol}`、`GET /stocks`、`GET /index/{code}/constituents`、`GET /api/v1/trading/calendar`、`GET /api/v1/stocks/{symbol}`、`POST /api/v1/ohlcv/bulk`，以及 **14 条作业/排程端点** `/api/sync/jobs*`、`/api/sync/schedules*`、`/api/evidence*`、`POST /api/ingest/raw`）与取数存储 port 已接线，REV-17 策略已移植（路由真相源见 `docs/api-schema.md` §1，收口记录见 `docs/archive/tasks-archive-2026-11.md`）
 
 数据服务：统一数据协议 + connector / aggregator + `dataset_snapshot_hash`。**只走高频/低频路径，逐 bar / 逐笔永不远程**。
 
@@ -44,7 +44,7 @@ docker compose -f deploy/compose.yaml down
 
 - `deploy/compose.yaml` 自带 `postgres`（`pg_isready` 健康检查）；`data` 用 `depends_on.condition=service_healthy` 等它就绪后再起。
 - 宿主端口 `8081`；`DATABASE_URL` / `DATA_MARKET_SCHEMA=market` 已在 compose 内配好；`JWT_SECRET` **不再有默认值**，需要全闸时从环境或 `.env` 注入。连外部库时用 `DATA_DATABASE_URL=...` 覆盖。
-- 镜像多阶段构建（`golang:1.26.11-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/healthz`（`/health` 是过渡弃用别名，2026-11-12 起带 `Deprecation` 头）。
+- 镜像多阶段构建（`golang:1.26.11-alpine` → `alpine:3.19`），以 `USER nobody` 运行，`HEALTHCHECK` 打 `/healthz`（过渡别名 `/health` 已于 2026-11-12 摘除，现为 404）。
 - 取数传输（ADR-0008）：`TUSHARE_TOKEN` 有值才装 Tushare（点位作业 + `stocks` / `trading_calendar` 参考数据作业）；东财客户端无凭证恒装配；`ALPHA_VANTAGE_KEY` 有值才启用 Alpha Vantage。无 token 时取数作业在作业行上响亮失败（不会静默写 0 行）。
 
 > 鉴权三态（2026-11-12）：有 `JWT_SECRET` ⇒ 全闸（写面必须带 token + 角色）；无 secret + **回环绑定** + 未声明 ⇒ 进程能起，读面公开、写面一律 503 `auth_unavailable`；无 secret + **非回环绑定** + 未声明 ⇒ **拒绝启动**（错误会点名缺 secret 且绑定地址不是回环）；本地要开放写面必须显式 `AUTH_INSECURE_EXPOSURE=loopback-published`（任意绑定放开，启动 WARN 同时点名写面无鉴权与**实际**绑定地址，非回环时标注「已对外暴露」）。
