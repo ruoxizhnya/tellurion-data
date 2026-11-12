@@ -24,6 +24,27 @@ type fakeLegacy struct {
 	calendar     []time.Time
 	latestDate   time.Time
 	failSymbols  map[string]bool
+
+	windows      []serving.ListingWindow
+	gotTradeDate time.Time
+}
+
+func (f *fakeLegacy) ListingWindows(_ context.Context, tradeDate time.Time) ([]serving.ListingWindow, error) {
+	f.gotTradeDate = tradeDate
+	if tradeDate.IsZero() {
+		return f.windows, nil
+	}
+	out := make([]serving.ListingWindow, 0, len(f.windows))
+	for _, w := range f.windows {
+		if !w.ListDate.IsZero() && w.ListDate.After(tradeDate) {
+			continue
+		}
+		if w.DelistDate != nil && w.DelistDate.Before(tradeDate) {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
 
 func (f *fakeLegacy) ReadBars(_ context.Context, symbols []string, _, _ time.Time, _ market.Frequency) ([]market.OHLCV, error) {
@@ -81,8 +102,23 @@ func newFakeLegacy() *fakeLegacy {
 		calendar:    []time.Time{day},
 		latestDate:  day,
 		failSymbols: map[string]bool{"BAD.SZ": true},
+		windows: []serving.ListingWindow{
+			{Symbol: "000001.SZ", ListDate: time.Date(1991, 4, 3, 0, 0, 0, 0, time.UTC), Status: "active"},
+			{
+				Symbol:     "600001.SH",
+				ListDate:   time.Date(1998, 1, 1, 0, 0, 0, 0, time.UTC),
+				DelistDate: timePtr(time.Date(2021, 6, 30, 0, 0, 0, 0, time.UTC)),
+				Delisted:   true,
+				Status:     "delisted",
+			},
+			// 上市日未知：不做左端过滤；不折成 1970。
+			{Symbol: "000000.XX", Status: "active"},
+		},
 	}
 }
+
+// timePtr 是测试里的取址小工具。
+func timePtr(t time.Time) *time.Time { return &t }
 
 func doLegacy(t *testing.T, h http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -275,4 +311,109 @@ func TestLegacyReadUnwired(t *testing.T) {
 	if code := errorCodeOf(t, rec.Body.Bytes()); code != "dependency_unavailable" {
 		t.Fatalf("error code = %q", code)
 	}
+}
+
+// TestLegacyListingWindows 钉住 `GET /api/v1/stocks/listing-windows` 的形状与
+// 两种模式（全市场 / 指定交易日），并钉住「退市日当天仍算在市」的边界。
+func TestLegacyListingWindows(t *testing.T) {
+	type windowBody struct {
+		ListDate   *string `json:"list_date"`
+		DelistDate *string `json:"delist_date"`
+		Delisted   bool    `json:"delisted"`
+		Status     string  `json:"status"`
+	}
+	type response struct {
+		AsOf      string                `json:"as_of"`
+		TradeDate *string               `json:"trade_date"`
+		Count     int                   `json:"count"`
+		Windows   map[string]windowBody `json:"windows"`
+	}
+
+	t.Run("all market includes delisted", func(t *testing.T) {
+		fake := newFakeLegacy()
+		rec := doLegacy(t, legacyTestServer(fake), http.MethodGet, "/api/v1/stocks/listing-windows", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		var got response
+		decodeBody(t, rec, &got)
+		if got.Count != 3 || len(got.Windows) != 3 {
+			t.Fatalf("count = %d, windows = %d, want 3", got.Count, len(got.Windows))
+		}
+		if got.TradeDate != nil {
+			t.Fatalf("trade_date = %v, want null (全市场模式)", *got.TradeDate)
+		}
+		if got.AsOf == "" {
+			t.Fatal("as_of must not be empty")
+		}
+		if !fake.gotTradeDate.IsZero() {
+			t.Fatalf("store called with tradeDate = %v, want zero", fake.gotTradeDate)
+		}
+
+		delisted := got.Windows["600001.SH"]
+		if !delisted.Delisted || delisted.DelistDate == nil || *delisted.DelistDate != "2021-06-30" {
+			t.Fatalf("delisted window = %+v, want delist_date 2021-06-30", delisted)
+		}
+		if delisted.ListDate == nil || *delisted.ListDate != "1998-01-01" {
+			t.Fatalf("list_date = %v, want 1998-01-01", delisted.ListDate)
+		}
+
+		active := got.Windows["000001.SZ"]
+		if active.Delisted || active.DelistDate != nil {
+			t.Fatalf("active window = %+v, want delist_date null", active)
+		}
+
+		unknown := got.Windows["000000.XX"]
+		if unknown.ListDate != nil {
+			t.Fatalf("list_date = %v, want null (未知不折 1970)", *unknown.ListDate)
+		}
+	})
+
+	t.Run("trade date filters to listed universe", func(t *testing.T) {
+		fake := newFakeLegacy()
+
+		rec := doLegacy(t, legacyTestServer(fake), http.MethodGet,
+			"/api/v1/stocks/listing-windows?trade_date=2021-06-30", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		var onDelistDay response
+		decodeBody(t, rec, &onDelistDay)
+		if _, ok := onDelistDay.Windows["600001.SH"]; !ok {
+			t.Fatal("退市日当天仍算在市：600001.SH 应包含在 2021-06-30 的股票池里")
+		}
+		if onDelistDay.TradeDate == nil || *onDelistDay.TradeDate != "2021-06-30" {
+			t.Fatalf("trade_date echo = %v", onDelistDay.TradeDate)
+		}
+
+		rec = doLegacy(t, legacyTestServer(fake), http.MethodGet,
+			"/api/v1/stocks/listing-windows?trade_date=20210701", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		var afterDelist response
+		decodeBody(t, rec, &afterDelist)
+		if _, ok := afterDelist.Windows["600001.SH"]; ok {
+			t.Fatal("退市次日不应包含 600001.SH")
+		}
+		if afterDelist.Count != 2 {
+			t.Fatalf("count = %d, want 2 (000001.SZ + 000000.XX)", afterDelist.Count)
+		}
+	})
+
+	t.Run("bad trade date", func(t *testing.T) {
+		h := legacyTestServer(newFakeLegacy())
+		for _, target := range []string{
+			"/api/v1/stocks/listing-windows?trade_date=nope",
+			"/api/v1/stocks/listing-windows?trade_date=2026-13-45",
+		} {
+			rec := doLegacy(t, h, http.MethodGet, target, "")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status %d body %s", target, rec.Code, rec.Body.String())
+			}
+			if code := errorCodeOf(t, rec.Body.Bytes()); code != "invalid_parameter" {
+				t.Fatalf("%s: error code = %q", target, code)
+			}
+		}
+	})
 }

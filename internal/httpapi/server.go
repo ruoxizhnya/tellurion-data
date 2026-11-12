@@ -150,6 +150,9 @@ func (s *Server) routes() []routeSpec {
 		{"GET /index/{code}/constituents", s.handleLegacyConstituents},
 		{"GET /api/v1/trading/calendar", s.handleLegacyCalendar},
 		{"GET /api/v1/stocks/{symbol}", s.handleLegacyStock},
+		// 上市/退市窗口（2026-11-12，台账 CORE-LISTING-SEED-UNWIRED）：
+		// 字面段优先于上面的 `{symbol}` 通配，不会被当成股票代码。
+		{"GET /api/v1/stocks/listing-windows", s.handleLegacyListingWindows},
 		{"POST /api/v1/ohlcv/bulk", s.handleLegacyBulk},
 
 		// ── 作业层（`sync.go`）──

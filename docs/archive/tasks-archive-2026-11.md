@@ -24,6 +24,7 @@
 | DATA-ADJUST-BASELINE | 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值，ADR-0011） | 2026-11-12 | 本笔（`git log --grep DATA-ADJUST-BASELINE`） | [原文](#DATA-ADJUST-BASELINE) |
 | DATA-FUNDAMENTALS-WRITER | 财报写面归本仓（`market.stock_fundamentals` + 参考腿；补写者 + 表归属落定，ADR-0012） | 2026-11-12 | 本笔（`git log --grep DATA-FUNDAMENTALS-WRITER`） | [原文](#DATA-FUNDAMENTALS-WRITER) |
 | DATA-DAILY-BASIC-VALUATION | 行情面估值表 `market.daily_basic`（`value` 维度缺口；`job_type=daily_basic` 参考腿，ADR-0012 追加节） | 2026-11-12 | 本笔（`git log --grep DATA-DAILY-BASIC-VALUATION`） | [原文](#DATA-DAILY-BASIC-VALUATION) |
+| DATA-LISTING-WINDOWS | 上市/退市窗口读端点（`GET /api/v1/stocks/listing-windows`；解 `CORE-LISTING-SEED-UNWIRED`） | 2026-11-12 | 本笔（`git log --grep DATA-LISTING-WINDOWS`） | [原文](#DATA-LISTING-WINDOWS) |
 | X-DEP-BUMP-CONSUMERS | 消费方依赖抬升（kit v0.5.0 / pgx v5.11.0 / go 1.26.11）+ govulncheck 门 | 2026-11-12 | 见本条 | [施工记录](#X-DEP-BUMP-CONSUMERS) |
 | X-AGENTS-DEPENDENCY-TABLE | `AGENTS.md` §4 依赖表按实际 `go.mod` 订正 | 2026-11-12 | 见本条 | [施工记录](#X-AGENTS-DEPENDENCY-TABLE) |
 | X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
@@ -880,6 +881,26 @@
   - **`total_mv` / `circ_mv` 单位写死：万元（两端同单位）**。Tushare `daily_basic` 源端单位为万元，本仓原值入库、未做换算；例如 `600036.SH` 2025-12-31 `total_mv=106175549.9802` 万元 ≈ 1.06 万亿元。读方若需元，自行 ×1e4。
   - 未碰 `public`：`SELECT count(*) FROM public.stock_fundamentals` = **0**（与上一单相同）；`information_schema.tables` 中 `daily_basic` 只存在于 `market` schema（`public` 无同名表）；`market.market_activity` = **0 行**（原 B 集活跃度写面未被启用）。
   - **给 core 的交接**：`market.daily_basic` 已就绪；建议 `value` 维度改读它（按 `trade_date` 对齐，`pe_ttm` 优先、缺失回退 `pe`），`quality` 维度仍读 `market.stock_fundamentals`。本仓不改 core。
+
+<a id="DATA-LISTING-WINDOWS"></a>
+### DATA-LISTING-WINDOWS · 上市/退市窗口读端点（解 `CORE-LISTING-SEED-UNWIRED`） [P0] ✅（2026-11-12）
+
+- **① 目标**：给 core 提供可运行的上市/退市日历接口，让 `SetListingWindows` 有真实数据源，幸存者偏差修正在真实 run 里生效。
+- **② 上下文**：core 的 `SetListingWindows` 全仓无生产调用者，`ListingWindow` 只被单测用到，回测从未按历史在市池过滤。data 侧 `market.stocks` 已有 `list_date` / `delist_date`，退市腿真跑后库内 5,923 行（含退市票），无需新表、无需新取数。
+- **③ 要求（本仓已落地）**：
+  1. **端口**：`serving.ListingWindow{Symbol, ListDate, DelistDate *time.Time, Delisted bool, Status string}` + `LegacyReader.ListingWindows(ctx, tradeDate)`（`internal/serving/legacy.go`）。
+  2. **读面**：`store.(*Store).ListingWindows`（`internal/store/reference.go`）单条 SQL 读 `market.stocks`；`tradeDate` 非零按 `list_date <= $1 <= delist_date` 过滤（**退市日当天仍算在市**，与 core `ListingWindow.IsListed` 同口径）；`list_date IS NULL` 不做左端过滤，零值不折 1970。
+  3. **HTTP**：`GET /api/v1/stocks/listing-windows[?trade_date=YYYY-MM-DD|YYYYMMDD]`（`internal/httpapi/legacy_read.go`）⇒ `{as_of, trade_date, count, windows:{symbol:{list_date, delist_date, delisted, status}}}`；不传日期 = 全市场（含退市票），传日期 = 当日股票池；坏日期 400 `invalid_parameter`；策略档位 service/viewer/trader/admin（`policy.go`）。
+  4. **测试**：`TestLegacyListingWindows`（形状 + 两模式 + 退市日边界 + 坏日期）、`TestStore_PG_ListingWindows`（真库：NULL 上市日、闭区间、次日剔除、上市前不出现）；`auth_test.go` 路由/档位清单补齐。
+- **④ 约束与非目标**：只读；不写库、不动 `public`、不新增表；core 的装配接线（把响应喂给 `SetListingWindows`）不在本仓。
+- **⑤ 验收（代码侧 + 实测）**：
+  - `go build ./...` = 0、`go vet ./...` = 0、`gofmt -l .` 无输出；`go test ./... -count=1`（PG DSN → `tellurion_data_test`）= 12 包全 `ok`。
+  - 破坏验证：把 `delist_date >= $1` 改成 `> $1` ⇒ `TestStore_PG_ListingWindows` 红（`listing_windows_pg_test.go:64: should have 3 item(s), but has 2`，缺失的正是退市日当天的 `600001.SH`）；逐字节还原后 `reference.go` sha256 `784CB9161DF56A2A363A30F773B10ECB4D15506B886234389235730D8D17CE64` 与改前一致，复跑 `ok tellurion-data/internal/store 0.320s`。
+  - 真栈实测（重建 `data-service` 镜像，`up -d --no-deps`）：容器 `healthy`、`/readyz` 200。
+    - `GET /api/v1/stocks/listing-windows` ⇒ `count=5923`、`as_of=2026-11-12`；`600519.SH`=`{list_date:2001-08-27, delist_date:null, delisted:false, status:active}`；`301139.SZ`=`{list_date:2022-07-08, delist_date:2026-10-28, delisted:true, status:delisted}`；payload 内 `delisted=true` 共 **343** 条。
+    - `?trade_date=2026-11-10` ⇒ `count=5580`（= `status='active'` 行数）；`?trade_date=20200102` ⇒ `count=3760`，其中 **222 只已退市**（如 `000005.SZ` 退市 2024-04-26）——历史上在市的池子确实包含后来退市的票，幸存者偏差修正有真实输入。
+  - 数据核实（`market.stocks` 全量）：`total=5923` = `active 5580` + `delisted 343`；`delist_date` 非空 `343/343`，**NULL 缺口 0**；`list_date` 无 NULL；`delist_date < list_date` 0 行；`list_date` 跨度 `1990-12-01..2026-11-10`，`delist_date` 跨度 `1999-07-12..2026-10-28`。
+- **⑥ 边界**：接口形状已定并回报 core：全量模式直接映射 `map[symbol]{list, delist}` 注入 `SetListingWindows`（`ListDate` 零值 ⇒ core 的零值时间、`DelistDate` nil ⇒ 在市），指定日期模式可直接当当日池消费。core 侧接线与回测验证不在本仓。
 
 <a id="X-DEP-BUMP-CONSUMERS"></a>
 ### X-DEP-BUMP-CONSUMERS · 消费方依赖抬升（本仓部分，跨仓伞 `tellurion:X-DEP-BUMP-CONSUMERS`）

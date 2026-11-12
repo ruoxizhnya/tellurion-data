@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
+
+	"tellurion-data/internal/serving"
 )
 
 // 本文件实现 `serving.LegacyReader` 的参考数据半边（G3 只读兼容面）。
@@ -47,6 +49,46 @@ func (s *Store) Stocks(ctx context.Context, exchange string) ([]market.Stock, er
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: read stocks: %w", err)
+	}
+	return out, nil
+}
+
+// ListingWindows 实现 `serving.LegacyReader`：全市场上市/退市窗口。
+//
+// tradeDate 为零值 = 全市场；非零 = 只返回当日仍在市的票。「在市」与 core
+// `pkg/backtest.ListingWindow.IsListed` 同口径：`list_date <= tradeDate <=
+// delist_date`（退市日当天仍算在市）；`list_date IS NULL` 不做左端过滤。
+//
+// 这条读面存在的理由：core 的 `SetListingWindows` 在真实 run 里没有调用者，
+// 幸存者偏差修正从未生效（台账 `CORE-LISTING-SEED-UNWIRED`）。退市票必须
+// 从 `stocks` 全量里来，不能只读在市清单。
+func (s *Store) ListingWindows(ctx context.Context, tradeDate time.Time) ([]serving.ListingWindow, error) {
+	sql := `SELECT t.symbol, t.list_date, t.delist_date, COALESCE(t.status, 'active')
+		FROM ` + s.table("stocks") + ` t`
+	args := []any{}
+	if !tradeDate.IsZero() {
+		sql += ` WHERE (t.list_date IS NULL OR t.list_date <= $1)
+			AND (t.delist_date IS NULL OR t.delist_date >= $1)`
+		args = append(args, utcDate(tradeDate))
+	}
+	sql += ` ORDER BY t.symbol`
+
+	out := make([]serving.ListingWindow, 0, 256)
+	err := s.scanAll(ctx, sql, args, func(rows Rows) error {
+		var (
+			w        serving.ListingWindow
+			listDate *time.Time
+		)
+		if err := rows.Scan(&w.Symbol, &listDate, &w.DelistDate, &w.Status); err != nil {
+			return err
+		}
+		w.ListDate = deref(listDate)
+		w.Delisted = w.DelistDate != nil
+		out = append(out, w)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: read listing windows: %w", err)
 	}
 	return out, nil
 }

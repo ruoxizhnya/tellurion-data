@@ -266,7 +266,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | `market.news` | 同上 | 无 |
 | `market.hot_search` | 同上 | 无 |
 | `market.global_ohlcv` | 同上 | 无 |
-| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写；含 `delist_date`，见 ADR-0009 决策二） | `GET /stocks`、`GET /api/v1/stocks/{symbol}` |
+| `market.stocks` | `store.ReferenceWriter.UpsertStocks`（作业类型 `stocks`，`ON CONFLICT (symbol)` upsert；**旁路点位闸门**；解析契约由 fixture 钉住，缺 `delist_date` 即拒写；含 `delist_date`，见 ADR-0009 决策二） | `GET /stocks`、`GET /api/v1/stocks/{symbol}`、`GET /api/v1/stocks/listing-windows`（上市/退市窗口，2026-11-12） |
 | `market.trading_calendar` | `store.ReferenceWriter.UpsertTradingDays`（作业类型 `trading_calendar`，`ON CONFLICT (trade_date)` upsert；缺 `is_open` 即拒写；**单交易日历**，混交易所批次拒写，`exchange` 仅 provenance，见 ADR-0009） | `GET /api/v1/trading/calendar` |
 | `market.index_constituents` | `store.ReferenceWriter.ReplaceIndexConstituents`（作业类型 `index_constituents`；取 Tushare `index_weight` 最新一期快照，**整期替换当前行**，口径见 §9.6） | `GET /index/{code}/constituents`、`GET /datasets/resolve` 的 universe 判定（`pit_eligible=false`） |
 | `market.stock_fundamentals` | `store.ReferenceWriter.UpsertFundamentals`（作业类型 `fundamentals`；取 Tushare `fina_indicator` 按**报告期**区间拉全，`ON CONFLICT (ts_code, trade_date)` upsert，后到者覆盖非 NULL 列；`available_date` 是生成列 `COALESCE(ann_date, trade_date)`，PIT 判据靠它，见 ADR-0012） | 本仓暂无读端点；待 core 把 `GetFundamentalsPIT*` 从 `public` 切到 `market`（2026-11-12 只报不改） |

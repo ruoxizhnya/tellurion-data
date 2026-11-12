@@ -34,6 +34,7 @@ func TestRouteTableEqualsServedPolicy(t *testing.T) {
 		"GET /api/sync/scheduler/stats",
 		"GET /api/sync/schedules",
 		"GET /api/sync/workers",
+		"GET /api/v1/stocks/listing-windows",
 		"GET /api/v1/stocks/{symbol}",
 		"GET /api/v1/trading/calendar",
 		"GET /datasets/resolve",
@@ -88,7 +89,7 @@ func TestServedPolicyWriteRouteRolesAreNarrow(t *testing.T) {
 }
 
 // TestServedPolicyLegacyReadRoutes 钉住 G3 只读兼容面的档位：
-// 5 条 GET 认 service/viewer/trader/admin；`POST /api/v1/ohlcv/bulk` 是只读
+// 6 条 GET 认 service/viewer/trader/admin；`POST /api/v1/ohlcv/bulk` 是只读
 // POST，沿用 REV-17 的 any-authenticated（匿名仍拒）。
 func TestServedPolicyLegacyReadRoutes(t *testing.T) {
 	entries := ServedPolicyEntries()
@@ -98,6 +99,7 @@ func TestServedPolicyLegacyReadRoutes(t *testing.T) {
 		"GET /index/{code}/constituents",
 		"GET /api/v1/trading/calendar",
 		"GET /api/v1/stocks/{symbol}",
+		"GET /api/v1/stocks/listing-windows",
 	} {
 		rule, ok := entries[key]
 		require.True(t, ok, "G3 读端点必须有策略条目: %s", key)

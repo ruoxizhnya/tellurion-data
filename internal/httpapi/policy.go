@@ -47,7 +47,10 @@ var servedPolicy = kithttp.MustNewPolicy(map[string]kithttp.Rule{
 	"GET /index/{code}/constituents": {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /api/v1/trading/calendar":   {Roles: []string{"service", "viewer", "trader", "admin"}},
 	"GET /api/v1/stocks/{symbol}":    {Roles: []string{"service", "viewer", "trader", "admin"}},
-	"POST /api/v1/ohlcv/bulk":        {AnyAuthenticated: true},
+	// 上市/退市窗口（2026-11-12）：core 回测装配层读它注入 SetListingWindows，
+	// 与其它数据面读端点同档位（只读，不含持仓）。
+	"GET /api/v1/stocks/listing-windows": {Roles: []string{"service", "viewer", "trader", "admin"}},
+	"POST /api/v1/ohlcv/bulk":            {AnyAuthenticated: true},
 
 	// ── 作业层（2026-11-10，`sync.go`）──
 	// 档位**沿用 REV-17 的结论**（迁移不重拍角色）：排程管理 = admin；

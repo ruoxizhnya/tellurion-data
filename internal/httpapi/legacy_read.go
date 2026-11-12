@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ruoxizhnya/tellurion-contracts/domain/market"
@@ -225,6 +226,100 @@ func (s *Server) handleLegacyBulk(w http.ResponseWriter, r *http.Request) {
 		results = append(results, legacyBulkResult{Symbol: symbol, OHLCV: bars})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// listingWindowBody 是一条上市窗口的 JSON 形状。日期一律 `YYYY-MM-DD`；
+// `list_date: null` = 上市日未知（调用方不做左端过滤），
+// `delist_date: null` = 尚未退市。
+type listingWindowBody struct {
+	ListDate   *string `json:"list_date"`
+	DelistDate *string `json:"delist_date"`
+	Delisted   bool    `json:"delisted"`
+	Status     string  `json:"status"`
+}
+
+// handleLegacyListingWindows 是
+// `GET /api/v1/stocks/listing-windows[?trade_date=YYYY-MM-DD]`。
+//
+// 用途（台账 `CORE-LISTING-SEED-UNWIRED`）：core 的 `SetListingWindows` 在真实
+// run 里没有调用者，幸存者偏差修正从未生效。本端点给出**全量**上市窗口
+// （含已退市票），core 装配层取一次即可注入。
+//
+// 两种模式：
+//   - 不带 `trade_date`：返回全市场（含退市票），`windows` 就是
+//     `map[symbol]{list_date, delist_date, delisted, status}`；
+//   - 带 `trade_date`：只返回当日仍在市的票（`list_date <= trade_date <=
+//     delist_date`，退市日当天仍算在市），可直接当「当日股票池」消费。
+//
+// `as_of` 是本响应生成日（UTC），不是数据截止日——`stocks` 是当前快照，
+// 没有历史版本；已退市票的窗口靠 `delist_date` 表达，而不是快照回放。
+func (s *Server) handleLegacyListingWindows(w http.ResponseWriter, r *http.Request) {
+	if !s.legacyReady(w, s.legacy) {
+		return
+	}
+	tradeDate, err := parseOptionalListingDate(r.URL.Query().Get("trade_date"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	windows, err := s.legacy.ListingWindows(r.Context(), tradeDate)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	body := make(map[string]listingWindowBody, len(windows))
+	for _, win := range windows {
+		body[win.Symbol] = listingWindowBody{
+			ListDate:   formatDatePtr(win.ListDate),
+			DelistDate: formatTimePtr(win.DelistDate),
+			Delisted:   win.Delisted,
+			Status:     win.Status,
+		}
+	}
+	resp := map[string]any{
+		"as_of":   legacyReadAsOf().Format("2006-01-02"),
+		"count":   len(body),
+		"windows": body,
+	}
+	if tradeDate.IsZero() {
+		resp["trade_date"] = nil
+	} else {
+		resp["trade_date"] = tradeDate.Format("2006-01-02")
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseOptionalListingDate 接受 `YYYY-MM-DD` 或 `YYYYMMDD`；空 = 零值（全市场）。
+// 空串**不是**参数缺失错误：两种模式由「给不给日期」区分。
+func parseOptionalListingDate(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{"2006-01-02", "20060102"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("%w: trade_date %q is not YYYY-MM-DD or YYYYMMDD",
+		serving.ErrInvalidParameter, raw)
+}
+
+// formatDatePtr 把日期编码成 `YYYY-MM-DD`；零值 ⇒ null（未知，不是 1970）。
+func formatDatePtr(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+	s := t.Format("2006-01-02")
+	return &s
+}
+
+// formatTimePtr 同上，入参可空。
+func formatTimePtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	return formatDatePtr(*t)
 }
 
 // legacyReady 是这组端点的统一前置：依赖可用门 + 端口接线检查。
