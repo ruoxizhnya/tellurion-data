@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -246,17 +245,3 @@ func (a *YahooFinanceAdapter) RateLimit() RateLimitConfig {
 func (a *YahooFinanceAdapter) String() string {
 	return "YahooFinanceAdapter{name=" + a.Name() + "}"
 }
-
-// yahooToFloat64 is a small helper that converts a possibly-nil JSON
-// number to float64 without panicking. Currently unused; kept for
-// future schema variations.
-func yahooToFloat64(_ interface{}) float64 {
-	return 0
-}
-
-// silence "imported and not used" for io if all references are moved
-// into helper functions in future refactors.
-var _ = io.Discard
-
-// silence strconv when future debugging needs it.
-var _ = strconv.Itoa

@@ -18,13 +18,12 @@ import (
 // ── 假实现 ──
 
 type fakeExecutor struct {
-	mu      sync.Mutex
-	calls   int
-	req     ingest.FetchRequest
-	norm    ingest.Normalizer
-	result  ingest.ProcessResult
-	err     error
-	seenJob string
+	mu     sync.Mutex
+	calls  int
+	req    ingest.FetchRequest
+	norm   ingest.Normalizer
+	result ingest.ProcessResult
+	err    error
 }
 
 func (f *fakeExecutor) Process(ctx context.Context, req ingest.FetchRequest, normalizer ingest.Normalizer) (ingest.ProcessResult, error) {

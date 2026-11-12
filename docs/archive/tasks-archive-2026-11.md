@@ -24,6 +24,9 @@
 | DATA-ADJUST-BASELINE | 复权基准全局化 + 覆盖/重算路径（同一事实不再算出两个值，ADR-0011） | 2026-11-12 | 本笔（`git log --grep DATA-ADJUST-BASELINE`） | [原文](#DATA-ADJUST-BASELINE) |
 | DATA-FUNDAMENTALS-WRITER | 财报写面归本仓（`market.stock_fundamentals` + 参考腿；补写者 + 表归属落定，ADR-0012） | 2026-11-12 | 本笔（`git log --grep DATA-FUNDAMENTALS-WRITER`） | [原文](#DATA-FUNDAMENTALS-WRITER) |
 | DATA-DAILY-BASIC-VALUATION | 行情面估值表 `market.daily_basic`（`value` 维度缺口；`job_type=daily_basic` 参考腿，ADR-0012 追加节） | 2026-11-12 | 本笔（`git log --grep DATA-DAILY-BASIC-VALUATION`） | [原文](#DATA-DAILY-BASIC-VALUATION) |
+| X-DEP-BUMP-CONSUMERS | 消费方依赖抬升（kit v0.5.0 / pgx v5.11.0 / go 1.26.11）+ govulncheck 门 | 2026-11-12 | 见本条 | [施工记录](#X-DEP-BUMP-CONSUMERS) |
+| X-AGENTS-DEPENDENCY-TABLE | `AGENTS.md` §4 依赖表按实际 `go.mod` 订正 | 2026-11-12 | 见本条 | [施工记录](#X-AGENTS-DEPENDENCY-TABLE) |
+| X-CI-RACE-STATICCHECK | CI 补 `-race` 与 `staticcheck`（含 2 条存量告警清理） | 2026-11-12 | 见本条 | [施工记录](#X-CI-RACE-STATICCHECK) |
 
 ---
 
@@ -873,3 +876,34 @@
   - **`total_mv` / `circ_mv` 单位写死：万元（两端同单位）**。Tushare `daily_basic` 源端单位为万元，本仓原值入库、未做换算；例如 `600036.SH` 2025-12-31 `total_mv=106175549.9802` 万元 ≈ 1.06 万亿元。读方若需元，自行 ×1e4。
   - 未碰 `public`：`SELECT count(*) FROM public.stock_fundamentals` = **0**（与上一单相同）；`information_schema.tables` 中 `daily_basic` 只存在于 `market` schema（`public` 无同名表）；`market.market_activity` = **0 行**（原 B 集活跃度写面未被启用）。
   - **给 core 的交接**：`market.daily_basic` 已就绪；建议 `value` 维度改读它（按 `trade_date` 对齐，`pe_ttm` 优先、缺失回退 `pe`），`quality` 维度仍读 `market.stock_fundamentals`。本仓不改 core。
+
+<a id="X-DEP-BUMP-CONSUMERS"></a>
+### X-DEP-BUMP-CONSUMERS · 消费方依赖抬升（本仓部分，跨仓伞 `tellurion:X-DEP-BUMP-CONSUMERS`）
+
+> **施工记录（2026-11-12）**：
+> - **变更**：kit `v0.2.0 → v0.5.0`；`go` directive → `1.26.11`（kit v0.5.0 要求）；MVS 连带 pgx `v5.9.x → v5.11.0`、`x/net v0.60.0`、`x/text v0.42.0`、`x/crypto v0.57.0`、`x/sync v0.23.0`、`x/sys v0.48.0`；contracts 保持 `v0.10.0` 不动。
+> - **CI**：`go-version` 改 `1.26.11`；`Vet` 之后新增 `Govulncheck` 步（`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`）。
+> - **验收（真实输出）**：`govulncheck ./...` → `No vulnerabilities found`，EXIT=0；`gofmt -l .` 空；`go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 EXIT=0（12 包 `ok`）。
+> - **破坏验证（真做真还原）**：把 kit / pgx 降回 bump 前版本并 `go mod tidy` ⇒ `GO-2026-5004`，EXIT=1；从**目标态备份**（`$env:TEMP\data_target_20261112`，非 bump 前备份）逐字节还原，`go.mod` SHA256 `3F69BAAA44C6C8A588199E2EE868A0F5425863F84E04DF194E901856FE38A6D3`、`go.sum` `4C254838BA0FB51C5F1E3BD549A63929920D50C81D30042769053C17EA4CFA98`，与破坏前一致，复跑 EXIT=0。
+> - **边界**：只动本仓 `go.mod`/`go.sum`/CI/文档；`AGENTS.md` §4 的版本订正单列在 `X-AGENTS-DEPENDENCY-TABLE` 提交。
+
+<a id="X-AGENTS-DEPENDENCY-TABLE"></a>
+### X-AGENTS-DEPENDENCY-TABLE · `AGENTS.md` §4 依赖表按实际 `go.mod` 订正（跨仓伞 `tellurion:X-AGENTS-DEPENDENCY-TABLE`）
+
+> **施工记录（2026-11-12）**：
+> - **订正前**：表里 contracts 写 `v0.9.0`（实际 `go.mod` 早已是 `v0.10.0`）、kit 写 `v0.2.0`、pgx 写旧版本。
+> - **订正后**：contracts → `v0.10.0`（注明按实际 `go.mod` 订正）、kit → `v0.5.0`（随 `X-DEP-BUMP-CONSUMERS`）、pgx → `v5.11.0`（MVS 抬升，消除 GO-2026-5004），并记 `go` directive `1.26.11`。
+> - **验收**：§4 每一行与 `go.mod` 对读一致；`go build/vet/test` 全绿。
+> - **边界**：只改 `AGENTS.md` §4 表格，不动 §1–§3 与代码。
+
+<a id="X-CI-RACE-STATICCHECK"></a>
+### X-CI-RACE-STATICCHECK · CI 补 `-race` 与 `staticcheck`（本仓部分，跨仓伞 `tellurion:X-CI-RACE-STATICCHECK`）
+
+> **施工记录（2026-11-12）**：
+> - **改了什么**：`.github/workflows/ci.yml` 在 `Test` 之后新增 `Test（-race）` 与 `Staticcheck`（`honnef.co/go/tools/cmd/staticcheck@v0.8.2`）两步；`govulncheck` 门已在 `X-DEP-BUMP-CONSUMERS` 腿落地。
+> - **补门前逐条分诊（存量 2 条，未加 `staticcheck.conf` 基线排除）**：
+>   - `internal/ingest/yahoo_finance_adapter.go` U1000：`yahooToFloat64` 全仓零引用（未导出且无调用方，删后 `build` 仍绿即为证）；同文件两行 `var _ = io.Discard` / `var _ = strconv.Itoa` 是「留着 import 不报未使用」的静默写法，一并删除，`strconv` import 随之移除（`io` 在错误分支仍使用，保留）。**死代码，零行为变更**。
+>   - `internal/sync/sync_test.go` U1000：`fakeExecutor.seenJob` 测试替身字段从未被写入或读取，删除；`gofmt -w` 后对齐恢复。
+> - **验收（真实输出）**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` EXIT=0；`staticcheck ./...` EXIT=0；`go test ./... -count=1` 12 包全 `ok`。
+> - **`-race` 本地覆盖（Docker 容器，非仅 CI）**：`docker run --rm -v "C:\Users\ruoxi\Workspace\tellurion-data:/tellurion-data" -v data_gomod_cache:/go -w /tellurion-data golang:1.26 sh -c "go test -race ./... -count=1"` → 12 包全 `ok`、EXIT=0。**注意挂载点必须是 `…/tellurion-data`**：`internal/repoguard` 的 `repoRoot` 断言仓库目录名以 `tellurion-data` 结尾，挂到 `/w` 会让该用例假红（首次执行即踩到，改正挂载点后通过，非代码问题）。
+> - **边界**：只动本仓 CI/两条死代码/文档；strategy / contracts 的同类告警与门由各自伞腿承担。
