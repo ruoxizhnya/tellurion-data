@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-11-11
-verified-by: 2026-11-11 全面审查 W7 台账立单（A5 授权）——新立 2 条六字段单（`DATA-GRACEFUL-SHUTDOWN` 活跃 / `DATA-FUNDAMENTALS-READ-PUBLIC` 立单复核时实测前提已被主任 2026-11-12 归属裁决〔data `a454726` 删 `/fundamental` 读面 + core `c85abff` 建 `GET /api/fundamental/:symbol`〕取代，已标 ✅ 作废、不施工），证据坐标引 ODR-069/072（`tellurion-docs:docs/archive/odr/`）；本轮只立单不修复，不改 2026-11-12 已收口条目。此前 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
+last-verified: 2026-11-12
+verified-by: 2026-11-12 收口 `DATA-GRACEFUL-SHUTDOWN`（优雅停机 + 作业租约/心跳/stale 回收，见归档）并把 `DATA-INGEST-RAW` / `DATA-INDEX-CONSTITUENTS` / `DATA-FUNDAMENTALS-READ-PUBLIC` 三条已完成项移入归档，本表只留未做/挂起 —— `DATA-REFDATA-JOB-WRITE`（等真实 `TUSHARE_TOKEN` 部署）、`DATA-LISTING-WINDOWS`、`DATA-TRANSPORT-MULTI`、`DATA-MOOTDX`、`DATA-DIVIDENDS`、`DATA-SPLITS`、`DATA-MARKET-ACTIVITY` 均为 ⏸。此前 2026-11-11 W7 台账立单（A5 授权）——新立 2 条六字段单，证据坐标引 ODR-069/072（`tellurion-docs:docs/archive/odr/`）；`DATA-FUNDAMENTALS-READ-PUBLIC` 立单复核时实测前提已被主任 2026-11-12 归属裁决〔data `a454726` 删 `/fundamental` 读面 + core `c85abff` 建 `GET /api/fundamental/:symbol`〕取代，已标 ✅ 作废、不施工。此前 2026-11-11 文档对齐审计与迁移 —— ① 镜像名统一 `tellurion/data:${DATA_IMAGE_TAG:-latest}`；② contracts pin `v0.6.0 → v0.9.0`，6 个 `domain` 根别名本仓**零引用**（`internal/ingest/tushare_adapter.go` 的根别名 `Fundamental` 已改 `market.Fundamental`），`CT-06-ALIAS-EXIT` 本仓侧完成（`build/vet/test` 全绿）；③ ARCH 的 X0 复核为 ✅（core 已落 `dataset_snapshot_hash`）；④ 8 条剩余项均为 ⏸ 且重开条件仍准确；⑤ 2026-11-11 新登记 `DATA-LISTING-WINDOWS` ⏸（agent 已删除无服务的 listing-windows 客户端腿，见 `tellurion-agent:0eaed19`）。此前：2026-11-10 core 部署面同日修复（compose/e2e/k8s/checker 让 data-service 拿到 `DATABASE_URL` + `DATA_MARKET_SCHEMA`；四条破坏验证真做真还原；Docker daemon 不可达未跑容器腿）等
 ---
 
 # TASKS — tellurion-data 未完成项
@@ -12,7 +12,7 @@ verified-by: 2026-11-11 全面审查 W7 台账立单（A5 授权）——新立 
 
 ## 一、未做 / 挂起 / 外部依赖
 
-> 本节 = 本轮（2026-11-11）台账重整时登记 / 承接的挂起项。此前已收口单的正文与施工记录全部在归档文件里。
+> 本节 = 本轮（2026-11-11）台账重整时登记 / 承接的挂起项。此前已收口单的正文与施工记录全部在归档文件里；2026-11-12 收口的单（`DATA-GRACEFUL-SHUTDOWN`、`DATA-INGEST-RAW`、`DATA-INDEX-CONSTITUENTS`、`DATA-FUNDAMENTALS-READ-PUBLIC`）已移入归档的「2026-11-12 收口」节。
 
 ### DATA-REFDATA-JOB-WRITE · 参考数据作业级写入未验 + 既有库 DDL 不自动补齐 [P1] ⏸
 
@@ -33,16 +33,6 @@ verified-by: 2026-11-11 全面审查 W7 台账立单（A5 授权）——新立 
 - **⑤ 验收**：agent 的偏差维能据真实窗口报 `PoolSourcePointInTime`，且 `DelistedInPool` 有回读证据。
 - **⑥ 边界**：数据形状与读端口归本仓；消费口径归 agent。
 - **重开条件**：下游出现 point-in-time 上市/退市窗口的真实需求（回测票池按日在市、退市偏差维），届时由本仓提供；`market.stocks.delist_date` 已存在。
-
-### DATA-INGEST-RAW · `ingest.raw` 归档面（证据链） [P2] ✅（2026-11-12，ADR-0010）
-
-- **① 目标**：为证据链（UI A-06）提供**可查阅**的原始报文归档：`POST /api/ingest/raw` 单写者写入（原始报文 → 脱敏 → 内容哈希 → 落库），`GET /api/evidence/{content_hash}` 取单条、`GET /api/evidence` 按时间/来源列最近 N 条；`core` 只做读反代。
-- **② 上下文**：core `cmd/analysis/main.go` 的注释早已写明「证据坐标改由数据服务仓的归档面提供」；设计原文（ADR-022 §5）要求 `GET /api/evidence/{content_hash}` 返回 `ingest.raw` 中的唯一原始记录（不可变），UI A-06 对 404 的语义是「未摄取，不编造引用」——**两处都只要求可查阅，没有回放语义**。此前本表零写者、零读面，`policy.go` 里 `POST /api/ingest/raw` 还是「权限表有、路由表无」的僵尸条目。
-- **③ 要求（已落地）**：`internal/evidence`（脱敏 → 规范化 JSON → sha256；保留期解析拒 0/负数）+ `internal/store.EvidenceStore`（Put/Get/List/PurgeExpired，不存在映射 404）+ 3 条 HTTP 端点 + `idx_ingest_raw_fetched_at`；保留期默认 365 天、`EVIDENCE_RETENTION_DAYS` 覆盖、启动期非法值拒起；脱敏键集合与清理口径见 `docs/db-schema.md` §9.5。
-- **④ 约束与非目标**：**不做回放**；core 不建第二份证据存储；不恢复 core 的 `POST /api/ingest/raw`（写面只在 data）；不靠删断言或造数据换绿。
-- **⑤ 验收**：HTTP 用例覆盖 201/400/404/503、脱敏先于哈希、`limit` 上限 100；PG 腿覆盖写读一致、重复写幂等、不存在 404、列表排序/过滤、过期清理；破坏验证三条——清空脱敏键集合应红、保留期 0/负数应红、读不存在 id 应 404 而非 500。
-- **⑥ 边界**：本仓归档面 + core 读反代 + UI e2e 真写入；归属裁决见 `docs/adr/0010-证据归档面归本仓.md`。
-- **重开条件**：**已出现证据链读取消费者（已满足：UI A-06 / evidence-probe）**。若将来出现回放/重放消费者，另立 ADR，不在本表上顺手扩。
 
 ### DATA-TRANSPORT-MULTI · 传输多门（除 Tushare 外的门均未真接线）[P2] ⏸
 
@@ -75,47 +65,10 @@ verified-by: 2026-11-11 全面审查 W7 台账立单（A5 授权）——新立 
 - **② 上下文**：同 `DATA-DIVIDENDS`，零写者。
 - **重开条件**：复权因子改为自算、或以拆股事件驱动持仓调整。
 
-### DATA-INDEX-CONSTITUENTS · `index_constituents` 写者与当前快照读面 [P2] ✅（2026-11-12 重开并收口）
-
-- **① 目标**：给 `market.index_constituents` 一个真写者与一个自带口径的读面，让下游「按指数取当前成分」不再 409/空表；同时**如实标注**它只是当前快照，不能用于 PIT 回测。
-- **② 上下文（重开理由）**：原单按「零写者 P3 ⏸」挂起，重开条件是「出现按指数成分历史截断票池的回测需求」。该条件**未被满足**（core 的 `index_code` 展开与 P2 区间成分并集仍随 `SVC-CORE-DATA-RETIRE` 退役，见 `tellurion:pkg/backtest/engine.go:728-735`、`:761-764`），但**消费者已出现另一类**：
-  - UI **数据同步页** `tellurion-ui:web/src/pages/DataSync.vue`（`stores/sync` + `api/sync.ts`）走 `POST /api/sync/jobs`，其 `job_type` 联合类型已含 `index_constituents`（`tellurion-ui:docs/design/pages/data-sync.md:394`）——今天建这个作业只会得到一个「没人接」的作业；
-  - core 的读反代 `GET /index/{code}/constituents`（`tellurion:pkg/marketdata/http_provider.go:139-160`）被分析产物的基准成分使用（`tellurion:internal/analysisartifact/builder.go:156`）；
-  - 对外读面 `GET /datasets/resolve?universe=csi300&as_of=...` 会把 `csi300` 展开成成分（`tellurion-data:internal/store/universe.go` 的 `indexAliases`）。
-  三者都要这张表有数据，否则分别表现为：作业永远 pending/失败、基准成分空、`409 empty_universe`。
-- **③ 要求（已落地）**：① 取数 `tushare.Client.FetchIndexConstituents`（`index_weight`，月频快照；窗口内只取 `trade_date` 最新一期）；② 作业类型 `index_constituents` 进参考数据腿（`internal/sync/reference.go`），参数 `index_code` 必填、`start_date/end_date` 缺省为「以 `Now` 为终点回看 120 天」；③ 写者 `store.ReferenceWriter.ReplaceIndexConstituents`，同事务「删当前行（`out_date IS NULL`）+ 插新快照」，不碰历史区间行；④ 读面 `GET /index/{code}/constituents` 固定回 `pit_eligible: false` + `usage`；`GET /datasets/resolve` 顶层回 `pit_eligible`（指数/别名 = `false`，显式 `symbols` = `true`）；⑤ 字段与口径写进 `docs/db-schema.md` §9.6。
-- **④ 约束与非目标**：**不做**多期快照差分、不推导真实 `in_date/out_date` 区间、不提供 PIT 成分史（那是新单）；不改 core 的「`index_code` 展开退役」裁决；空响应必须失败（数据质量闸），不得静默写 0 行。
-- **⑤ 验收**：① `go test ./...` 全绿；② fixture 腿（不依赖配额）：`internal/transport/tushare/index_constituents_test.go` 覆盖「只取最新一期」、空集 fail-closed、缺列 fail-closed；③ 作业腿：`internal/sync/reference_test.go` 覆盖 `index_code` 必填与默认窗口/计数；④ 真库腿：`internal/store/reference_write_pg_test.go` 验证整期替换只删当前行、历史行不动；⑤ 线上真链路（opt-in）：`TUSHARE_ONLINE=1 go test ./internal/transport/tushare -run TestLiveIndexConstituents`，2026-11-12 实测通过（沪深300 成分 >= 250）；⑥ 破坏验证：把 `UniverseResolution.PITEligible` 恒置 `true` ⇒ `TestStore_ResolveUniverse*` 与 HTTP 的 `pit_eligible` 断言应红（已实做并还原）。
-- **⑥ 边界**：本仓取数/写面/读面口径与 `db-schema.md` §9.6；核心结论「仅供当前选股，不用于 PIT 回测」由调用方遵守（`pit_eligible` 是可判定字段，不是口头承诺）；契约形状引用 `github.com/ruoxizhnya/tellurion-contracts/domain/market.IndexConstituent`（`IndexCode` / `Symbol` / `InDate` / `OutDate` / `Weight`）。
-- **重开条件（下一单）**：真要做 PIT 票池时另立单——多期 `index_weight` 快照差分出区间、回填 `out_date`，并把 `pit_eligible` 改成按「该 as_of 是否落在已覆盖区间内」判定。
-
 ### DATA-MARKET-ACTIVITY · `market_activity` 零写者 [P3] ⏸
 
 - **② 上下文**：表在 schema 内但无 writer；原 `pkg/marketdata` 的有库用例依赖它，已由 `tellurion` 侧形状镜像夹具替代。
 - **重开条件**：出现市场宽度/情绪类指标需求。
-
-### DATA-GRACEFUL-SHUTDOWN · 裸 `ListenAndServe` 无信号处理 + ClaimJob 无 lease/回收 [P1] ⬜
-
-- **① 目标**：给 data-service 优雅停机（SIGTERM 排空）+ 作业领取的 lease/心跳/stale 回收，让停服不丢在途作业、崩溃不留卡死 job。
-- **② 上下文**：审查发现 W5-F2（ODR-072）。`cmd/dataservice/main.go:86` 裸 `ListenAndServe` 无 `signal.Notify`（core/agent/broker/orch 已有信号处理）；`internal/sync/pg_store.go:107-127` 的 `ClaimJob` 只领 `pending`，无 lease/心跳/stale 回收 ⇒  worker 崩溃后 job 永卡 `running`。
-- **③ 要求**：① `signal.Notify(SIGTERM/SIGINT)` + `server.Shutdown` 排空在途请求；② ClaimJob 加 lease（领取超时）+ 心跳续租 + stale 回收（对齐 orchestration 的 `ReapExpired` 形状）；③ 停机时正在跑的同步作业有明确终态（不静默丢）；④ 与 `X-PROBE-NAMING` 撞 main.go 按单号串行。
-- **④ 约束与非目标**：不改作业报文形状；不引入 MQ；回收口径写死（lease 时长/心跳间隔）。
-- **⑤ 验收**：SIGTERM 真栈排空（A4 演练，E1）；崩溃 worker 的 job 被回收重领；破坏验证 = 删 lease ⇒ 卡死 job 用例红。
-- **⑥ 边界**：本仓停机与作业回收；其余三仓同族缺口归各自 `*-GRACEFUL-SHUTDOWN`。
-- **owner**：待定
-
-### DATA-FUNDAMENTALS-READ-PUBLIC · `/fundamental` 读 `market` schema 但表在 `public`，恒 500（D6=b）[P2] ✅（2026-11-12 作废·前提被主任归属裁决取代，非本单施工）
-
-> **作废注记（2026-11-11 W7 立单复核时实测）**：本单立单前提（data `/fundamental` 恒 500，按 D6=b 改读 `public` 止血）**已被主任 2026-11-12 的归属裁决取代**——data 侧 `GET /fundamental/{symbol}` 读面**整条删除**（commit `a454726`），基本面读面归 core（commit `c85abff`，`tellurion:cmd/analysis/handlers_fundamental.go:42` 挂 `GET /api/fundamental/:symbol`，空态 404 `fundamental_not_found`）。代码取证：本仓 `internal/httpapi/server.go:141-143`、`legacy_read.go:23-27`、`policy.go:41` 均明写「`GET /fundamental/{symbol}` 已于 2026-11-12 删除（归属裁决）」。**没有 data `/fundamental` 端点可止血**，D6=b 方案作废；W2-F11 由主任以「归属裁决归 core + 删 data 端点」收口（比 D6=b 更干净，不留跨 schema 例外）。下方原六字段保留作追溯，**不再施工**。矩阵残留行（core `data-service-contract-and-ownership.md:43` 因子派生表 owner）归 `tellurion-docs:DOC-P3-MATRIX-TABLE-GRAIN` 跨仓指针。
-
-- **① 目标**：把 `/fundamental` 兼容读面指向表实际所在的 `public` schema（低成本止血），消除「`DATA_MARKET_SCHEMA=market` 且表未建 ⇒ 500」，并登记跨 schema 例外与退出条件。
-- **② 上下文**：审查发现 W2-F11（ODR-069）+ 裁决 D6=b。`internal/store/reference.go:14-16,95` 按 `DATA_MARKET_SCHEMA`（=market）读 `stock_fundamentals`，但该表 DDL 仍是 core 迁移、实际在 `public` ⇒ `/fundamental` 500。本仓 AGENTS §1 G3 已登记此限制。D6=b：读改 `public` 止血 + 登记 I-1 例外 + 留退出任务（表正式迁 market 时改回）。
-- **③ 要求**：① `/fundamental` 读 `public.stock_fundamentals`（写死或独立 env，不随 `DATA_MARKET_SCHEMA` 漂）；② 登记跨 schema 只读例外（I-1）+ 退出条件；③ 真栈 `/fundamental` 200（表有数据时）；④ 不改 core 的 DDL 归属。
-- **④ 约束与非目标**：不把 `stock_fundamentals` DDL 搬进本仓（owner 仍是 core）；不改其余兼容读面；不静默吞 500。
-- **⑤ 验收**：真栈 `/fundamental` 200（E1）；破坏验证 = 改回 market schema ⇒ 500 用例红。
-- **⑥ 边界**：本仓兼容读面；表 DDL 归属与正式迁移归 core + `OPS-X1D-PROD-MIGRATION`。
-- **owner**：待定
-- **重开条件**：`stock_fundamentals` 正式迁 `market` schema 时，本止血单改回随 `DATA_MARKET_SCHEMA`。
 
 ## 二、跨仓指针（不在本仓，勿双写）
 

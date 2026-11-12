@@ -5,8 +5,8 @@
 > 可观测面只有一行访问日志（`docs/api-schema.md` §1.2），**没有 Prometheus / 面板**。
 >
 > 本文中**能跑的命令都实际跑过并贴了真实输出**；必须真 PG / Docker 才能验证的腿，2026-11-07 晚已用便携
-> PostgreSQL 16.2 补跑（§3/§4/§5/§7.3），剩余仅 Docker 容器腿与优雅停机，在对应小节与 §8 明写「未执行」。
-> 没有把未跑的输出写成已跑。
+> PostgreSQL 16.2 补跑（§3/§4/§5/§7.3）；优雅停机 2026-11-12 已用探针容器 `docker stop`（`SIGTERM`）
+> 补跑（§7.4），剩余 Docker 容器腿在对应小节与 §8 明写「未执行」。没有把未跑的输出写成已跑。
 
 > 本文命令里的端口以你实际 `-addr` 为准；G4 演练用了 `18081`（拔 PG）/ `18082`（基线）/
 > `18083`（§6 的 curl 复核），避免和日常 `8081` 冲突。
@@ -78,7 +78,13 @@ Stop-Process -Id (Get-Content "$env:TEMP\dataservice.pid") -Force
 ```
 
 > `Stop-Process` 是强制终止，**Windows 不返回进程退出码**（演练里该字段为空，如实记录）。
-> 服务尚未实现优雅停机；要「零丢请求」重启只能先摘流量（换端口 / 停上游作业）再杀。
+> 本进程已实现优雅停机（2026-11-12，`DATA-GRACEFUL-SHUTDOWN`）：收到 `SIGTERM`/`SIGINT`
+> 后先 `Shutdown` 排空在途 HTTP 请求（30s 预算），再取消作业 ctx、把在途同步作业
+> `ReleaseJob` 交还（预算未用尽回 `pending`，用尽判 `failed`），最多等 15s 关池。
+> Windows 原生进程没有 `SIGTERM` 语义 —— 等价路径用容器 `docker stop`（默认发
+> `SIGTERM`）或 Linux 上的 `kill -TERM`；本机无容器时用日志里的
+> `shutdown signal received; draining in-flight HTTP requests` 与 `released ... on shutdown`
+> 两行确认走的是优雅路径。
 
 ### 1.4 容器（未执行）
 
@@ -410,6 +416,46 @@ HTTP 层自愈另由 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHe
 --- PASS: TestDataEndpointsFailClosedWhileDependencyUnavailableAndHeal (0.04s)
 ```
 
+### 7.4 SIGTERM 优雅停机（2026-11-12，`DATA-GRACEFUL-SHUTDOWN`）
+
+**形态**：不动正在跑的 `tellurion-data-service-1`，用**独立探针容器**跑本次构建的
+Linux 二进制（`CGO_ENABLED=0 GOOS=linux` 构建后只读挂载），接
+`tellurion_data_test` 库，`docker stop` 默认发 `SIGTERM`：
+
+```powershell
+docker run -d --name data-shutdown-probe --network tellurion_default `
+  -e DATABASE_URL='postgres://postgres:postgres@host.docker.internal:5432/tellurion_data_test?sslmode=disable' `
+  -e AUTH_INSECURE_EXPOSURE=loopback-published -e JWT_SECRET= `
+  -p 127.0.0.1:18081:8081 `
+  -v "$env:TEMP\dataservice-linux:/probe/dataservice:ro" `
+  --entrypoint /probe/dataservice tellurion/data:latest -addr 0.0.0.0:8081
+# 健康检查后：
+docker stop -t 20 data-shutdown-probe
+```
+
+真输出（健康检查 200、worker/scheduler 已起）：
+
+```
+09:11:32 data-service: WARNING 写面无鉴权：… bind address="0.0.0.0:8081"; 声明 AUTH_INSECURE_EXPOSURE=loopback-published …
+09:11:32 data-service listening on 0.0.0.0:8081 (data ports wired to PG; write面 wired to PG, auth=false)
+09:11:32 syncjob: scheduler started (interval=30s)
+09:11:32 syncjob: worker 1678460421d8-1 started (poll=2s)
+09:11:36 httpapi: route="GET /health" status=200 dur_ms=0.36
+09:11:53 data-service: shutdown signal received; draining in-flight HTTP requests
+09:11:53 data-service: stopped
+09:11:53 syncjob: scheduler stopped
+ExitCode=0 OOMKilled=false Error=
+```
+
+**结论**：`SIGTERM` 走优雅路径（排空 → 停作业循环 → 退出码 0），不是硬切。
+「在途 HTTP 请求被排空而不是断开」由 `TestRunHTTPDrainsInFlightRequests` 钉住；
+「在途作业停机交还」由 `TestWorker_ReleasesJobOnShutdown` + PG 腿
+`TestPGStoreReleaseJobRequeuesThenFails` 钉住。
+
+**限制（如实记录）**：Windows 原生进程没有 `SIGTERM`，本机只能用 `Stop-Process` 强杀；
+容器/`kill -TERM` 才是验收路径。本次探针容器未制造真实在途同步作业
+（需要外部 Tushare 配额），作业交还分支以单测 + PG 腿验收。
+
 ## 8. 真库 / 容器腿清单
 
 | 腿 | 状态 | 原因 |
@@ -419,4 +465,4 @@ HTTP 层自愈另由 `TestDataEndpointsFailClosedWhileDependencyUnavailableAndHe
 | 409 `content_conflict` 真主键复现 | **已执行（2026-11-07）** | 真服务 `POST /ingest/points`：同内容 200、改内容 409 `content_conflict` |
 | PG 恢复后同一进程自愈（真库） | **已执行（2026-11-07）** | §7.3：200 → 503 → 200，进程未重启 |
 | `docker compose` 起 PG + 服务 | **未执行** | Docker 引擎不可用（不属 G4 ⑤ 验收） |
-| 优雅停机 / 进程真实退出码 | **未执行** | 当前只有 `Stop-Process` 强杀；优雅停机不在 G4 非目标内 |
+| 优雅停机 / 进程真实退出码 | **已执行（2026-11-12，探针容器）** | `docker stop`（`SIGTERM`）→ 排空日志 + `stopped`，`ExitCode=0`，见 §7.4；Windows 原生进程无 `SIGTERM`，仍只能强杀 |

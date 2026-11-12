@@ -37,9 +37,16 @@ func (f *fakeExecutor) Process(ctx context.Context, req ingest.FetchRequest, nor
 }
 
 type finishedJob struct {
-	status  string
-	result  map[string]any
-	errText string
+	workerID string
+	status   string
+	result   map[string]any
+	errText  string
+}
+
+type releasedJob struct {
+	id       string
+	workerID string
+	reason   string
 }
 
 type fakeJobStore struct {
@@ -51,6 +58,15 @@ type fakeJobStore struct {
 	retries  []string
 	getErr   error
 	listCall int
+
+	// 租约面（DATA-GRACEFUL-SHUTDOWN）
+	heartbeats   int
+	heartbeatErr error
+	released     []releasedJob
+	releaseErr   error
+	reapCount    int
+	reapErr      error
+	reapedAt     []time.Time
 }
 
 func newFakeJobStore() *fakeJobStore {
@@ -86,11 +102,32 @@ func (f *fakeJobStore) ClaimJob(_ context.Context, _ string) (*Job, error) {
 	return job, nil
 }
 
-func (f *fakeJobStore) FinishJob(_ context.Context, id, status string, result map[string]any, errMessage string) error {
+func (f *fakeJobStore) FinishJob(_ context.Context, id, workerID, status string, result map[string]any, errMessage string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.finish[id] = finishedJob{status: status, result: result, errText: errMessage}
+	f.finish[id] = finishedJob{workerID: workerID, status: status, result: result, errText: errMessage}
 	return nil
+}
+
+func (f *fakeJobStore) HeartbeatJob(_ context.Context, _, workerID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heartbeats++
+	return f.heartbeatErr
+}
+
+func (f *fakeJobStore) ReleaseJob(_ context.Context, id, workerID, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, releasedJob{id: id, workerID: workerID, reason: reason})
+	return f.releaseErr
+}
+
+func (f *fakeJobStore) ReapExpired(_ context.Context, now time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reapedAt = append(f.reapedAt, now)
+	return f.reapCount, f.reapErr
 }
 
 func (f *fakeJobStore) CancelJob(_ context.Context, id string) error {
@@ -288,6 +325,108 @@ func TestWorker_SkipsWhenQueueEmpty(t *testing.T) {
 	}
 }
 
+// ── 租约与停机交还（DATA-GRACEFUL-SHUTDOWN） ──
+
+// sleepyExecutor 睡一小段再成功（用于观察执行期间的心跳）。
+type sleepyExecutor struct{ d time.Duration }
+
+func (s sleepyExecutor) Process(context.Context, ingest.FetchRequest, ingest.Normalizer) (ingest.ProcessResult, error) {
+	time.Sleep(s.d)
+	return ingest.ProcessResult{DataType: "ohlcv_daily_qfq", Source: "tushare", Fetched: 1, Persisted: 1}, nil
+}
+
+// blockingExecutor 一直执行到 ctx 结束（模拟长作业）。
+type blockingExecutor struct{ ran chan struct{} }
+
+func (b *blockingExecutor) Process(ctx context.Context, _ ingest.FetchRequest, _ ingest.Normalizer) (ingest.ProcessResult, error) {
+	select {
+	case <-b.ran:
+	default:
+		close(b.ran)
+	}
+	<-ctx.Done()
+	return ingest.ProcessResult{}, ctx.Err()
+}
+
+func TestWorker_HeartbeatsWhileRunning(t *testing.T) {
+	store := newFakeJobStore()
+	worker := &Worker{
+		Store:             store,
+		Runner:            NewRunner(sleepyExecutor{d: 60 * time.Millisecond}),
+		ID:                "w1",
+		HeartbeatInterval: 5 * time.Millisecond,
+	}
+	worker.runOne(context.Background(), Job{ID: "job-hb", JobType: "ohlcv_daily_qfq"})
+
+	if store.heartbeats < 2 {
+		t.Fatalf("heartbeats = %d, want >= 2 while the job runs", store.heartbeats)
+	}
+	got, ok := store.finish["job-hb"]
+	if !ok || got.status != StatusSucceeded || got.workerID != "w1" {
+		t.Fatalf("finish = %+v (ok=%t)", got, ok)
+	}
+}
+
+// 租约丢失 ⇒ 立即中止执行，且**不写终态**、不交还：行已经归别人。
+func TestWorker_LeaseLostAbortsWithoutTerminalState(t *testing.T) {
+	store := newFakeJobStore()
+	store.heartbeatErr = ErrLeaseLost
+	exec := &blockingExecutor{ran: make(chan struct{})}
+	worker := &Worker{
+		Store:             store,
+		Runner:            NewRunner(exec),
+		ID:                "w1",
+		HeartbeatInterval: 5 * time.Millisecond,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.runOne(context.Background(), Job{ID: "job-lost", JobType: "ohlcv_daily_qfq"})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not abort after losing the lease")
+	}
+
+	if _, ok := store.finish["job-lost"]; ok {
+		t.Fatalf("lease-lost worker must not write a terminal state: %+v", store.finish["job-lost"])
+	}
+	if len(store.released) != 0 {
+		t.Fatalf("lease-lost worker must not release a job it no longer owns: %+v", store.released)
+	}
+}
+
+// 停机取消（父 ctx）⇒ 交还作业而不是留在 running / 伪造成终态。
+func TestWorker_ReleasesJobOnShutdown(t *testing.T) {
+	store := newFakeJobStore()
+	exec := &blockingExecutor{ran: make(chan struct{})}
+	worker := &Worker{Store: store, Runner: NewRunner(exec), ID: "w1"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); worker.runOne(ctx, Job{ID: "job-stop", JobType: "ohlcv_daily_qfq"}) }()
+	<-exec.ran
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not stop after shutdown")
+	}
+
+	if len(store.released) != 1 {
+		t.Fatalf("released = %+v, want exactly one release", store.released)
+	}
+	if got := store.released[0]; got.id != "job-stop" || got.workerID != "w1" || !strings.Contains(got.reason, "shutdown") {
+		t.Fatalf("release = %+v", got)
+	}
+	if _, ok := store.finish["job-stop"]; ok {
+		t.Fatalf("interrupted job must be released, not finished: %+v", store.finish["job-stop"])
+	}
+}
+
 // ── 排程 ──
 
 func TestScheduler_EnqueuesDueScheduleAndAdvances(t *testing.T) {
@@ -369,9 +508,18 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM ingest.sync_jobs WHERE id = $1`, job.ID)
 	})
+	// FinishJob 现在带持有权校验（租约面）：先把行置成「确实有人持有」，
+	// 否则终态写不进去。这里直连 SQL 置 running，避免 ClaimJob 误领别的行。
+	if _, err := pool.Exec(ctx, `
+		UPDATE ingest.sync_jobs
+		SET status = 'running', worker_id = 'w-test', started_at = NOW(),
+		    lease_until = NOW() + interval '60 seconds'
+		WHERE id = $1`, job.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
 
 	// 失败终态：error_message 落库、completed_at 非空、状态不是 running。
-	if err := store.FinishJob(ctx, job.ID, StatusFailed, nil, "boom"); err != nil {
+	if err := store.FinishJob(ctx, job.ID, "w-test", StatusFailed, nil, "boom"); err != nil {
 		t.Fatalf("FinishJob(failed): %v", err)
 	}
 	got, err := store.GetJob(ctx, job.ID)
@@ -395,7 +543,14 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM ingest.sync_jobs WHERE id = $1`, job2.ID)
 	})
-	if err := store.FinishJob(ctx, job2.ID, StatusSucceeded, map[string]any{"fetched": 3, "persisted": 2, "skipped": 1}, ""); err != nil {
+	if _, err := pool.Exec(ctx, `
+		UPDATE ingest.sync_jobs
+		SET status = 'running', worker_id = 'w-test', started_at = NOW(),
+		    lease_until = NOW() + interval '60 seconds'
+		WHERE id = $1`, job2.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := store.FinishJob(ctx, job2.ID, "w-test", StatusSucceeded, map[string]any{"fetched": 3, "persisted": 2, "skipped": 1}, ""); err != nil {
 		t.Fatalf("FinishJob(succeeded): %v", err)
 	}
 	got2, err := store.GetJob(ctx, job2.ID)
@@ -408,5 +563,176 @@ func TestPGStoreFinishJobWritesTerminalState(t *testing.T) {
 	if got2.TotalItems != 3 || got2.ProcessedItems != 3 || got2.FailedItems != 0 {
 		t.Fatalf("计数列 = total:%d processed:%d failed:%d，want 3/3/0",
 			got2.TotalItems, got2.ProcessedItems, got2.FailedItems)
+	}
+}
+
+// ── PG 租约腿（opt-in，独立测试库） ──
+
+// openLeaseTestPG 打开本仓约定的测试库（`DATA_TEST_DSN`，库名必须以 `_test`
+// 结尾并自带业务表 DDL）。
+//
+// 为什么不复用 DATABASE_URL：`ClaimJob` / `ReapExpired` 会命中队列表里的
+// **所有**可领/过期行，跑在业务库上会动到真实作业。独立库 + 先清空队列表，
+// 让领取结果确定。
+func openLeaseTestPG(t *testing.T) (context.Context, *pgxpool.Pool) {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("DATA_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("DATA_TEST_DSN not set; skipping PG lease leg")
+	}
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse DATA_TEST_DSN: %v", err)
+	}
+	if !strings.HasSuffix(cfg.ConnConfig.Database, "_test") {
+		t.Skipf("DATA_TEST_DSN points at %q (not *_test); refusing to reap a business queue", cfg.ConnConfig.Database)
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("DATA_TEST_DSN 已设置但连不上（fail-loud）：%v", err)
+	}
+	for i, stmt := range schema.Statements() {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("schema statement %d: %v", i+1, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `TRUNCATE ingest.sync_jobs`); err != nil {
+		t.Fatalf("truncate ingest.sync_jobs: %v", err)
+	}
+	return ctx, pool
+}
+
+// TestPGStoreLeaseClaimHeartbeatReap 钉住租约全生命周期：
+// 领取写租约 → 未被回收 → 心跳/终态持有权校验 → 过期回收（回 pending）
+// → 预算用尽判 failed。
+func TestPGStoreLeaseClaimHeartbeatReap(t *testing.T) {
+	ctx, pool := openLeaseTestPG(t)
+	store := NewPGStore(pool, nil)
+
+	job, err := NewJob("ohlcv_daily", map[string]any{"symbols": []any{"600519.SH"}}, 2)
+	if err != nil {
+		t.Fatalf("NewJob: %v", err)
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	claimed, err := store.ClaimJob(ctx, "w1")
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimJob = %+v, %v", claimed, err)
+	}
+	if claimed.ID != job.ID || claimed.WorkerID != "w1" || claimed.Status != StatusRunning {
+		t.Fatalf("claimed = %+v", claimed)
+	}
+
+	// 领取必须写租约（破坏验证点：删掉 lease 写入 ⇒ 这里红）。
+	var lease time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(lease_until, 'epoch'::timestamptz) FROM ingest.sync_jobs WHERE id = $1`,
+		job.ID).Scan(&lease); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if !lease.After(time.Now()) {
+		t.Fatalf("lease_until = %v, want a future lease", lease)
+	}
+
+	// 租约未到期 ⇒ 不回收。
+	if n, err := store.ReapExpired(ctx, time.Now()); err != nil || n != 0 {
+		t.Fatalf("ReapExpired(now) = %d, %v; want 0", n, err)
+	}
+
+	// 心跳与终态都做持有权校验：错 owner 一律 ErrLeaseLost。
+	if err := store.HeartbeatJob(ctx, job.ID, "w9"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("HeartbeatJob(w9) = %v, want ErrLeaseLost", err)
+	}
+	if err := store.HeartbeatJob(ctx, job.ID, "w1"); err != nil {
+		t.Fatalf("HeartbeatJob(w1): %v", err)
+	}
+	if err := store.FinishJob(ctx, job.ID, "w9", StatusSucceeded, nil, ""); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("FinishJob(w9) = %v, want ErrLeaseLost", err)
+	}
+
+	// 过期 ⇒ 回 pending，retry_count+1，持有者清空。
+	if n, err := store.ReapExpired(ctx, time.Now().Add(2*time.Minute)); err != nil || n != 1 {
+		t.Fatalf("ReapExpired(expired) = %d, %v; want 1", n, err)
+	}
+	got, err := store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != StatusPending || got.RetryCount != 1 || got.WorkerID != "" || got.CompletedAt != nil {
+		t.Fatalf("reaped 行 = %+v", got)
+	}
+
+	// 再领一次再过期 ⇒ 预算用尽（2/2）判 failed，错误文案可读。
+	claimed2, err := store.ClaimJob(ctx, "w2")
+	if err != nil || claimed2 == nil || claimed2.ID != job.ID {
+		t.Fatalf("second ClaimJob = %+v, %v", claimed2, err)
+	}
+	if n, err := store.ReapExpired(ctx, time.Now().Add(2*time.Minute)); err != nil || n != 1 {
+		t.Fatalf("ReapExpired(expired #2) = %d, %v; want 1", n, err)
+	}
+	got, err = store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != StatusFailed || got.RetryCount != 2 || !strings.Contains(got.ErrorMessage, "lease expired") {
+		t.Fatalf("预算用尽行 = %+v", got)
+	}
+	// 被回收后原 worker 不得再写终态。
+	if err := store.FinishJob(ctx, job.ID, "w2", StatusSucceeded, nil, ""); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale FinishJob = %v, want ErrLeaseLost", err)
+	}
+}
+
+// TestPGStoreReleaseJobRequeuesThenFails 钉住停机交还：预算未用尽回 pending，
+// 用尽判 failed 且 reason 落库。
+func TestPGStoreReleaseJobRequeuesThenFails(t *testing.T) {
+	ctx, pool := openLeaseTestPG(t)
+	store := NewPGStore(pool, nil)
+
+	job, err := NewJob("ohlcv_daily", nil, 2)
+	if err != nil {
+		t.Fatalf("NewJob: %v", err)
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := store.ClaimJob(ctx, "w1"); err != nil {
+		t.Fatalf("ClaimJob: %v", err)
+	}
+	// 非持有者不能交还。
+	if err := store.ReleaseJob(ctx, job.ID, "w9", "not mine"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("ReleaseJob(w9) = %v, want ErrLeaseLost", err)
+	}
+	if err := store.ReleaseJob(ctx, job.ID, "w1", "syncjob: interrupted by worker shutdown"); err != nil {
+		t.Fatalf("ReleaseJob(w1): %v", err)
+	}
+	got, err := store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != StatusPending || got.RetryCount != 1 || got.WorkerID != "" {
+		t.Fatalf("第一次交还 = %+v", got)
+	}
+
+	// 重领后再次交还（2/2）⇒ failed，reason 落库（不静默丢）。
+	if _, err := store.ClaimJob(ctx, "w2"); err != nil {
+		t.Fatalf("second ClaimJob: %v", err)
+	}
+	if err := store.ReleaseJob(ctx, job.ID, "w2", "syncjob: interrupted by worker shutdown"); err != nil {
+		t.Fatalf("ReleaseJob(w2): %v", err)
+	}
+	got, err = store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != StatusFailed || got.RetryCount != 2 || !strings.Contains(got.ErrorMessage, "worker shutdown") {
+		t.Fatalf("预算用尽交还 = %+v", got)
 	}
 }

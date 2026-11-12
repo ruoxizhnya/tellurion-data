@@ -45,7 +45,12 @@ func IngestStatements() []string {
 			scheduled_at    TIMESTAMPTZ,
 			worker_id       VARCHAR(50)
 		)`,
+		// 作业租约（DATA-GRACEFUL-SHUTDOWN）：`ClaimJob` 写入 `lease_until`，
+		// worker 周期续租；reaper 把「running 且租约过期」的行回收成 pending
+		// 或在重试预算用尽时判 failed。列用 ALTER 追加，既有库自动补齐。
+		`ALTER TABLE IF EXISTS ingest.sync_jobs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ`,
 		`CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON ingest.sync_jobs(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_sync_jobs_lease ON ingest.sync_jobs(status, lease_until)`,
 		`CREATE INDEX IF NOT EXISTS idx_sync_jobs_type ON ingest.sync_jobs(job_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_sync_jobs_created_at ON ingest.sync_jobs(created_at DESC)`,
 

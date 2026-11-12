@@ -50,6 +50,10 @@ var (
 	ErrJobNotCancellable = errors.New("syncjob: only pending jobs can be cancelled")
 	// ErrJobNotRetryable 表示作业不是 failed/cancelled，或重试次数已用尽。
 	ErrJobNotRetryable = errors.New("syncjob: job is not retryable (must be failed/cancelled and below max_retries)")
+	// ErrLeaseLost 表示 worker 已不再持有该作业（租约过期被回收、
+	// 已被别的 worker 领取，或作业已终态）。持有方必须立即停止并**禁止**
+	// 再写终态，否则两个 worker 会各写一份。
+	ErrLeaseLost = errors.New("syncjob: job lease lost")
 	// ErrScheduleNotFound 表示排程不存在。
 	ErrScheduleNotFound = errors.New("syncjob: schedule not found")
 	// ErrInvalidParams 表示请求参数不合法（调用方修请求）。

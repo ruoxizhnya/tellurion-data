@@ -60,7 +60,7 @@ func (f *fakeSyncStore) ListJobs(_ context.Context, _ syncjob.JobFilter) ([]sync
 
 func (f *fakeSyncStore) ClaimJob(context.Context, string) (*syncjob.Job, error) { return nil, nil }
 
-func (f *fakeSyncStore) FinishJob(context.Context, string, string, map[string]any, string) error {
+func (f *fakeSyncStore) FinishJob(context.Context, string, string, string, map[string]any, string) error {
 	return nil
 }
 

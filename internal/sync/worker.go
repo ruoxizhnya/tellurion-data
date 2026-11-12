@@ -5,7 +5,10 @@ package syncjob
 
 import (
 	"context"
+	"errors"
 	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,13 +21,20 @@ const (
 	DefaultSchedulerInterval = 30 * time.Second
 )
 
+// releaseTimeout 是「停机/租约丢失后交还作业」这一笔写的预算。用独立
+// ctx：停机时父 ctx 已取消，不能拿它去写库。
+const releaseTimeout = 5 * time.Second
+
 // Worker 从队列领取作业并执行。
 type Worker struct {
-	Store        JobStore
+	Store        WorkerStore
 	Runner       *Runner
 	ID           string
 	PollInterval time.Duration
-	Logger       *log.Logger
+	// HeartbeatInterval 是续租间隔；零值用 DefaultHeartbeatInterval。
+	// 测试可调小，生产口径写死（见 store.go 的租约常量）。
+	HeartbeatInterval time.Duration
+	Logger            *log.Logger
 }
 
 // Run 阻塞执行「领取-执行-记账」循环，直到 ctx 结束。
@@ -67,19 +77,59 @@ func (w *Worker) Run(ctx context.Context) {
 
 // runOne 执行一个已领取的作业并写终态。
 //
+// 三条出口：
+//   - 租约丢失（心跳报 ErrLeaseLost）⇒ 中止执行且**不写终态**：行已经归
+//     别人，写了就是两份终态；
+//   - 父 ctx 取消（停机）⇒ `ReleaseJob` 交还：预算未用尽回 pending 供重领，
+//     用尽判 failed（不静默丢）；
+//   - 正常结束 ⇒ `FinishJob`（带持有权校验）。
+//
 // 写终态失败只记日志：作业行会停在 running，运维能看见「卡住的作业」；
 // 悄悄把它改成 failed 反而会掩盖「数据库写不进终态」这个更大的问题。
 func (w *Worker) runOne(ctx context.Context, job Job) {
 	logger := w.logger()
 	logger.Printf("syncjob: worker %s running %s", w.ID, describeJob(job))
 
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	var lost atomic.Bool
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	var watchWG sync.WaitGroup
+	if interval := w.heartbeatInterval(); interval > 0 {
+		watchWG.Add(1)
+		go func() {
+			defer watchWG.Done()
+			w.heartbeat(watchCtx, job.ID, interval, &lost, cancelJob)
+		}()
+	}
+
 	started := time.Now()
-	result, err := w.Runner.Execute(ctx, job)
+	result, err := w.Runner.Execute(jobCtx, job)
 	elapsed := time.Since(started)
+	stopWatch()
+	watchWG.Wait()
+	cancelJob()
+
+	if lost.Load() {
+		logger.Printf("syncjob: worker %s lost the lease on %s; not writing a terminal state (another worker owns it now)",
+			w.ID, describeJob(job))
+		return
+	}
+
+	if ctx.Err() != nil {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		if relErr := w.Store.ReleaseJob(releaseCtx, job.ID, w.ID, "syncjob: interrupted by worker shutdown"); relErr != nil {
+			logger.Printf("syncjob: worker %s could not release job %s on shutdown: %v", w.ID, job.ID, relErr)
+			return
+		}
+		logger.Printf("syncjob: worker %s released %s on shutdown (%s); it will be re-claimed or failed if the retry budget is exhausted",
+			w.ID, job.ID, elapsed)
+		return
+	}
 
 	if err != nil {
 		logger.Printf("syncjob: worker %s failed %s after %s: %v", w.ID, describeJob(job), elapsed, err)
-		if finishErr := w.Store.FinishJob(ctx, job.ID, StatusFailed, nil, errorText(err)); finishErr != nil {
+		if finishErr := w.Store.FinishJob(ctx, job.ID, w.ID, StatusFailed, nil, errorText(err)); finishErr != nil {
 			logger.Printf("syncjob: worker %s could not record failure for job %s: %v", w.ID, job.ID, finishErr)
 		}
 		return
@@ -87,9 +137,49 @@ func (w *Worker) runOne(ctx context.Context, job Job) {
 
 	logger.Printf("syncjob: worker %s succeeded %s: fetched=%d persisted=%d skipped=%d in %s",
 		w.ID, describeJob(job), result.Fetched, result.Persisted, result.Skipped, elapsed)
-	if finishErr := w.Store.FinishJob(ctx, job.ID, StatusSucceeded, ResultMap(result, elapsed), ""); finishErr != nil {
+	if finishErr := w.Store.FinishJob(ctx, job.ID, w.ID, StatusSucceeded, ResultMap(result, elapsed), ""); finishErr != nil {
 		logger.Printf("syncjob: worker %s could not record success for job %s: %v", w.ID, job.ID, finishErr)
 	}
+}
+
+// heartbeat 周期续租。租约丢失时置 lost 并取消执行（继续跑只会白干，
+// 结果也写不进去）；其余错误视为瞬时故障，下一拍重试。
+//
+// 用独立于 jobCtx 的 ctx：停机时 jobCtx 先取消，心跳应当随 watchCtx 停止，
+// 而不是把「停机」误报成心跳失败。
+func (w *Worker) heartbeat(ctx context.Context, jobID string, interval time.Duration, lost *atomic.Bool, cancelJob context.CancelFunc) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			hctx, cancel := context.WithTimeout(ctx, interval)
+			err := w.Store.HeartbeatJob(hctx, jobID, w.ID)
+			cancel()
+			if err == nil {
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, ErrLeaseLost) {
+				lost.Store(true)
+				w.logger().Printf("syncjob: worker %s lost the lease on job %s: %v; aborting execution", w.ID, jobID, err)
+				cancelJob()
+				return
+			}
+			w.logger().Printf("syncjob: worker %s heartbeat for job %s failed (will retry): %v", w.ID, jobID, err)
+		}
+	}
+}
+
+func (w *Worker) heartbeatInterval() time.Duration {
+	if w.HeartbeatInterval > 0 {
+		return w.HeartbeatInterval
+	}
+	return DefaultHeartbeatInterval
 }
 
 func (w *Worker) logger() *log.Logger {

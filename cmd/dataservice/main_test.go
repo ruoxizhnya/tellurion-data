@@ -18,11 +18,15 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,7 +227,11 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 		// `/api/sync/jobs` 全 503，worker/scheduler 不起则作业永远 pending。
 		"syncjob.NewPGStore(pool, nil)",
 		"httpapi.WithSync(queue)",
-		"go startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)",
+		// 停机要等在途作业交还（DATA-GRACEFUL-SHUTDOWN）：done channel 漏了，
+		// 关池会撞上还没写完 ReleaseJob 的 worker。
+		"jobsDone := startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)",
+		// 过期租约回收循环漏了，崩溃 worker 的作业会永远 running。
+		"go startReaperWhenReady(jobCtx, &schemaReady, queue, syncjob.DefaultReapInterval)",
 		// 作业循环自省面（2026-11-12 裁）：漏了它 `/api/sync/workers` 与
 		// `/api/sync/scheduler/stats` 会 503，而「队列在跑」在别的套件里看不出来。
 		"httpapi.WithSyncRuntime(httpapi.SyncRuntime{",
@@ -239,6 +247,92 @@ func TestComposeRootWiresTheWriteFace(t *testing.T) {
 	if !strings.Contains(src, "return httpapi.New(nil, authorizer), nil, nil") {
 		t.Errorf("未配 DSN 的分支形状变了，不再是最小 503 装配：\n%s",
 			src[max(0, strings.Index(src, "if dsn == \"\"")-120):min(len(src), strings.Index(src, "if dsn == \"\"")+240)])
+	}
+}
+
+// TestRunHTTPDrainsInFlightRequests 钉住「信号 → 排空」：ctx 取消（等价
+// SIGTERM）之后，已经在处理中的请求必须照常拿到 200，而不是被硬切。
+func TestRunHTTPDrainsInFlightRequests(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte("done"))
+	})
+	srv := &http.Server{Handler: mux}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runHTTP(ctx, srv, ln) }()
+
+	respCh := make(chan string, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String() + "/slow")
+		if err != nil {
+			respCh <- "ERR: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		respCh <- resp.Status + " " + string(body)
+	}()
+
+	<-started
+	cancel()       // 等价 SIGTERM：必须进入排空，而不是关连接
+	close(release) // 放行在途请求
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runHTTP: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runHTTP did not return after shutdown")
+	}
+	select {
+	case got := <-respCh:
+		if got != "200 OK done" {
+			t.Fatalf("in-flight response = %q, want it drained, not dropped", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight request was dropped on shutdown")
+	}
+}
+
+// fakeReaper 记录 reapLoop 的调用次数。
+type fakeReaper struct{ n int32 }
+
+func (f *fakeReaper) ReapExpired(context.Context, time.Time) (int, error) {
+	atomic.AddInt32(&f.n, 1)
+	return 0, nil
+}
+
+// TestReapLoopTicksUntilCancel 钉住回收循环真的被驱动、且随 ctx 退出。
+func TestReapLoopTicksUntilCancel(t *testing.T) {
+	reaper := &fakeReaper{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); reapLoop(ctx, reaper, 5*time.Millisecond) }()
+
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&reaper.n) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("reapLoop ticks = %d, want >= 2", atomic.LoadInt32(&reaper.n))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reapLoop did not stop after ctx cancel")
 	}
 }
 

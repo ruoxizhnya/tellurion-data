@@ -71,7 +71,7 @@ verified-by: 裁决 ⑰ 施工 —— `market.index_daily` 撤认领：本仓 `i
 | 真实表 | 内容 | 今天在哪 |
 |---|---|---|
 | `ingest.raw` | 原始落库（未归一化，**已是 `ingest.` 前缀**） | ✅ 已归位 + **证据归档面已落地（2026-11-12，ADR-0010）**：写者 `store.EvidenceStore`（`POST /api/ingest/raw`），读方 `GET /api/evidence[/{content_hash}]`；落库前脱敏、保留期见 §9.5 |
-| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 便携演练见 `docs/archive/x1d-local-replay-2026-11-10.md`；系统实例 `127.0.0.1:5432` 同日按新结构整库重建，见 `docs/archive/system-pg-init-2026-11-10.md`） |
+| `sync_jobs` / `sync_schedules` | 同步任务与调度 | ✅ **已归位（2026-11-10，X1c）**：本仓 DDL 建 `ingest.sync_jobs` / `ingest.sync_schedules`，读写者只有 `internal/sync`；core 的 `pkg/storage/sync_jobs.go` 已随 `a96d836` 删除，`public.*` 物理残留已由 X1d 迁移脚本搬入（2026-11-10 便携演练见 `docs/archive/x1d-local-replay-2026-11-10.md`；系统实例 `127.0.0.1:5432` 同日按新结构整库重建，见 `docs/archive/system-pg-init-2026-11-10.md`）。2026-11-12 起含租约列 `lease_until`（心跳/回收/停机交还口径见 §9.7） |
 | `data_migrations` | 迁移记录 | 无前缀 → 目标 `ingest`（本仓 DDL 已建 `ingest.data_migrations`） |
 
 **红线**：`market` / `ingest` 只有本仓写；出现第二个写者 = 边界已腐化。
@@ -354,5 +354,29 @@ session, sessionid, privatekey
   - `GET /datasets/resolve` 在按指数/别名解析票池时返回 `pit_eligible: false`（显式 `symbols` 为 `true`，因为票池由调用方给定、解析层不引入前视）；
   - 早于快照日 `in_date` 的 `as_of` 会解析为空（`409 empty_universe`）——不知为不知，不拿今天的成分回填历史。
 - 结论：**仅供当前选股/当前票池，不用于 PIT 回测**。要做 PIT，需要多期快照差分出 `in_date/out_date` 区间，另立单（重开条件见 `docs/TASKS.md`）。
+
+### 9.7 `ingest.sync_jobs` 租约与停机口径（2026-11-12，`DATA-GRACEFUL-SHUTDOWN`）
+
+**新增列**：`lease_until TIMESTAMPTZ`（`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，DDL 在 `internal/schema/ingest.go`；索引 `idx_sync_jobs_lease (status, lease_until)`）。`Job` 报文形状不变——它不对外暴露。
+
+**口径写死**（`internal/sync/store.go`，不做配置项）：
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `DefaultLease` | 60s | `ClaimJob` 写 `lease_until = NOW() + lease` |
+| `DefaultHeartbeatInterval` | 20s（lease/3） | worker 续租间隔；允许连丢两拍 |
+| `DefaultReapInterval` | 30s | 进程级 reaper 扫描过期租约的间隔 |
+
+**状态机**：
+
+- `ClaimJob`：`pending` → `running`，写 `worker_id` / `started_at` / `lease_until`（`FOR UPDATE SKIP LOCKED`）。
+- `HeartbeatJob`：仅 `running` 且 `worker_id` 匹配时延长 `lease_until`；否则 `ErrLeaseLost`。worker 收到 `ErrLeaseLost` 立即取消执行，**不写终态**（行已归别的 worker）。
+- `FinishJob`：终态写库带持有权校验（`worker_id` 匹配且仍 `running`），否则 `ErrLeaseLost`；终态行清空 `lease_until`。
+- `ReapExpired(now)`：`running AND lease_until <= now` 的行 `retry_count+1` 后回 `pending`（`worker_id` / `started_at` / `lease_until` 清空、`scheduled_at = NOW()`）；`retry_count+1 >= max_retries` 时判 `failed` 并写 `error_message = "syncjob: lease expired and retry budget exhausted (worker crashed or stalled)"`。返回回收行数，>0 才打日志。
+- `ReleaseJob(id, worker, reason)`：优雅停机交还，语义同 `ReapExpired` 的一次回收，区别是 `WHERE` 用持有权判定、失败文案带 `reason`。
+
+**停机**：`SIGTERM`/`SIGINT` ⇒ 先 `http.Server.Shutdown`（30s 预算排空在途请求），再取消作业 ctx；worker 把在途作业 `ReleaseJob` 交还后退出，最多等 15s 再关池（超时如实记日志，遗留行的租约会被 reaper 兜底）。不会出现「停机后作业永远停在 running 且无人回收」。
+
+**已知边界**：`lease_until IS NULL` 的 `running` 行（本列上线前领取的历史行）不被自动回收；按本机/集群实际情况用 `POST /api/sync/jobs/{id}/retry` 或一次性 SQL 收口，不为此放宽 reaper 的判据。
 
 

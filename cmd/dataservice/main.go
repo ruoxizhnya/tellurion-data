@@ -23,9 +23,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -97,8 +100,49 @@ func main() {
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+
+	// SIGTERM/SIGINT ⇒ 优雅停机：先排空 HTTP 在途请求，再停作业循环
+	// （`cleanup` 会等在途作业交还，见 `build`）。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("data-service: listen %s: %v", *addr, err)
+	}
+	if err := runHTTP(ctx, httpServer, ln); err != nil {
+		log.Fatalf("data-service: %v", err)
+	}
+	log.Print("data-service: stopped")
+}
+
+// httpShutdownTimeout 是排空在途 HTTP 请求的预算（与 agent 的 30s 对齐）。
+const httpShutdownTimeout = 30 * time.Second
+
+// runHTTP 提供服务直到 ctx 取消（信号）或监听失败，然后 `Shutdown` 排空
+// 在途请求。抽成函数是为了让「信号 → 排空」这条路径可以被单测直接驱动。
+func runHTTP(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+		log.Print("data-service: shutdown signal received; draining in-flight HTTP requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("data-service: graceful HTTP shutdown failed, forcing close: %v", err)
+			_ = srv.Close()
+		}
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -324,10 +368,13 @@ func build(authOption httpapi.Option) (*httpapi.Server, func(), error) {
 		Logger: log.Default(),
 	}
 	scheduler := &syncjob.Scheduler{Store: queue, Logger: log.Default()}
+	// 过期租约回收（DATA-GRACEFUL-SHUTDOWN）：`NewPGStore` 的静态类型已含
+	// `LeaseReaper`，装配期即保证回收循环不会落空。
 	// 只在 schema 就绪后启动作业循环：降级启动时 sync_* 表可能还不存在，
 	// 立刻轮询只会每 2s 往日志里灌一条「relation does not exist」。
 	var jobsRunning atomic.Bool
-	go startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)
+	jobsDone := startJobsWhenReady(jobCtx, &schemaReady, &jobsRunning, worker, scheduler)
+	go startReaperWhenReady(jobCtx, &schemaReady, queue, syncjob.DefaultReapInterval)
 	// 保留期清理与作业循环同一条 ctx：进程关停时一起停。
 	go startEvidencePurgeWhenReady(jobCtx, &schemaReady, evidenceArchive, retentionDays)
 
@@ -348,24 +395,88 @@ func build(authOption httpapi.Option) (*httpapi.Server, func(), error) {
 		httpapi.WithReadiness(readinessCheck(pool)),
 		httpapi.WithAvailability(schemaReady.Load),
 	)
-	return server, func() { stopJobs(); stopRetry(); pool.Close() }, nil
+	// 停机顺序（cleanup）：先停领取（cancel jobCtx），再等 worker 把在途作业
+	// 交还（`ReleaseJob`：预算未用尽回 pending 供重领，用尽判 failed），
+	// 最后关池。等待有上限：个别取数调用可能不响应取消，超时则如实记日志
+	// 后关池，不把停机无限期挂住。
+	return server, func() {
+		stopJobs()
+		select {
+		case <-jobsDone:
+		case <-time.After(jobDrainTimeout):
+			log.Printf("data-service: sync loops did not stop within %s; closing the pool with a job possibly still in flight (its lease will be reaped)", jobDrainTimeout)
+		}
+		stopRetry()
+		pool.Close()
+	}, nil
 }
 
-// startJobsWhenReady 等 schema 就绪后启动 worker 与 scheduler。
-//
-// 两段式而不是直接起：降级启动（PG 不可达 / DDL 未跑完）时队列表可能不存在，
-// 立刻轮询只会制造噪音；DDL 就绪后同一进程自愈启动，不需要重启。
-func startJobsWhenReady(ctx context.Context, ready, running *atomic.Bool, worker *syncjob.Worker, scheduler *syncjob.Scheduler) {
+// jobDrainTimeout 是停服时等待「worker 交还在途作业」的上限。
+const jobDrainTimeout = 15 * time.Second
+
+// waitSchema 等 schema 就绪；ctx 结束返回 false。
+func waitSchema(ctx context.Context, ready *atomic.Bool) bool {
 	for !ready.Load() {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-time.After(time.Second):
 		}
 	}
-	running.Store(true)
-	go worker.Run(ctx)
-	go scheduler.Run(ctx)
+	return true
+}
+
+// startJobsWhenReady 等 schema 就绪后启动 worker 与 scheduler，返回的 channel
+// 在两者都退出后关闭（停服时用于确认在途作业已交还）。
+//
+// 两段式而不是直接起：降级启动（PG 不可达 / DDL 未跑完）时队列表可能不存在，
+// 立刻轮询只会制造噪音；DDL 就绪后同一进程自愈启动，不需要重启。
+func startJobsWhenReady(ctx context.Context, ready, running *atomic.Bool, worker *syncjob.Worker, scheduler *syncjob.Scheduler) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if !waitSchema(ctx, ready) {
+			return
+		}
+		running.Store(true)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); worker.Run(ctx) }()
+		go func() { defer wg.Done(); scheduler.Run(ctx) }()
+		wg.Wait()
+	}()
+	return done
+}
+
+// startReaperWhenReady 等 schema 就绪后启动过期租约回收循环。
+func startReaperWhenReady(ctx context.Context, ready *atomic.Bool, reaper syncjob.LeaseReaper, every time.Duration) {
+	if !waitSchema(ctx, ready) {
+		return
+	}
+	reapLoop(ctx, reaper, every)
+}
+
+// reapLoop 周期回收过期租约。N=0 不打印，避免空转刷日志。
+func reapLoop(ctx context.Context, reaper syncjob.LeaseReaper, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := reaper.ReapExpired(ctx, time.Now())
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Printf("data-service: reap expired job leases failed: %v", err)
+				}
+				continue
+			}
+			if n > 0 {
+				log.Printf("data-service: reaped %d expired job lease(s)", n)
+			}
+		}
+	}
 }
 
 // evidencePurgeInterval 是过期证据的清理周期。保留期口径见

@@ -29,7 +29,10 @@ type pgStore struct {
 }
 
 // NewPGStore 用连接池构造存储。now 为 nil 时用墙钟。
-func NewPGStore(pool *pgxpool.Pool, now func() time.Time) Store {
+//
+// 返回 `FullStore`（队列 + 排程 + 租约）：同一份实现同时喂 HTTP 面、
+// worker（领取/心跳/交还/终态）与进程级 reaper（回收过期租约）。
+func NewPGStore(pool *pgxpool.Pool, now func() time.Time) FullStore {
 	if now == nil {
 		now = time.Now
 	}
@@ -103,11 +106,15 @@ func (s *pgStore) ListJobs(ctx context.Context, filter JobFilter) ([]Job, error)
 	return out, nil
 }
 
-// ClaimJob 原子领取一个可运行的 pending 作业。
+// ClaimJob 原子领取一个可运行的 pending 作业，并写入租约。
+//
+// 租约口径写死（`DefaultLease`）：worker 必须在到期前心跳续租，否则
+// `ReapExpired` 会把行回收给别的 worker。
 func (s *pgStore) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE ingest.sync_jobs
-		SET status = 'running', started_at = NOW(), worker_id = $1
+		SET status = 'running', started_at = NOW(), worker_id = $1,
+		    lease_until = NOW() + make_interval(secs => $2::double precision)
 		WHERE id = (
 			SELECT id FROM ingest.sync_jobs
 			WHERE status = 'pending' AND (scheduled_at IS NULL OR scheduled_at <= NOW())
@@ -115,7 +122,7 @@ func (s *pgStore) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
-		RETURNING `+jobColumns, workerID)
+		RETURNING `+jobColumns, workerID, DefaultLease.Seconds())
 	job, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -124,6 +131,68 @@ func (s *pgStore) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
 		return nil, fmt.Errorf("syncjob: claim job: %w", err)
 	}
 	return &job, nil
+}
+
+// HeartbeatJob 续租：只有仍持有（running 且 worker_id 匹配）才写得进。
+func (s *pgStore) HeartbeatJob(ctx context.Context, id, workerID string) error {
+	ct, err := s.pool.Exec(ctx, `
+		UPDATE ingest.sync_jobs
+		SET lease_until = NOW() + make_interval(secs => $3::double precision)
+		WHERE id = $1 AND worker_id = $2::text AND status = 'running'`,
+		id, workerID, DefaultLease.Seconds())
+	if err != nil {
+		return fmt.Errorf("syncjob: heartbeat job %s: %w", id, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w: job %s is no longer owned by %s", ErrLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// ReleaseJob 在优雅停机/执行被中断时交还作业：预算未用尽回 pending，
+// 用尽则 failed 并写明 reason（不静默丢）。
+func (s *pgStore) ReleaseJob(ctx context.Context, id, workerID, reason string) error {
+	ct, err := s.pool.Exec(ctx, `
+		UPDATE ingest.sync_jobs
+		SET retry_count = retry_count + 1,
+		    status = CASE WHEN retry_count + 1 >= max_retries THEN 'failed' ELSE 'pending' END,
+		    error_message = CASE WHEN retry_count + 1 >= max_retries THEN $3::text ELSE NULL END,
+		    completed_at = CASE WHEN retry_count + 1 >= max_retries THEN NOW() ELSE NULL END,
+		    started_at = NULL,
+		    worker_id = NULL,
+		    lease_until = NULL,
+		    scheduled_at = NOW()
+		WHERE id = $1 AND worker_id = $2::text AND status = 'running'`, id, workerID, reason)
+	if err != nil {
+		return fmt.Errorf("syncjob: release job %s: %w", id, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w: job %s is no longer owned by %s", ErrLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// reapedReason 是过期回收判失败时的 error_message（回 pending 时不写）。
+const reapedReason = "syncjob: lease expired and retry budget exhausted (worker crashed or stalled)"
+
+// ReapExpired 回收过期租约：running 且 lease_until <= now 的行按重试预算
+// 回 pending 或判 failed。对齐 orchestration `ReapExpired` 的形状。
+func (s *pgStore) ReapExpired(ctx context.Context, now time.Time) (int, error) {
+	ct, err := s.pool.Exec(ctx, `
+		UPDATE ingest.sync_jobs
+		SET retry_count = retry_count + 1,
+		    status = CASE WHEN retry_count + 1 >= max_retries THEN 'failed' ELSE 'pending' END,
+		    error_message = CASE WHEN retry_count + 1 >= max_retries THEN $2::text ELSE NULL END,
+		    completed_at = CASE WHEN retry_count + 1 >= max_retries THEN NOW() ELSE NULL END,
+		    started_at = NULL,
+		    worker_id = NULL,
+		    lease_until = NULL,
+		    scheduled_at = NOW()
+		WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until <= $1`, now.UTC(), reapedReason)
+	if err != nil {
+		return 0, fmt.Errorf("syncjob: reap expired leases: %w", err)
+	}
+	return int(ct.RowsAffected()), nil
 }
 
 // jobCounts 从结案结果里折出作业计数。
@@ -162,8 +231,10 @@ func intField(m map[string]any, key string) int {
 	}
 }
 
-// FinishJob 写终态。
-func (s *pgStore) FinishJob(ctx context.Context, id, status string, result map[string]any, errMessage string) error {
+// FinishJob 写终态，并做**持有权校验**：只有 worker_id 匹配且仍是 running
+// 才写得进。租约过期被回收后，原 worker 写终态必须失败（ErrLeaseLost），
+// 否则两个 worker 各写一份终态，库里留下自相矛盾的行。
+func (s *pgStore) FinishJob(ctx context.Context, id, workerID, status string, result map[string]any, errMessage string) error {
 	total, processed, failed := jobCounts(result)
 	var payload []byte
 	if result != nil {
@@ -180,25 +251,31 @@ func (s *pgStore) FinishJob(ctx context.Context, id, status string, result map[s
 	if errMessage != "" {
 		errArg = errMessage
 	}
-	// `$2::text` 两处都显式标注：左边 `status` 是 varchar(20)，右边 CASE 与字面量
+	// `status` 两处都显式 `::text`：左边 `status` 是 varchar(20)，右边 CASE 与字面量
 	// 比较推成 text。PG 对同一参数在不同上下文推出不同类型会直接报
 	// 42P08 inconsistent types，症状是「作业失败却写不进终态」。
+	// `worker_id` 同理显式 `::text`（列是 varchar(50)）。
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE ingest.sync_jobs
-		SET status = $2::text,
-		    result = $3::jsonb,
-		    error_message = $4,
+		SET status = $3::text,
+		    result = $4::jsonb,
+		    error_message = $5,
 		    completed_at = NOW(),
-		    total_items = $5,
-		    processed_items = $6,
-		    failed_items = $7,
-		    progress_percent = CASE WHEN $2::text = 'succeeded' THEN 100 ELSE progress_percent END
-		WHERE id = $1`, id, status, resultArg, errArg, total, processed, failed)
+		    total_items = $6,
+		    processed_items = $7,
+		    failed_items = $8,
+		    progress_percent = CASE WHEN $3::text = 'succeeded' THEN 100 ELSE progress_percent END,
+		    lease_until = NULL
+		WHERE id = $1 AND worker_id = $2::text AND status = 'running'`,
+		id, workerID, status, resultArg, errArg, total, processed, failed)
 	if err != nil {
 		return fmt.Errorf("syncjob: finish job %s: %w", id, err)
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrJobNotFound
+		if _, getErr := s.GetJob(ctx, id); errors.Is(getErr, ErrJobNotFound) {
+			return ErrJobNotFound
+		}
+		return fmt.Errorf("%w: job %s is no longer owned by %s", ErrLeaseLost, id, workerID)
 	}
 	return nil
 }
