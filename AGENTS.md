@@ -29,7 +29,9 @@ go test ./...
 ```
 
 - 这三条是 R1/R2 的判据：**单独 checkout 就能绿**。
-- CI 覆盖面按现状（`.github/workflows/ci.yml`，单 job `go`「Build & Test」）依次为：gofmt（有未格式化文件即红）→ `go build ./...` → `go vet ./...` → **Govulncheck 已是门**（`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`，符号级可达性）→ `go test ./... -count=1` → **`go test -race ./... -count=1`**（同 job，ubuntu-latest 自带 gcc）→ **Staticcheck**（`go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`）。跑 `-race` 与 `staticcheck` 是 CI 步骤，**本地上面三条命令不含它们**，本地要自证需另跑同样的两条。
+- CI 覆盖面按现状（`.github/workflows/ci.yml`，单 job `go`「Build & Test」）依次为：gofmt（有未格式化文件即红）→ `go build ./...` → `go vet ./...` → **Govulncheck 已是门**（`go run golang.org/x/vuln/cmd/govulncheck@latest ./...`，符号级可达性）→ `go test ./... -count=1 -coverprofile=coverage.out` + **覆盖率门**（DATA-CI-GATES）→ **`go test -race ./... -count=1`**（同 job，ubuntu-latest 自带 gcc）→ **Staticcheck**（`go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`）。跑 `-race` 与 `staticcheck` 是 CI 步骤，**本地上面三条命令不含它们**，本地要自证需另跑同样的两条。
+- **CI 的 DB 腿（DATA-CI-GATES，2026-11-13）**：Test job 起 `postgres:16` service，并同时注入 `DATA_TEST_DSN` 与 `DATABASE_URL`（都指向 CI 内临时库 `tellurion_data_test`，**绝不指向部署库**）。迁移入口就是测试自身：`internal/schema.Statements()` 是唯一 DDL owner，各 PG 套件连接时建临时 schema 并应用幂等 DDL；CI 不额外跑外部迁移脚本。效果：库侧 24 条用例由 SKIP 转 PASS（实测带 DSN 364 PASS / 4 SKIP，无 DSN 340 PASS / 28 SKIP）。**保留无 DSN 时按设计 skip**：本地不设 DSN 仍是 28 条 SKIP 且原因可读。
+- **覆盖率门（DATA-CI-GATES）**：阈值 **54%**（语句加权，`go tool cover -func` 的 `total`），来源 = 2026-11-13 在本机隔离 PG 16（库 `tellurion_data_test`）上真跑全套件实测 **58.9%** 减 5 点取整（跨仓口径见 `tellurion:docs/TASKS.md` → `X-COVERAGE-FLOOR`）。低于阈值 CI `exit 1`。**这 5 点余量是防漂移的缓冲，不是单文件绊线**：本仓 5,142 条语句，删单个测试文件最多掉 3.4 点（实测 `internal/httpapi/sync_test.go` ⇒ 55.5%），所以真正拦住「DB 腿没跑」的是数值本身——**漏配 DSN 时实测 53.5% < 54%，门直接红**。
 - 可选集成测试（无外部条件时自动 skip）：
   - `visible_at` 回填（D2，仅测试库）：`DATA_TEST_DSN='postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable' go test -tags backfill ./internal/schema -count=1`
     —— 默认构建不编译；只读 `DATA_TEST_DSN` 且库名必须以 `_test` 结尾（生产 `DATABASE_URL` / 生产库名自动 skip），已设置但连不上则 fail-loud。临时 schema 跑完即删，不碰目标 `market` / `ingest`。

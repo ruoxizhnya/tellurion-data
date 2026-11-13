@@ -12,6 +12,29 @@ jobs:
   go:
     name: Build & Test
     runs-on: ubuntu-latest
+    # DATA-CI-GATES（2026-11-13）：真起 PG，让 24 条 DB 门控用例以 PASS 出现（此前一律 skip）。
+    # service 容器由 GitHub 在 runner 上映射到 127.0.0.1:5432；库名以 `_test` 结尾，
+    # 与测试代码的硬约束一致（`internal/schema` / `internal/sync` 只认 `*_test` 库）。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tellurion_data_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tellurion_data_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # 两套门控变量都要：schema / 租约腿读 DATA_TEST_DSN；store / 作业终态腿读 DATABASE_URL
+      # （`internal/store/write_pg_test.go`、`internal/sync/sync_test.go`）。二者都指向同一个
+      # **临时 CI 测试库**，绝不指向任何部署库。
+      DATA_TEST_DSN: postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/tellurion_data_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -40,8 +63,24 @@ jobs:
       - name: Govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+      # 迁移入口：本仓没有独立的 migrate 命令。唯一 DDL owner 是
+      # `internal/schema.Statements()`，各 PG 套件在连接时自行应用它——
+      # `internal/store/*_pg_test.go` 把 `market.` 前缀换成随机临时 schema；
+      # `internal/schema/*_pg_test.go` 建临时 schema；`internal/sync` 的
+      # `TestPGStoreFinishJobWritesTerminalState` / `openLeaseTestPG` 对测试库
+      # 执行幂等 DDL。因此 CI 不额外跑外部迁移脚本，也不复制 core 的工具：
+      # 测试自身就是唯一合法入口，真实行为以测试代码为准。
       - name: Test
-        run: go test ./... -count=1
+        run: go test ./... -count=1 -coverprofile=coverage.out
+
+      # DATA-CI-GATES 覆盖率门（阈值来源见 AGENTS.md §2）：
+      # 2026-11-13 在本机隔离 PG 16 上真跑全套件的 total = 58.9%，
+      # 四舍五入取整 59，减 5 点 ⇒ 门 54%。低于阈值即红。
+      - name: Coverage gate
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')"
+          echo "total statement coverage: ${total}% (floor 54%)"
+          awk -v t="${total}" -v f="54" 'BEGIN { if (t + 0 < f + 0) { printf "FAIL: coverage %.1f%% is below floor %d%%\n", t, f; exit 1 } }'
 
       # X-CI-RACE-STATICCHECK：竞态门。ubuntu-latest 自带 gcc，cgo 可用。
       - name: Test（-race）

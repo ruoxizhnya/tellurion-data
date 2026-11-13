@@ -31,6 +31,8 @@
 | X-LOW-CLEANUP（data 腿） | 登记分页口径不一致（evidence 有 `offset` / sync jobs 只有 `limit`），不改行为 | 2026-11-12 | 见本条 | [施工记录](#X-LOW-CLEANUP-data) |
 | X-PROBE-NAMING（data 腿） | `/health` → `/healthz` 规范名 + 过渡弃用别名（同日收尾摘除别名，`/health` 现为 404） | 2026-11-12 | 见本条 | [施工记录](#X-PROBE-NAMING) |
 | DATA-PAGINATION-ALIGN | 列表分页统一：`/api/sync/jobs` 补 `offset` + `limit`/`offset` 回显 + `created_at DESC, id DESC` 稳定排序 | 2026-11-12 | 见本条 | [施工记录](#DATA-PAGINATION-ALIGN) |
+| DATA-CI-GATES | CI 起 PG 16 + 覆盖率门（库侧 24 条 SKIP→PASS；实测 58.9% → 门 54%） | 2026-11-13 | 见本条 | [施工记录](#DATA-CI-GATES) |
+| DATA-ROUTE-COUNT-CLARIFY | 路由计数口径统一：29 = 业务 27 + 探针 2 | 2026-11-13 | 见本条 | [施工记录](#DATA-ROUTE-COUNT-CLARIFY) |
 | DATA-REFDATA-JOB-WRITE | 参考数据作业级写入：约束核对 + 退市覆盖收口 | 2026-11-12 | `8c59035`、`1a6f03c` | [原文](#DATA-REFDATA-JOB-WRITE) |
 
 ---
@@ -995,4 +997,42 @@
 - **④ 约束与非目标**：不改 writer 契约与 DDL 形状（约束回填只补既有库缺的约束，不改列/不改数据）；不引入通用迁移框架；除参考作业自身的 upsert 外不动部署库数据。
 - **⑤ 验收结论**：约束核对表逐行有结论 ✅；退市腿有部署库回读证据 ✅（343 行、`delist_date` 全写入、在市票无误标、重跑幂等）。`delisted=0` 的旧尴尬消除，core `sync_all.sh` 的验证输出自此有意义。
 - **⑥ 边界**：本仓作业面与 schema；D 回读走正常作业路径，未手写 SQL 改数。
+
+
+---
+
+## 2026-11-13 收口
+
+<a id="DATA-CI-GATES"></a>
+### DATA-CI-GATES · CI 起 PG 并设覆盖率门（14 条 DB 用例不再 skip）[P2] ✅ 2026-11-13
+
+> 档 4（测试）· 来源：03-testing P1-3 / P2-2 · 顺序 4-8 · 依赖：core 伞 `X-COVERAGE-FLOOR`
+
+- **① 目标**：CI 真跑 DB 腿，并把 14 条按设计 skip 的用例变成真实执行；同时设覆盖率门。
+- **② 上下文**：`.github/workflows/ci.yml` 的 Test job 无 `services: postgres`、未注入测试 DSN，库侧用例按设计 skip；本仓有迁移入口，但 CI 未应用（施工第一步先 grep 测试代码确认 DSN 环境变量名与迁移命令，勿猜）。
+- **③ 要求**：① 加 `postgres:16` service + `pg_isready`；② 注入本仓测试使用的 DSN；③ 在 Test 前应用本仓迁移（走唯一合法入口，不绕过）；④ 本地无 DSN 时仍按设计 skip（保留原因）；⑤ 覆盖率门 = 本仓最新实测 - 5 点（先测后设）。
+- **④ 约束与非目标**：不把 skip 改成假通过；不改业务代码；不在本条修 DB 用例暴露的真实缺陷（另立单）。
+- **⑤ 验收**：CI 日志中 DB 用例以 PASS 出现（非 SKIP）且数量 > 0；删除一个有断言的测试文件 ⇒ 覆盖率门红；本地无 DSN ⇒ skip 且原因可读。
+- **⑥ 边界**：本仓 CI + 测试夹具；迁移入口若归本仓则复用，不复制 core 的工具。
+
+**施工记录（2026-11-13）**：
+- DSN 变量名与迁移入口按代码取证：`DATA_TEST_DSN`（schema / 租约腿）+ `DATABASE_URL`（store / 作业终态腿），迁移唯一入口 = `internal/schema.Statements()`（各 PG 套件连接时建临时 schema 并应用幂等 DDL），CI 不另跑外部迁移脚本。
+- CI：Test job 起 `postgres:16` service（`pg_isready -U postgres -d tellurion_data_test`），env 同注入 `DATA_TEST_DSN`/`DATABASE_URL` 指 `127.0.0.1:5432/tellurion_data_test`；`Test` 步改带 `-coverprofile=coverage.out`，新增 `Coverage gate` 步（`go tool cover -func` 解析 total，< 54 `exit 1`）；`-race` / `staticcheck` / `govulncheck` 步不变。
+- **实测（隔离 PG16 容器，宿主 55432，库 `tellurion_data_test`，绝未连部署库）**：带 DSN `364 PASS / 4 SKIP`、覆盖率 `58.9%`；不带 DSN `340 PASS / 28 SKIP`、覆盖率 `53.5%`。单内「14 条」是旧口径，**实测库侧 24 条**（28 SKIP - 4 SKIP）由 SKIP 转 PASS，已按实测写回台账与 `AGENTS.md`。
+- 门 = 58.9 - 5 = **53.9 → 取整 54%**。
+- 破坏/负向验证（真做真还原）：① **漏配 DSN 场景**（等价于 CI 忘了 service/env）⇒ 53.5% < 54 ⇒ 门红；② 删 `internal/httpapi/sync_test.go`（保留可编译，实测最大单文件影响）⇒ 55.5%，未触门；③ 删 `internal/sync/sync_test.go`（793 行、含实质断言）⇒ 测试步 build failed、`EXIT=1`（CI 红），`git checkout` 逐字节还原后复跑绿、`git diff` 为空。结论如实写入 `AGENTS.md`：5 点余量是防漂移缓冲，本仓 5,142 条语句下单文件最大影响 3.4 点，真正拦截「DB 腿没跑」的是数值本身。
+
+<a id="DATA-ROUTE-COUNT-CLARIFY"></a>
+### DATA-ROUTE-COUNT-CLARIFY · 路由计数 28 vs 29 的口径 [P3] ✅ 2026-11-13
+
+> 档 5（文档与代码一致性）· 来源：04-doc-consistency P3-1 · 顺序 5-6 · 依赖：无
+
+- **① 目标**：路由总数只有一个可复算的口径，读者不再纠结差 1。
+- **② 上下文**：`docs/api-schema.md:4` 与 `:123` 写"29→28 / 逐条点名 28 条"；`internal/httpapi/server.go:125-177` 字面注册 29 条（含 `/healthz`、`/readyz`），差异疑为"探针是否计入"未说明。
+- **③ 要求**：明确计数口径（写成"业务路由 N + 探针 M = 总数"，N/M 以实际注册逐条重算，本单不预设数字）；在计数处写"含/不含探针"；若可行，由路由注册表生成计数，避免再漂。
+- **④ 约束与非目标**：不改路由；不删探针；不复制 core 的计数脚本。
+- **⑤ 验收**：按声明口径人工复算 = 文档数字；全文两处计数一致；加一句口径说明。
+- **⑥ 边界**：`tellurion-data/docs/api-schema.md`。
+
+**施工记录（2026-11-13）**：逐条数 `internal/httpapi/server.go` 的 `routes()` 表 ⇒ **29 = 业务 27 + 探针 2**（探针 `GET /healthz`、`GET /readyz`；业务分解：数据集 2 + 写面 1 + 证据归档 3 + G3 只读 7 + 作业层 8 + 排程 6）。`docs/api-schema.md` frontmatter（`:4`）与 `:123` 两处「28」统一为 29，并补「含/不含探针」口径说明与历史沿革（29→28 因摘 `/health` 别名；28→29 因 `DATA-LISTING-WINDOWS` 落路由）。未改路由、未删探针、未引入外部计数脚本。
 
